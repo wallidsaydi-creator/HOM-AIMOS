@@ -5,6 +5,127 @@ signed identity, append-only provenance, hybrid retrieval, temporal reasoning,
 and a housekeeper identity that owns autonomous maintenance without depending
 on an enrolled user agent.
 
+## What HOM-AIMOS is
+
+HOM-AIMOS is a complete persistent-memory backend, not a provenance layer
+attached to a vector store. Its source-derived architecture binds a
+275-service census and declares six critical pipelines containing 146 service
+connections. Save and recall each expose eight principal native execution
+boundaries.
+
+### Save — 8 stages
+
+| # | Stage | Native owner |
+|---:|---|---|
+| 1 | Signed request and authorization | `routes/aimos.js` |
+| 2 | Write validation | `services/write/write-validator.js` |
+| 3 | Prediction-error routing gate | `services/write/rpe-gate.js` |
+| 4 | Mnemonic encoding | `services/context/mnemonic-encoder.js` |
+| 5 | Quality gate | `services/write/quality-gate.js` |
+| 6 | Embedding | `services/core/embeddings.js` |
+| 7 | Canonical persistence and provenance | `services/write/persist-memory.js` |
+| 8 | Signed retained-memory epistemic label | `services/security/memory-epistemic-classifier.js` |
+
+### Recall — 8 stages
+
+| # | Stage | Native owner |
+|---:|---|---|
+| 1 | Query understanding and path selection | `services/retrieval/native-recall-pipeline.js` |
+| 2 | Embedding and candidate opening | `services/core/embeddings.js` |
+| 3 | Similarity statistics | `services/retrieval/similarity-stats.js` |
+| 4 | Trust scoring | `services/learning/trust-score.js` |
+| 5 | Concept-graph retrieval | `services/core/concept-graph.js` |
+| 6 | Verified epistemic projection and selection | `services/retrieval/epistemic-trust-retrieval.js` |
+| 7 | Pre-disclosure calibration | `services/retrieval/recall-calibrator.js` |
+| 8 | Bounded evidence and signed receipt | `services/retrieval/native-recall.js` |
+
+### Cognitive mutation — retained, bounded, reversible
+
+HOM-AIMOS does not treat memory as static after admission. It keeps canonical
+content immutable while allowing its retrieval weight to move bidirectionally
+within `[0.1, 3.0]` as signed evidence changes. A low weight means lower
+retrieval frequency, never deletion or ineligibility.
+
+Three native mutation lanes converge on one certified database writer:
+
+- outcome adaptation appends signed positive or negative evidence to
+  `services/governance/valence-ledger.js`, computes an age-neutral cumulative
+  valence through `services/governance/valence-judge.js`, and applies the
+  bounded reference-point update in `services/learning/stdp-kernel.js`;
+- SPICED consolidation may strengthen eligible retained memories through
+  `services/dream/spiced-consolidator.js`; and
+- optional Hebbian consensus may elevate supported hubs or attenuate divergent
+  evidence through `services/dream/hebbian-consensus.js`. This lane is
+  shadow-first and disabled until its signed governor flag is enabled.
+
+Every changed target passes through
+`services/governance/governor-provenance.js`, which appends a housekeeper-signed
+`REWEIGHT` node and creates a distinct fixed-width transition signature. The
+`apply_signed_cognitive_reweight` function in migration 091 verifies the exact
+tenant, memory, signer epoch, old and new milliscaled weights, provenance hash,
+continuity, and no-fork predecessor before it atomically appends the projection
+and updates only `retrieval_weight`. A quantized no-op retains its signed
+outcome evidence without inventing a transition.
+
+`verify_cognitive_weight_chain()` and `verify_all_cognitive_weight_chains()`
+replay the database evidence, while
+`services/security/cognitive-weight-verifier.js` independently verifies the
+same baseline, provenance, signature, continuity, terminal-state, and corpus
+proof-root contracts. The normative byte layout and invariants are published
+in [`docs/security/cognitive-weight-chain-SPEC.md`](docs/security/cognitive-weight-chain-SPEC.md).
+
+The save manifest declares 13 critical service connections; recall declares
+68 spanning exact-identifier, semantic, temporal, graph, procedural, and
+lineage paths. The service census contains retrieval 55, orchestration 43,
+security 36, temporal 25, learning 23, observe 22, core 15, write 13, context
+9, integrations 9, governance 7, dream 5, ingestion 4, shared 4, answering 2,
+runtime 2, and caching 1.
+
+`services/pipeline-manifest.js` is the source of truth for the six critical
+connection maps. Its validator dynamically imports all 146 declarations and
+checks their named exports; architecture tests and the release-source gate fail
+when the declared topology and public documentation diverge.
+
+## What is built on top
+
+The save and recall paths are a working memory system on their own. The
+cryptographic layer enters at explicit boundaries:
+
+- Save stage 8 assigns each retained memory a signed, reversible epistemic
+  label bound to its live content hash.
+- Recall stages 6–8 verify and consume the epistemic projection, apply a
+  verified calibration snapshot, and return bounded evidence under an
+  RFC 6962-style domain-separated Merkle receipt.
+- Cognitive mutation changes retrieval weight within a constitutional interval
+  only through housekeeper-authorized signed transitions. Each transition binds
+  the terminal provenance node, signer epoch, quantized old and new weights,
+  and no-fork predecessor.
+- Ed25519 verification runs in the database mutation boundary and in an
+  independent portable verifier.
+
+Canonical memory is never selectively removed, decayed, expired, suppressed,
+or deactivated. The sole erasure path is an offline, master-signed,
+all-or-nothing whole-brain purge that emits a signed terminal receipt.
+
+## Measured
+
+| Result | Value |
+|---|---:|
+| LongMemEval, LLM-judged | 459/500 — 91.8% |
+| LoCoMo, LLM-judged | 1472/1986 — 74.12% |
+| LoCoMo, separate upstream-compatible token F1 | 58.20 |
+| PoisonedRAG N=100, poison in attacked top-5 disclosures | 0/100 |
+| Same target set, epistemic policy bypassed | 94/100 |
+| Mutation authorization rejection cases | 7/7 |
+| Cognitive tamper cases detected | 4/4 |
+| SQL/portable cognitive verifier parity | 9/9 records |
+| Signed cognitive-transition latency, median | 4.865 ms |
+
+These are distinct protocols and are not averaged. Every figure regenerates
+from the sanitized, self-hashed aggregate in
+[`eval/publication/verified-benchmark-results.json`](eval/publication/verified-benchmark-results.json),
+which binds the promoted run artifacts by SHA-256.
+
 The central security distinction is **integrity, not omniscience**. AIMOS can
 prove that an authorized identity asserted a specific memory at a particular
 ledger position and that the retained evidence has not been silently rewritten.
@@ -16,42 +137,14 @@ names this failure class **Authenticated-But-False (ABF)**.
 This repository contains the HOM-AIMOS 1.0 source release. Its promoted, isolated
 evaluation lanes are complete and bound to the sanitized, self-hashed aggregate
 in [`eval/publication/verified-benchmark-results.json`](eval/publication/verified-benchmark-results.json).
-The canonical results are 91.8% LLM-judged accuracy on LongMemEval; 74.12%
-LLM-judged accuracy and, under a separate upstream-compatible protocol, 58.20
-token F1 on LoCoMo; and 1.02% induced attack success among clean-negative
-targets with 0/100 poison retrieval@5 in the declared post-calibration
-PoisonedRAG N=100 adaptation. These metrics use different protocols and are
-never averaged. The public aggregate also carries mutation-integrity,
-epistemic-ablation, blinded system-author agreement, and 39/39 verified signed
+It carries the canonical utility results above, 1.02% induced attack success
+among clean-negative PoisonedRAG targets, mutation-integrity evidence,
+epistemic ablation, blinded system-author agreement, and 39/39 verified signed
 scratch-brain purge evidence. Older batch-save runs are non-canonical and are
 not release claims.
 
 The architecture manifest mechanically binds the current 275-service census.
 That number is an inventory fact, not a performance claim.
-
-## What the release implements
-
-This is the complete AIMOS backend evaluated by the published release
-artifacts, not a verifier-only demonstration. The shipped runtime includes:
-
-- a signed save pipeline with envelope validation, immutable versioning,
-  session composition, provenance commits, and retained conflict evidence;
-- a native recall pipeline combining semantic, lexical, graph, temporal,
-  session, calibration, provenance, and epistemic-trust signals;
-- cryptographically linked memory events, mutation events, credential events,
-  cognitive-weight baselines and transitions, and configuration changes;
-- reversible epistemic classification for suspected poisoned evidence, with
-  the label, classifier decision, later reclassification, and retrieval effect
-  retained as auditable evidence rather than silently deleting the memory;
-- bounded cognitive adaptation, including signed valence and weight changes,
-  while preserving the underlying memory and every prior state; and
-- the housekeeper-owned autonomous maintenance path, source tests, migrations,
-  portable verifiers, benchmark harnesses, and sanitized publication evidence.
-
-The cryptographic ledger proves authorization, ordering, integrity, and the
-history of a decision. It does not turn an assertion into objective truth.
-That boundary is why poison labeling and retrieval policy remain visible and
-reversible instead of being represented as perfect prevention.
 
 ## Security and retention invariants
 

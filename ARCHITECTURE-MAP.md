@@ -87,8 +87,92 @@ It declares 146 service connections across 6 pipelines.
 | Heartbeat | `jobs/heartbeat.js` | Database, memory, event, process and retention health |
 | Governance | `services/orchestration/governance-resolver.js` | Policy, rule, trust and decision resolution |
 
-The manifest is a critical-connection map, not a substitute for import and
-caller analysis.
+The manifest is the source of truth for these six critical-connection maps,
+not a substitute for the complete import graph or caller analysis. Its
+validator dynamically imports every declared service and checks the named
+exports. Architecture tests and the release-source gate fail when this wiring,
+the service census, and the public documentation diverge.
+
+### Native save path
+
+All durable product writes converge on `services/write/persist-memory.js`.
+The external save route composes eight principal execution boundaries:
+
+| # | Stage | Native owner |
+|---:|---|---|
+| 1 | Signed request and authorization | `routes/aimos.js` |
+| 2 | Write validation | `services/write/write-validator.js` |
+| 3 | Prediction-error routing gate | `services/write/rpe-gate.js` |
+| 4 | Mnemonic encoding | `services/context/mnemonic-encoder.js` |
+| 5 | Quality gate | `services/write/quality-gate.js` |
+| 6 | Embedding | `services/core/embeddings.js` |
+| 7 | Canonical persistence and provenance | `services/write/persist-memory.js` |
+| 8 | Signed retained-memory epistemic label | `services/security/memory-epistemic-classifier.js` |
+
+`persistMemory()` is the canonical transaction owner. It repeats the quality
+gate for internal callers, creates an immutable version, commits provenance in
+the same transaction, and commits the retained-memory epistemic classification
+before returning the admitted memory.
+
+### Native recall path
+
+`services/retrieval/native-recall-pipeline.js` is the canonical execution
+owner. The externally visible path has eight principal stages:
+
+| # | Stage | Native owner |
+|---:|---|---|
+| 1 | Query understanding and path selection | `services/retrieval/native-recall-pipeline.js` |
+| 2 | Embedding and candidate opening | `services/core/embeddings.js` |
+| 3 | Similarity statistics | `services/retrieval/similarity-stats.js` |
+| 4 | Trust scoring | `services/learning/trust-score.js` |
+| 5 | Concept-graph retrieval | `services/core/concept-graph.js` |
+| 6 | Verified epistemic projection and selection | `services/retrieval/epistemic-trust-retrieval.js` |
+| 7 | Pre-disclosure calibration | `services/retrieval/recall-calibrator.js` |
+| 8 | Bounded evidence and signed receipt | `services/retrieval/native-recall.js` |
+
+The 68 declared recall connections span exact-identifier, semantic, temporal,
+graph, procedural, lineage, cache, instrumentation, and ingestion-assisted
+paths. Candidate evidence passes provenance and authorization admission before
+epistemic selection and bounded disclosure.
+
+### Native cognitive-mutation plane
+
+Canonical memory content and existence are immutable. Cognitive mutation
+changes only `retrieval_weight`, bidirectionally within `[0.1, 3.0]`, so a low
+frequency never becomes deletion or ineligibility.
+
+The implemented signal owners are distinct and explicit:
+
+| Lane | Signal and update | Native owner |
+|---|---|---|
+| Outcome adaptation | Signed positive/negative outcome → cumulative age-neutral valence → bounded reference-point update | `services/learning/stdp-kernel.js` |
+| Valence evidence | Append-only signed reward evidence and `tanh(sum rewards)` judge | `services/governance/valence-ledger.js`, `services/governance/valence-judge.js` |
+| Consolidation | Governed positive SPICED strengthening of eligible retained memories | `services/dream/spiced-consolidator.js` |
+| Relational consensus | Optional symmetric elevation or attenuation from semantic-neighborhood support | `services/dream/hebbian-consensus.js` |
+
+Hebbian consensus is shadow-first and disabled unless its signed governor flag
+is enabled. The three mutation owners call the same restricted persistence
+boundary; no service receives direct authority to rewrite a weight.
+
+Every changed target follows this certified path:
+
+1. the owning restricted transaction takes the per-memory advisory lock;
+2. `services/governance/governor-provenance.js` appends a housekeeper-signed
+   `REWEIGHT` provenance node;
+3. `services/security/housekeeper-signer.js` signs a separate fixed-width
+   transition commitment;
+4. migration 091's `apply_signed_cognitive_reweight` verifies scope, active
+   signer epoch, old/new milliscaled state, provenance, continuity, bounds, and
+   no-fork predecessor;
+5. the same transaction appends the cognitive projection and updates only
+   `retrieval_weight`; and
+6. SQL and `services/security/cognitive-weight-verifier.js` independently
+   replay the per-memory chain and whole-corpus proof root.
+
+If the quantized target equals the current state, signed outcome evidence and a
+signed unchanged event remain retained, but no fictitious projection is
+appended. The complete byte layout, proofs, and verification contract are in
+`docs/security/cognitive-weight-chain-SPEC.md`.
 
 ## Service inventory
 
@@ -121,8 +205,7 @@ import/caller path, focused tests, and when applicable a native live-fire proof.
 
 ## Memory and save plane
 
-All durable product writes converge on `services/write/persist-memory.js`.
-The native save path composes:
+Beyond the principal stages above, the native save path composes:
 
 - certificate-envelope authentication and request receipt;
 - write authorization and session ownership;
@@ -139,8 +222,7 @@ retrieval frequency and contextual eligibility are governed by signed state.
 
 ## Recall plane
 
-`services/retrieval/native-recall-pipeline.js` is the canonical execution path.
-It combines:
+Beyond the principal stages above, native recall combines:
 
 - mode planning and query decomposition;
 - exact-identifier, semantic, temporal, graph, procedural and lineage paths;
@@ -153,6 +235,25 @@ It combines:
 Memory evidence is reference material, never an instruction channel. Recall
 does not expose hidden chain-of-thought; it returns bounded evidence and
 verifiable decision metadata.
+
+## Cryptographic boundaries
+
+Cryptographic accountability is additive to the memory engine and enters at
+four explicit boundaries:
+
+- admitted memories receive signed, reversible epistemic labels bound to live
+  content hashes;
+- recall verifies and consumes those projections, applies a verified
+  calibration snapshot, and returns bounded evidence under an RFC 6962-style
+  domain-separated Merkle receipt;
+- cognitive-weight changes require housekeeper-authorized signed transitions
+  bound to the terminal provenance node, signer epoch, quantized old and new
+  weights, and no-fork predecessor; and
+- the database mutation boundary and independent portable verifier both verify
+  Ed25519 evidence.
+
+These commitments prove authorization, ordering, integrity, and decision
+history. They do not prove that an authorized assertion is factually true.
 
 ## Identity, signing and authorization
 
@@ -213,6 +314,24 @@ Public verification includes:
 Raw benchmark corpus, provider payloads, live memories, run directories,
 identity-bearing receipts, internal plans and private audit notes are not
 distributed.
+
+## Canonical measured evidence
+
+| Result | Value |
+|---|---:|
+| LongMemEval, LLM-judged | 459/500 — 91.8% |
+| LoCoMo, LLM-judged | 1472/1986 — 74.12% |
+| LoCoMo, separate upstream-compatible token F1 | 58.20 |
+| PoisonedRAG N=100, poison in attacked top-5 disclosures | 0/100 |
+| Same target set, epistemic policy bypassed | 94/100 |
+| Mutation authorization rejection cases | 7/7 |
+| Cognitive tamper cases detected | 4/4 |
+| SQL/portable cognitive verifier parity | 9/9 records |
+| Signed cognitive-transition latency, median | 4.865 ms |
+
+The protocols are distinct and are not averaged. The sanitized, self-hashed
+`eval/publication/verified-benchmark-results.json` binds the promoted run
+artifacts by SHA-256 and is the public numerical authority.
 
 ## Change discipline
 
