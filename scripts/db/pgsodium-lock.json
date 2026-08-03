@@ -1,0 +1,10 @@
+{
+  "schema": "hom.aimos.dependency-lock/pgsodium/v1",
+  "name": "pgsodium",
+  "version": "3.1.11",
+  "tag": "v3.1.11",
+  "tag_object_commit": "a8b8a2739bab1f7a07445b1c911e2bd1abf67784",
+  "source_url": "https://codeload.github.com/michelp/pgsodium/tar.gz/refs/tags/v3.1.11",
+  "source_bytes": 115438,
+  "source_sha256": "ad613056d046294ead6bc4873cf9dfa6f0e3ad5a4f30094621464e3582dde090"
+}

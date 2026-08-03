@@ -1,0 +1,447 @@
+{
+  "project": "HOM Distributed Cognitive Engine",
+  "version": "1.2.5-Batch9.75-Coexistence",
+  "updated": "2026-07-31",
+  "doctrine": "Distributed Aladdin Law",
+  "total_services": 275,
+  "research_papers_ingested": 197,
+  "books_ingested": 11,
+  "service_inventory": {
+    "service_groups": 17,
+    "counted_service_files": 275,
+    "census_sha256": "9ae9e86daec8b420da768ab523e13cbfe2072c812a8d34d564ea8c315ce10095",
+    "counting_policy": {
+      "counted": "top-level services/<group>/*.js excluding index.js barrels and hidden directories",
+      "excluded_root_infrastructure_files": [
+        "services/pipeline-manifest.js"
+      ]
+    },
+    "groups": {
+      "answering": {
+        "layer": "asmr-answering",
+        "path": "services/answering/",
+        "services": 2,
+        "files": [
+          "ensemble-engine.js",
+          "prompt-variants.js"
+        ]
+      },
+      "caching": {
+        "layer": "retrieval-support",
+        "path": "services/caching/",
+        "services": 1,
+        "files": [
+          "semantic-cache.js"
+        ]
+      },
+      "context": {
+        "layer": "L10",
+        "path": "services/context/",
+        "services": 9,
+        "files": [
+          "active-memory-policy.js",
+          "context-renewal.js",
+          "linguistic-constraints.js",
+          "mnemonic-encoder.js",
+          "mvs-detector.js",
+          "persistent-identity-bootstrap.js",
+          "post-compaction-delivery.js",
+          "scoped-state.js",
+          "workspace-partitions.js"
+        ]
+      },
+      "core": {
+        "layer": "L0+L1",
+        "path": "services/core/",
+        "services": 15,
+        "files": [
+          "authority-paths.js",
+          "brain-contract.js",
+          "concept-graph.js",
+          "constitution-enforcer.js",
+          "deontic-reasoner.js",
+          "directive-claims.js",
+          "embeddings.js",
+          "hom-constitution.js",
+          "permissions.js",
+          "provider-circuit-breaker.js",
+          "provider-health.js",
+          "providers.js",
+          "rule-hierarchy.js",
+          "runtime-config.js",
+          "scheming-monitor.js"
+        ]
+      },
+      "dream": {
+        "layer": "L6",
+        "path": "services/dream/",
+        "services": 5,
+        "files": [
+          "curator.js",
+          "delta-writer.js",
+          "dream-feedback.js",
+          "hebbian-consensus.js",
+          "spiced-consolidator.js"
+        ]
+      },
+      "governance": {
+        "layer": "governance",
+        "path": "services/governance/",
+        "services": 7,
+        "files": [
+          "aladdin-compliance.js",
+          "cohen-grossberg-energy-governor.js",
+          "governor-config-ledger.js",
+          "governor-provenance.js",
+          "knowledge-gate-enforcer.js",
+          "valence-judge.js",
+          "valence-ledger.js"
+        ]
+      },
+      "ingestion": {
+        "layer": "asmr-ingestion",
+        "path": "services/ingestion/",
+        "services": 4,
+        "files": [
+          "entity-extractor.js",
+          "ingestion-orchestrator.js",
+          "relationship-mapper.js",
+          "temporal-marker.js"
+        ]
+      },
+      "integrations": {
+        "layer": "ext",
+        "path": "services/integrations/",
+        "services": 9,
+        "files": [
+          "google-tools.js",
+          "identity-vault.js",
+          "integration-tools.js",
+          "stripe-tools.js",
+          "telegram-tools.js",
+          "web-search.js",
+          "x-automation.js",
+          "x-search.js",
+          "x-tools.js"
+        ]
+      },
+      "learning": {
+        "layer": "L5",
+        "path": "services/learning/",
+        "services": 23,
+        "files": [
+          "agent-learning.js",
+          "batch-reflector.js",
+          "bayesian-continual-memory.js",
+          "cognitive-consistency.js",
+          "dual-skill-bank.js",
+          "epistemic-vigilance.js",
+          "error-normalizer.js",
+          "failure-replay.js",
+          "hebbian-orthogonal-projection.js",
+          "instruction-revision-diagnostics.js",
+          "memory-agent-benchmark.js",
+          "neurogenesis-catastrophic-forgetting.js",
+          "neuroplasticity-stability-control.js",
+          "plasticity-controller.js",
+          "prospect-theory.js",
+          "reflection-finetuner.js",
+          "serena-self-regulated-neurogenesis.js",
+          "skill-consolidation.js",
+          "spaced-repetition.js",
+          "stdp-kernel.js",
+          "synaptic-consolidation-plasticity.js",
+          "tacos-neuromodulated-consolidation.js",
+          "trust-score.js"
+        ]
+      },
+      "observe": {
+        "layer": "L9",
+        "path": "services/observe/",
+        "services": 22,
+        "files": [
+          "agent-trace.js",
+          "aladdin-salience-sidecar.js",
+          "architecture-registry.js",
+          "benchmark-scenarios.js",
+          "calibrated-rank-composition.js",
+          "coordination-audit.js",
+          "energy-budget.js",
+          "entanglement-monitor.js",
+          "event-ledger.js",
+          "explainer.js",
+          "mastery-paradox-detector.js",
+          "memory-counts.js",
+          "multimodal-contract.js",
+          "recall-doctor-sidecar.js",
+          "recall-doctor-trace.js",
+          "recall-quantitative-gate.js",
+          "recall-relevance-labels.js",
+          "retrieval-drift-monitor.js",
+          "routing-monitor.js",
+          "save-envelope.js",
+          "semantic-intent.js",
+          "svdd-anomaly.js"
+        ]
+      },
+      "orchestration": {
+        "layer": "L4",
+        "path": "services/orchestration/",
+        "services": 43,
+        "files": [
+          "agent-bdi-state.js",
+          "agent-confidence-calibration.js",
+          "agent-executive-fast-path.js",
+          "agent-investigation-loop.js",
+          "agent-prompts.js",
+          "agent-run-diagnostics.js",
+          "agent-runner.js",
+          "agent-security-gates.js",
+          "agent-store.js",
+          "agent-tools.js",
+          "agent-xai-explanation.js",
+          "aimos-mcp-catalog.js",
+          "capability-probe.js",
+          "command-center.js",
+          "cooperative-action-arbitration.js",
+          "decentralized-consensus.js",
+          "decision-renderer.js",
+          "escalation-resolver.js",
+          "explore-exploit-loop.js",
+          "fallback-resolver.js",
+          "governance-resolver.js",
+          "graph-designer.js",
+          "http.js",
+          "hypothesis-verifier.js",
+          "interaction-graph-healer.js",
+          "meta-controller.js",
+          "model-context.js",
+          "model-preferences.js",
+          "reasoning-trace-check.js",
+          "run-events.js",
+          "run-metadata.js",
+          "scheduler.js",
+          "session-memory-owner.js",
+          "session-runner.js",
+          "skill-policy-diagnostics.js",
+          "skills-runtime.js",
+          "sun-tzu-analyzer.js",
+          "symbolic-reasoner.js",
+          "tool-action-ledger.js",
+          "tool-approval-store.js",
+          "tool-registry.js",
+          "tool-representation-diagnostics.js",
+          "trust-router.js"
+        ]
+      },
+      "retrieval": {
+        "layer": "L2",
+        "path": "services/retrieval/",
+        "services": 55,
+        "files": [
+          "adaptive-early-exit.js",
+          "adaptive-recall.js",
+          "aeon-atlas-memory.js",
+          "ai-hippocampus-memory-system.js",
+          "artificial-hippocampus-memory.js",
+          "asmr-pipeline.js",
+          "chronos-temporal-retriever.js",
+          "context-builder.js",
+          "contextual-intent-memory.js",
+          "conversational-event-memory-baseline.js",
+          "deep-recall-override.js",
+          "embedding-stability.js",
+          "ember-retention-memory.js",
+          "epistemic-trust-retrieval.js",
+          "fact-finder.js",
+          "hage-hybrid-agent-graph.js",
+          "hindsight-memory-graph.js",
+          "hingemem-boundary-hypergraph.js",
+          "hmem-hierarchical-reasoning.js",
+          "hnsw-optimizer.js",
+          "identifier-recall.js",
+          "interval-algebra-rag.js",
+          "keypoint-decomposer.js",
+          "longmemeval-v2-context-gathering.js",
+          "magma-lineage-retriever.js",
+          "memaudit-package-audit.js",
+          "memmachine-retrieval-agent.js",
+          "mnemis-dual-route-graph.js",
+          "multi-stage-retrieval.js",
+          "native-recall-pipeline.js",
+          "native-recall.js",
+          "pipeline-instrumentation.js",
+          "prism-typed-path-retrieval.js",
+          "procedural-reasoning-retriever.js",
+          "qmd-parser.js",
+          "qmd-planner.js",
+          "quim-index.js",
+          "rag-ranking-verification.js",
+          "recall-calibrator.js",
+          "recall-diagnostics.js",
+          "recall-lexical-calibration.js",
+          "recall-mode-planner.js",
+          "recall-output-calibrator.js",
+          "recall-runtime-config.js",
+          "reconstructed-graph-memory.js",
+          "retrieval-orchestrator.js",
+          "similarity-stats.js",
+          "situated-qa-context.js",
+          "source-attributed-synthesis.js",
+          "step-back-abstraction.js",
+          "swiftmem-query-aware-index.js",
+          "temporal-abstention-reward.js",
+          "time-aware-representation.js",
+          "timeline-reconstructor.js",
+          "xmemory-beyond-rag.js"
+        ]
+      },
+      "runtime": {
+        "layer": "serving",
+        "path": "services/runtime/",
+        "services": 2,
+        "files": [
+          "local-inference-control.js",
+          "serving-control.js"
+        ]
+      },
+      "security": {
+        "layer": "L3",
+        "path": "services/security/",
+        "services": 36,
+        "files": [
+          "agent-identity.js",
+          "agent-revocation-cache.js",
+          "auth-gate.js",
+          "auth-tier.js",
+          "canary-tracker.js",
+          "canary-write-gate.js",
+          "cognitive-demand.js",
+          "cognitive-weight-verifier.js",
+          "credential-cache.js",
+          "credential-ledger.js",
+          "credential-store.js",
+          "cybersec-firewall.js",
+          "envelope-headers.js",
+          "golem-vuln-classes.js",
+          "housekeeper-pubkey-cache.js",
+          "housekeeper-signer.js",
+          "identity-chain.js",
+          "install-classifier.js",
+          "knowledge-gate.js",
+          "master-pubkey-cache.js",
+          "memory-epistemic-classifier.js",
+          "memory-lineage.js",
+          "memory-provenance.js",
+          "nonce-window.js",
+          "recall-authorization.js",
+          "red-team-toolkit.js",
+          "refusal-detector.js",
+          "request-receipt-ledger.js",
+          "require-capability.js",
+          "save-envelope.js",
+          "se-gate.js",
+          "security-classifier.js",
+          "security-ladder.js",
+          "system-config-ledger.js",
+          "system-config-store.js",
+          "whole-brain-purge.js"
+        ]
+      },
+      "shared": {
+        "layer": "cross",
+        "path": "services/shared/",
+        "services": 4,
+        "files": [
+          "native-llm.js",
+          "scale-baseline.js",
+          "schema-mapper.js",
+          "session-scope.js"
+        ]
+      },
+      "temporal": {
+        "layer": "L7",
+        "path": "services/temporal/",
+        "services": 25,
+        "files": [
+          "decoder-only-time-series-forecast.js",
+          "dormancy-manager.js",
+          "event-ordering-graph.js",
+          "freshness-metadata.js",
+          "memory-t1-learning-loop.js",
+          "multi-view-timeline.js",
+          "recurrent-event-network.js",
+          "retrieval-pheromone.js",
+          "right-time-rag.js",
+          "streaming-qa-horizon.js",
+          "tcomplex-tntcomplex.js",
+          "tempcourt-normalization.js",
+          "tempeval-merge-closure.js",
+          "temporal-fingerprinter.js",
+          "temporal-graph-fusion.js",
+          "temporal-kg-reasoning.js",
+          "temporal-knowledge-base.js",
+          "temporal-resolver.js",
+          "temporal-semantic-memory.js",
+          "tempquestions-intervals.js",
+          "time-aware-lm-kb.js",
+          "timem-hierarchy.js",
+          "timex-normalizer.js",
+          "topic-budget.js",
+          "xerte-temporal-kg-explain.js"
+        ]
+      },
+      "write": {
+        "layer": "L8",
+        "path": "services/write/",
+        "services": 13,
+        "files": [
+          "channel-separator.js",
+          "codebook-service.js",
+          "compaction-save.js",
+          "credential-lane.js",
+          "execution-interceptor.js",
+          "intent-classifier.js",
+          "persist-memory.js",
+          "quality-gate.js",
+          "rpe-gate.js",
+          "sensible-screening.js",
+          "transformation-cache.js",
+          "turboquant-compat.js",
+          "write-validator.js"
+        ]
+      }
+    }
+  },
+  "architecture": {
+    "layers": {
+      "L0": {
+        "domain": "Distributed Persistence",
+        "retention": "Aladdin — everything is long-term. No DELETE. No is_active=false. Neuron persists forever.",
+        "services": [
+          {
+            "id": "db-connection",
+            "path": "db/connection.js",
+            "description": "Routes canonical mutations through the restricted runtime role; migrations enforce append-only privileges."
+          }
+        ]
+      },
+      "L8": {
+        "domain": "Compaction",
+        "logic": "SPICED consolidation emits retained evidence and nondecreasing support; canonical memory truth advances through append-only versions."
+      }
+    },
+    "invariants": [
+      "The synapse changes. The neuron persists.",
+      "Append-only memory ledger.",
+      "No age, validity window, or background process may suppress retained memory."
+    ],
+    "pipeline_manifest": {
+      "file": "services/pipeline-manifest.js",
+      "validated_connections": 76,
+      "pipelines": 7,
+      "scope": "Critical pipeline wiring registry. Not the complete live service inventory."
+    }
+  },
+  "runtime_data_authority": "Live PostgreSQL ledgers; no installation-specific row count is canonical in this public manifest."
+}

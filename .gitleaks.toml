@@ -1,0 +1,19 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Local and generated paths excluded from the public release"
+paths = [
+  '''(^|/)\.git/''',
+  '''(^|/)\.claude/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)plans/''',
+  '''(^|/)remediation/''',
+  '''(^|/)scratchpad/''',
+  '''(^|/)services/\.cache/''',
+  '''(^|/)eval/data/[^/]+\.(?:json|csv)$''',
+  '''(^|/)eval/data/canonical/''',
+  '''(^|/)eval/public-results/''',
+  '''(^|/)eval/results/''',
+  '''(^|/)db/backups/''',
+]

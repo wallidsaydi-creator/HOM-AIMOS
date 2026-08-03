@@ -1,0 +1,98 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+dist/
+build/
+/release/
+*.log
+
+# Environment files
+.env
+.env.*
+.env.pre-credential-backfill.bak
+.env.local
+.env.production
+
+# IDE files
+.vscode/
+.idea/
+.claude/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Plans (traceability doc, do not ship unless intentionally shared)
+plans/
+RELEASE-IMPROVEMENT-PLAN.md
+
+# Generated runtime authority (machine-specific, resolved paths)
+architecture-authority.json
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+
+# Sensitive files (auto-detected)
+.env
+node_modules
+out.log
+server.log
+
+# ── Remediation groundwork (2026-07-10) — never commit these ──────────────
+# Reviewer/implementer backups: contain pre-fix code, must not enter history.
+*.pre-r*
+*.pre-credential-backfill
+*.bak
+
+# Archives and binaries that must never be redistributed:
+#   services/security.zip — stale duplicate of security-critical source
+#   any bundled desktop app
+*.zip
+*.app/
+*.asar
+
+# Local agent identity + secrets (created by the genesis ceremony at runtime):
+.aimos/
+*.privkey
+*.key
+housekeeper.cert-cache.json
+
+# Benchmark datasets retain their upstream terms. Ship the pinned download and
+# hash-verification workflow, not vendored dataset bytes.
+eval/data/*.json
+eval/data/*.csv
+eval/data/canonical/
+eval/data/private/
+eval/V2-HANDOFF.md
+
+# Scratch / ceremony test databases leave no repo artifacts, but their logs might:
+/tmp/ceremony-*.log
+
+
+# Local release exclusions
+# Local DB backups (pg_dump artifacts, hundreds of MB)
+db/backups/
+
+# Private remediation and audit records can contain vulnerability detail and
+# personal identifiers. They are never public release inputs.
+remediation/
+REMEDIATION-INDEX.md
+MASTER-LEDGER.md
+MASTER-STATUS-LEDGER.md
+
+# Local benchmark run artifacts: absolute personal paths, machine-specific.
+# R6's restated results ledger regenerates these reproducibly.
+eval/results/
+eval/public-results/
+
+# Whole-brain purge receipts (Amendment 1): carry master key fingerprints and
+# pre-purge row counts. Attestation artifacts — durable, but never committed.
+artifacts/

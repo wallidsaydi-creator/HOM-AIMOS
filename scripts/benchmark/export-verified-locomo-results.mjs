@@ -1,0 +1,161 @@
+#!/usr/bin/env node
+
+import { createHash } from 'node:crypto';
+import { existsSync, lstatSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const RECORDS = Object.freeze([
+  Object.freeze({
+    runId: '20260715111742_96b25f',
+    file: 'canonical-summary-locomo.json',
+    schema: 'hom.canonical-benchmark-summary/v1',
+    protocolId: 'canonical-blind-v1',
+    metric: 'GPT-5.6 Terra LLM-judged QA accuracy',
+  }),
+  Object.freeze({
+    runId: '20260718205816_fbde68',
+    file: 'locomo-official-summary.json',
+    schema: 'hom.locomo-official-summary/v1',
+    protocolId: 'locomo-upstream-qa-v1',
+    metric: 'upstream-compatible category-aware token F1',
+  }),
+]);
+
+function sha256(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function readRegularJson(file) {
+  if (!existsSync(file) || lstatSync(file).isSymbolicLink() || !statSync(file).isFile()) {
+    throw new Error(`locomo_result_artifact_invalid:${file}`);
+  }
+  return JSON.parse(readFileSync(file, 'utf8'));
+}
+
+function selfHash(value, field) {
+  const unsigned = { ...value };
+  delete unsigned[field];
+  return sha256(JSON.stringify(unsigned));
+}
+
+function verifyRows(runDir, summary) {
+  const file = path.resolve(runDir, summary.rows_file);
+  if (file !== runDir && !file.startsWith(`${runDir}${path.sep}`)) throw new Error('locomo_rows_path_escape');
+  if (!existsSync(file) || lstatSync(file).isSymbolicLink() || !statSync(file).isFile()) {
+    throw new Error('locomo_rows_artifact_invalid');
+  }
+  const observed = sha256(readFileSync(file));
+  if (observed !== summary.rows_sha256) throw new Error('locomo_rows_hash_mismatch');
+  return { file: summary.rows_file, sha256: observed };
+}
+
+function verifiedRecord(specification) {
+  const runDir = path.join(ROOT, 'eval', 'public-results', specification.runId);
+  const file = path.join(runDir, specification.file);
+  const raw = readFileSync(file);
+  const summary = readRegularJson(file);
+  if (summary.schema !== specification.schema
+    || summary.run_id !== specification.runId
+    || summary.benchmark !== 'locomo'
+    || summary.summary_sha256 !== selfHash(summary, 'summary_sha256')
+    || summary.metrics?.selected !== 1986
+    || summary.metrics?.complete !== 1986
+    || summary.metrics?.incomplete !== 0) {
+    throw new Error(`locomo_summary_verification_failed:${specification.runId}`);
+  }
+  const rows = verifyRows(runDir, summary);
+  if (specification.protocolId === 'canonical-blind-v1') {
+    const metric = summary.metrics.judged_qa;
+    if (summary.generator !== 'codex:gpt-5.4'
+      || summary.judge !== 'codex:gpt-5.6-terra'
+      || metric?.judged !== 1986
+      || metric?.correct !== 1472) {
+      throw new Error('locomo_judged_protocol_identity_invalid');
+    }
+    return {
+      run_id: specification.runId,
+      protocol: specification.protocolId,
+      metric: specification.metric,
+      denominator: metric.judged,
+      numerator: metric.correct,
+      value: metric.accuracy,
+      percent: metric.accuracy * 100,
+      generator: summary.generator,
+      judge: summary.judge,
+      source_summary: {
+        file: path.relative(ROOT, file),
+        file_sha256: sha256(raw),
+        summary_sha256: summary.summary_sha256,
+      },
+      source_rows: rows,
+    };
+  }
+  const metric = summary.metrics.official_qa;
+  if (summary.protocol?.id !== specification.protocolId
+    || summary.reader !== 'codex:gpt-5.4'
+    || summary.judge !== null
+    || metric?.evaluated !== 1986) {
+    throw new Error('locomo_official_protocol_identity_invalid');
+  }
+  return {
+    run_id: specification.runId,
+    protocol: specification.protocolId,
+    metric: specification.metric,
+    denominator: metric.evaluated,
+    numerator: null,
+    value: metric.mean_f1,
+    percent: metric.score_percent,
+    reader: summary.reader,
+    judge: null,
+    source_summary: {
+      file: path.relative(ROOT, file),
+      file_sha256: sha256(raw),
+      summary_sha256: summary.summary_sha256,
+    },
+    source_rows: rows,
+  };
+}
+
+const output = {
+  schema: 'hom.aimos.verified-locomo-protocol-results/v1',
+  benchmark: 'LoCoMo',
+  rule: 'These are distinct protocol/metric records and must never be averaged or substituted for one another.',
+  results: RECORDS.map(verifiedRecord),
+};
+output.manifest_sha256 = selfHash(output, 'manifest_sha256');
+const outputFile = path.join(ROOT, 'eval', 'results', 'verified-locomo-protocol-results.json');
+const outputBytes = `${JSON.stringify(output, null, 2)}\n`;
+writeFileSync(outputFile, outputBytes, { mode: 0o644 });
+const markdownFile = path.join(ROOT, 'eval', 'results', 'VERIFIED-LOCOMO-PROTOCOL-RESULTS.md');
+const markdown = [
+  '# Verified LoCoMo Protocol Results',
+  '',
+  '> Generated by `scripts/benchmark/export-verified-locomo-results.mjs`. Do not edit empirical cells manually.',
+  '',
+  '| Run | Protocol | Metric | N | Result | Generator/reader | Judge | Verified summary hash |',
+  '|---|---|---|---:|---:|---|---|---|',
+  ...output.results.map((record) => [
+    `\`${record.run_id}\``,
+    `\`${record.protocol}\``,
+    record.metric,
+    record.denominator.toLocaleString('en-US'),
+    `${record.percent.toFixed(2)}%`,
+    record.generator || record.reader,
+    record.judge || 'None — deterministic F1 scorer',
+    `\`${record.source_summary.summary_sha256}\``,
+  ].join(' | ')).map((row) => `| ${row} |`),
+  '',
+  'These measurements are complementary, not interchangeable: 74.12% is semantic LLM-judged QA accuracy, while 58.20 is the upstream-compatible category-aware token-F1 score. They must not be averaged or represented as the same metric.',
+  '',
+  `Machine-readable manifest: \`eval/results/${path.basename(outputFile)}\` (self-hash \`${output.manifest_sha256}\`).`,
+  '',
+].join('\n');
+writeFileSync(markdownFile, markdown, { mode: 0o644 });
+writeFileSync(`${markdownFile}.sha256`, `${sha256(Buffer.from(markdown, 'utf8'))}  ${path.basename(markdownFile)}\n`, { mode: 0o644 });
+console.log(JSON.stringify({
+  output_file: outputFile,
+  markdown_file: markdownFile,
+  manifest_sha256: output.manifest_sha256,
+}, null, 2));

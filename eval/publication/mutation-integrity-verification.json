@@ -1,0 +1,82 @@
+{
+  "schema": "hom.aimos.mutation-integrity-public-evidence/v1",
+  "protocol": "mutmem-native-mutation-integrity-v1",
+  "run_id": "20260723162050_59a52d",
+  "data_policy": "Aggregate case outcomes, measurements, and cryptographic commitments only; no memory identifiers, certificates, credentials, absolute paths, or retained content.",
+  "execution": {
+    "isolated_fresh_genesis_brain": true,
+    "canonical_brain_untouched": true,
+    "scratch_brain_retained_pending_signed_whole_brain_purge": true,
+    "intended_transition_measurements": 20,
+    "completed_transition_measurements": 20
+  },
+  "authorization_cases": {
+    "runtime_direct_update_rejected": true,
+    "wrong_memory_proof_rejected": true,
+    "wrong_company_scope_rejected": true,
+    "no_op_rejected": true,
+    "discontinuity_rejected": true,
+    "out_of_bounds_rejected": true,
+    "fork_rejected": true
+  },
+  "trajectory_cases": {
+    "bidirectional_up_down_up_verified": true,
+    "signed_negative_neutral_positive_evidence_retained": true,
+    "neutral_no_transition_verified": true,
+    "existence_preserved": true,
+    "lower_bound": 0.1,
+    "upper_bound": 3
+  },
+  "tamper_cases": {
+    "projection_hash_or_binding_tamper_detected": true,
+    "transition_signature_tamper_detected": true,
+    "terminal_weight_tamper_detected": true,
+    "stale_signer_epoch_detected": true
+  },
+  "verifier": {
+    "sql_corpus_records": 9,
+    "portable_corpus_records": 9,
+    "all_sql_records_ok": true,
+    "all_portable_records_ok": true,
+    "sql_portable_parity": true,
+    "portable_corpus_proof_root_sha256": "a965aba5ec0a5eea813617489c8c3851e3ad5e16587c026fedfd71e303f43269"
+  },
+  "signed_post_mutation_recall": {
+    "returned_memory_count": 1,
+    "receipt_evidence_count": 1,
+    "command_hash": "8f3257cabde7c5e3415d8ad858898e97d870837780f0ba754d4124ab86b27ac5",
+    "merkle_root": "8776caaae6034a5b1b02e661ccc8e8ca29e377141d615b03e05fdbe85c012e37",
+    "event_id": "9fc02a58-3acb-4ac1-93fc-c5bc2666d12a",
+    "event_mutation_hash": "eb1283b63eb68cf33904d629e1a17eb29138493d8185d1648cca4d59fdc7acda"
+  },
+  "latency_ms": {
+    "n": 20,
+    "mean": 4.8984228,
+    "median": 4.864875,
+    "p95": 5.6738277,
+    "minimum": 3.856625,
+    "maximum": 6.488333,
+    "boundary": "one native restricted transaction including housekeeper signatures, provenance append, certified projection append, and live-weight update"
+  },
+  "logical_row_storage_bytes": {
+    "n": 20,
+    "projection_total": 5807,
+    "provenance_total": 13520,
+    "combined_total": 19327,
+    "combined_mean_per_transition": 966.35,
+    "measurement": "sum(pg_column_size(row)); excludes indexes and block-level free space"
+  },
+  "allocated_relation_delta_bytes": {
+    "provenance": 16384,
+    "projection": 0,
+    "measurement": "pg_total_relation_size after minus before; block-granular and reported separately from logical row size"
+  },
+  "evidence": {
+    "private_summary_sha256": "984994fc8d6c438599db32d6603d9cec8e02de398a7e6a262afdc253c11e0258",
+    "private_evidence_file_sha256": "949747ecd6465fa3f5fbcde947992dbf23e984ca56d62b76ea896f51e3c2e791",
+    "artifact_count": 7,
+    "artifact_manifest_file_sha256": "a5f79138c4e53a7e752ec533eb6c7ff708272f561921864c23b52f518d8e4950",
+    "artifact_manifest_declared_sha256": "5b14f0eb038406268ad80b3ced1ac30b9aacb4b6468957250007bc26dd18d9c9"
+  },
+  "mutation_integrity_evidence_sha256": "9521798027be2893af745214a22747334be201d74178ddd9265ea97a32d34be8"
+}

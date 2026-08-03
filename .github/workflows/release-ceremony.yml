@@ -1,0 +1,101 @@
+name: Release ceremony
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-ceremony-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  isolated-genesis:
+    name: Fresh Genesis and signed live-fire proof
+    runs-on: macos-15
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+
+    steps:
+      - name: Check out immutable source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Configure Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install PostgreSQL and native build dependencies
+        run: |
+          brew bundle --file Brewfile
+          brew services start postgresql@18
+          echo "$(brew --prefix postgresql@18)/bin" >> "$GITHUB_PATH"
+
+      - name: Wait for PostgreSQL
+        run: |
+          for _ in {1..30}; do
+            "$(brew --prefix postgresql@18)/bin/pg_isready" && exit 0
+            sleep 2
+          done
+          exit 1
+
+      - name: Verify clean-machine dependency contract
+        run: bash install-macos.sh --check
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Fetch and verify canonical benchmark fixtures
+        run: |
+          bash eval/data/download.sh
+          node eval/prepare-canonical-corpus.mjs
+
+      - name: Run source release gates
+        run: npm run test:release:source
+
+      - name: Run disposable Genesis and signed live-fire ceremony
+        shell: bash
+        run: |
+          set -o pipefail
+          npm run test:security:isolated 2>&1 | tee release-security-ceremony.log
+
+      - name: Build source package, SBOM, and checksums
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          tarball="$(npm pack --pack-destination release --silent)"
+          npm sbom --package-lock-only --omit=dev --sbom-format cyclonedx > release/aimos-backend.cdx.json
+          (
+            cd release
+            shasum -a 256 "$tarball" aimos-backend.cdx.json > SHA256SUMS
+          )
+          echo "tarball=release/$tarball" >> "$GITHUB_OUTPUT"
+
+      - name: Attest source package and SBOM without maintainer key material
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        with:
+          subject-path: ${{ steps.package.outputs.tarball }}
+          sbom-path: release/aimos-backend.cdx.json
+
+      - name: Upload non-secret release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-security-ceremony-${{ github.sha }}
+          path: |
+            release-security-ceremony.log
+            release/
+          if-no-files-found: error
+          retention-days: 30

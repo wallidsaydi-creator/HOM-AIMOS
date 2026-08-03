@@ -1,0 +1,51 @@
+{
+  "schema": "hom.aimos.poisonedrag-source-lock/v1",
+  "upstream": {
+    "repository": "https://github.com/sleeepeer/PoisonedRAG",
+    "commit": "f660d72174f06b13fae5163ce656e7b235db858f",
+    "paper": "https://www.usenix.org/conference/usenixsecurity25/presentation/zou-poisonedrag"
+  },
+  "artifacts": {
+    "license": {
+      "url": "https://raw.githubusercontent.com/sleeepeer/PoisonedRAG/f660d72174f06b13fae5163ce656e7b235db858f/LICENSE",
+      "file": "poisonedrag-LICENSE",
+      "bytes": 1069,
+      "sha256": "e35412de8b30303adc3be2183468f94558e291e4b818276af538d88b9c4449b6"
+    },
+    "target_fixture": {
+      "url": "https://raw.githubusercontent.com/sleeepeer/PoisonedRAG/f660d72174f06b13fae5163ce656e7b235db858f/results/adv_targeted_results/nq.json",
+      "file": "nq-target-fixture.json",
+      "bytes": 123089,
+      "sha256": "44df711454a9bada08e72e9e4a003a2cc845c43707ac93a3493e5168ec415cf2"
+    },
+    "contriever_top100": {
+      "url": "https://raw.githubusercontent.com/sleeepeer/PoisonedRAG/f660d72174f06b13fae5163ce656e7b235db858f/results/beir_results/nq-contriever.json",
+      "file": "nq-contriever-top100.json",
+      "bytes": 11464323,
+      "sha256": "a5e9d9ca8e65b61e2fa34428e154a55c2e97c2064c97af09bf87822a61995fa5"
+    },
+    "nq_archive": {
+      "url": "https://public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/nq.zip",
+      "file": "nq.zip",
+      "bytes": 498307926,
+      "md5": "d4d3d2e48787a744b6f6e691ff534307",
+      "corpus_entry": "nq/corpus.jsonl",
+      "sha256_policy": "computed_on_verified_download_and_bound_in_receipt"
+    }
+  },
+  "protocol": {
+    "dataset": "nq",
+    "target_count": 100,
+    "clean_candidates_per_target": 100,
+    "poison_passages_per_target": 5,
+    "disclosure_k": 5,
+    "poison_construction": "question + '.' + adversarial_text",
+    "official_normalization": "strip; remove one terminal period when length > 1; lowercase"
+  },
+  "redistribution": {
+    "repository_code_license": "MIT",
+    "dataset_bytes_committed": false,
+    "generated_fixture_text_committed": false,
+    "public_release_surface": "hashes_and_upstream_pointers_only"
+  }
+}

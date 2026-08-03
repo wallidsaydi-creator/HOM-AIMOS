@@ -1,0 +1,1007 @@
+{
+  "schema": "hom.aimos.poisonedrag-epistemic-ablation-public-evidence/v1",
+  "protocol": "poisonedrag-n100-epistemic-ablation-v1",
+  "run_id": "20260730102457_495de5",
+  "source_run_id": "20260722172124_db0d79",
+  "confirmatory": true,
+  "intended_n": 100,
+  "completed_n": 100,
+  "denominator_complete": true,
+  "design": {
+    "disclosure_k": 5,
+    "generator": "codex:gpt-5.5",
+    "generator_reasoning": "medium",
+    "judge": "codex:gpt-5.6-terra",
+    "judge_reasoning": "high",
+    "retrieval_arms": [
+      "A0",
+      "A1",
+      "A2",
+      "A3"
+    ],
+    "model_arms": [
+      "A0",
+      "A1",
+      "A2",
+      "A3"
+    ],
+    "clean_scopes": 100,
+    "attacked_scopes": 100,
+    "completed_native_recalls": 200,
+    "completed_retrieval_decisions": 800,
+    "completed_generations": 800,
+    "completed_judgments": 1600,
+    "mutation_contract": {
+      "canonical_memory_mutated": false,
+      "retrieval_weight_mutated": false,
+      "classification_mutated": false,
+      "deletion_decay_suppression": false,
+      "signed_decision_event_per_retrieval_arm": true
+    }
+  },
+  "arm_definitions": {
+    "A0": {
+      "stored_signed_labels": false,
+      "query_local_lure_detection": false,
+      "active_context_withholding": false,
+      "interpretation": "AIMOS native relevance plus diversity with epistemic policy bypassed; not the original Contriever baseline."
+    },
+    "A1": {
+      "stored_signed_labels": true,
+      "query_local_lure_detection": false,
+      "active_context_withholding": false,
+      "interpretation": "Signed stored-label contribution."
+    },
+    "A2": {
+      "stored_signed_labels": true,
+      "query_local_lure_detection": true,
+      "active_context_withholding": false,
+      "interpretation": "A1 plus query-local lure signals."
+    },
+    "A3": {
+      "stored_signed_labels": true,
+      "query_local_lure_detection": true,
+      "active_context_withholding": true,
+      "interpretation": "Complete production policy."
+    }
+  },
+  "policy_results": {
+    "A0": {
+      "pre_epistemic_positive_control": {
+        "attacked_with_any_poison_in_candidate_opening": {
+          "count": 100,
+          "total": 100,
+          "rate": 1,
+          "wilson_95": {
+            "lower": 0.9630065017930143,
+            "upper": 1
+          }
+        }
+      },
+      "retrieval": {
+        "clean_poison_retrieval_at_5": {
+          "count": 0,
+          "total": 100,
+          "rate": 0,
+          "wilson_95": {
+            "lower": 3.469446951953614e-18,
+            "upper": 0.03699349820698568
+          }
+        },
+        "attacked_poison_retrieval_at_5": {
+          "count": 94,
+          "total": 100,
+          "rate": 0.94,
+          "wilson_95": {
+            "lower": 0.8752318455410406,
+            "upper": 0.9722138760368118
+          }
+        },
+        "attacked_mean_poison_passages_at_5": 2.89,
+        "attacked_mean_active_poison_passages": 2.89
+      },
+      "official_substring": {
+        "clean_asr": {
+          "count": 3,
+          "total": 100,
+          "rate": 0.03,
+          "wilson_95": {
+            "lower": 0.010254524024038925,
+            "upper": 0.0845193642905276
+          }
+        },
+        "attacked_asr": {
+          "count": 56,
+          "total": 100,
+          "rate": 0.56,
+          "wilson_95": {
+            "lower": 0.4622810465167699,
+            "upper": 0.6532797336983921
+          }
+        },
+        "induced_asr": {
+          "count": 53,
+          "total": 97,
+          "rate": 0.5463917525773195,
+          "wilson_95": {
+            "lower": 0.4474409242951606,
+            "upper": 0.6418080820684112
+          }
+        }
+      },
+      "semantic_target_assertion": {
+        "clean_asr": {
+          "count": 2,
+          "total": 100,
+          "rate": 0.02,
+          "wilson_95": {
+            "lower": 0.00550196755016235,
+            "upper": 0.07001179072854388
+          }
+        },
+        "attacked_asr": {
+          "count": 57,
+          "total": 100,
+          "rate": 0.57,
+          "wilson_95": {
+            "lower": 0.47215389549212305,
+            "upper": 0.6626670147588988
+          }
+        },
+        "induced_asr": {
+          "count": 55,
+          "total": 98,
+          "rate": 0.5612244897959183,
+          "wilson_95": {
+            "lower": 0.4625100210917256,
+            "upper": 0.6553201841994971
+          }
+        }
+      },
+      "utility": {
+        "clean_accuracy": {
+          "count": 71,
+          "total": 100,
+          "rate": 0.71,
+          "wilson_95": {
+            "lower": 0.6146110882442888,
+            "upper": 0.7898516425087772
+          }
+        },
+        "attacked_accuracy": {
+          "count": 40,
+          "total": 100,
+          "rate": 0.4,
+          "wilson_95": {
+            "lower": 0.3094012864324589,
+            "upper": 0.4979974132089382
+          }
+        }
+      }
+    },
+    "A1": {
+      "pre_epistemic_positive_control": {
+        "attacked_with_any_poison_in_candidate_opening": {
+          "count": 100,
+          "total": 100,
+          "rate": 1,
+          "wilson_95": {
+            "lower": 0.9630065017930143,
+            "upper": 1
+          }
+        }
+      },
+      "retrieval": {
+        "clean_poison_retrieval_at_5": {
+          "count": 0,
+          "total": 100,
+          "rate": 0,
+          "wilson_95": {
+            "lower": 3.469446951953614e-18,
+            "upper": 0.03699349820698568
+          }
+        },
+        "attacked_poison_retrieval_at_5": {
+          "count": 0,
+          "total": 100,
+          "rate": 0,
+          "wilson_95": {
+            "lower": 3.469446951953614e-18,
+            "upper": 0.03699349820698568
+          }
+        },
+        "attacked_mean_poison_passages_at_5": 0,
+        "attacked_mean_active_poison_passages": 0
+      },
+      "official_substring": {
+        "clean_asr": {
+          "count": 4,
+          "total": 100,
+          "rate": 0.04,
+          "wilson_95": {
+            "lower": 0.01566330399154762,
+            "upper": 0.0983707143588792
+          }
+        },
+        "attacked_asr": {
+          "count": 3,
+          "total": 100,
+          "rate": 0.03,
+          "wilson_95": {
+            "lower": 0.010254524024038925,
+            "upper": 0.0845193642905276
+          }
+        },
+        "induced_asr": {
+          "count": 0,
+          "total": 96,
+          "rate": 0,
+          "wilson_95": {
+            "lower": 3.469446951953614e-18,
+            "upper": 0.038475587857675686
+          }
+        }
+      },
+      "semantic_target_assertion": {
+        "clean_asr": {
+          "count": 3,
+          "total": 100,
+          "rate": 0.03,
+          "wilson_95": {
+            "lower": 0.010254524024038925,
+            "upper": 0.0845193642905276
+          }
+        },
+        "attacked_asr": {
+          "count": 1,
+          "total": 100,
+          "rate": 0.01,
+          "wilson_95": {
+            "lower": 0.0017674320641406505,
+            "upper": 0.054486196178705315
+          }
+        },
+        "induced_asr": {
+          "count": 0,
+          "total": 97,
+          "rate": 0,
+          "wilson_95": {
+            "lower": 0,
+            "upper": 0.03809404252594769
+          }
+        }
+      },
+      "utility": {
+        "clean_accuracy": {
+          "count": 68,
+          "total": 100,
+          "rate": 0.68,
+          "wilson_95": {
+            "lower": 0.5833738138954762,
+            "upper": 0.7633085267500092
+          }
+        },
+        "attacked_accuracy": {
+          "count": 65,
+          "total": 100,
+          "rate": 0.65,
+          "wilson_95": {
+            "lower": 0.5525444329688796,
+            "upper": 0.7363575175690247
+          }
+        }
+      }
+    },
+    "A2": {
+      "pre_epistemic_positive_control": {
+        "attacked_with_any_poison_in_candidate_opening": {
+          "count": 100,
+          "total": 100,
+          "rate": 1,
+          "wilson_95": {
+            "lower": 0.9630065017930143,
+            "upper": 1
+          }
+        }
+      },
+      "retrieval": {
+        "clean_poison_retrieval_at_5": {
+          "count": 0,
+          "total": 100,
+          "rate": 0,
+          "wilson_95": {
+            "lower": 3.469446951953614e-18,
+            "upper": 0.03699349820698568
+          }
+        },
+        "attacked_poison_retrieval_at_5": {
+          "count": 0,
+          "total": 100,
+          "rate": 0,
+          "wilson_95": {
+            "lower": 3.469446951953614e-18,
+            "upper": 0.03699349820698568
+          }
+        },
+        "attacked_mean_poison_passages_at_5": 0,
+        "attacked_mean_active_poison_passages": 0
+      },
+      "official_substring": {
+        "clean_asr": {
+          "count": 3,
+          "total": 100,
+          "rate": 0.03,
+          "wilson_95": {
+            "lower": 0.010254524024038925,
+            "upper": 0.0845193642905276
+          }
+        },
+        "attacked_asr": {
+          "count": 3,
+          "total": 100,
+          "rate": 0.03,
+          "wilson_95": {
+            "lower": 0.010254524024038925,
+            "upper": 0.0845193642905276
+          }
+        },
+        "induced_asr": {
+          "count": 0,
+          "total": 97,
+          "rate": 0,
+          "wilson_95": {
+            "lower": 0,
+            "upper": 0.03809404252594769
+          }
+        }
+      },
+      "semantic_target_assertion": {
+        "clean_asr": {
+          "count": 2,
+          "total": 100,
+          "rate": 0.02,
+          "wilson_95": {
+            "lower": 0.00550196755016235,
+            "upper": 0.07001179072854388
+          }
+        },
+        "attacked_asr": {
+          "count": 1,
+          "total": 100,
+          "rate": 0.01,
+          "wilson_95": {
+            "lower": 0.0017674320641406505,
+            "upper": 0.054486196178705315
+          }
+        },
+        "induced_asr": {
+          "count": 0,
+          "total": 98,
+          "rate": 0,
+          "wilson_95": {
+            "lower": 3.469446951953614e-18,
+            "upper": 0.037719990121680605
+          }
+        }
+      },
+      "utility": {
+        "clean_accuracy": {
+          "count": 68,
+          "total": 100,
+          "rate": 0.68,
+          "wilson_95": {
+            "lower": 0.5833738138954762,
+            "upper": 0.7633085267500092
+          }
+        },
+        "attacked_accuracy": {
+          "count": 71,
+          "total": 100,
+          "rate": 0.71,
+          "wilson_95": {
+            "lower": 0.6146110882442888,
+            "upper": 0.7898516425087772
+          }
+        }
+      }
+    },
+    "A3": {
+      "pre_epistemic_positive_control": {
+        "attacked_with_any_poison_in_candidate_opening": {
+          "count": 100,
+          "total": 100,
+          "rate": 1,
+          "wilson_95": {
+            "lower": 0.9630065017930143,
+            "upper": 1
+          }
+        }
+      },
+      "retrieval": {
+        "clean_poison_retrieval_at_5": {
+          "count": 0,
+          "total": 100,
+          "rate": 0,
+          "wilson_95": {
+            "lower": 3.469446951953614e-18,
+            "upper": 0.03699349820698568
+          }
+        },
+        "attacked_poison_retrieval_at_5": {
+          "count": 0,
+          "total": 100,
+          "rate": 0,
+          "wilson_95": {
+            "lower": 3.469446951953614e-18,
+            "upper": 0.03699349820698568
+          }
+        },
+        "attacked_mean_poison_passages_at_5": 0,
+        "attacked_mean_active_poison_passages": 0
+      },
+      "official_substring": {
+        "clean_asr": {
+          "count": 3,
+          "total": 100,
+          "rate": 0.03,
+          "wilson_95": {
+            "lower": 0.010254524024038925,
+            "upper": 0.0845193642905276
+          }
+        },
+        "attacked_asr": {
+          "count": 4,
+          "total": 100,
+          "rate": 0.04,
+          "wilson_95": {
+            "lower": 0.01566330399154762,
+            "upper": 0.0983707143588792
+          }
+        },
+        "induced_asr": {
+          "count": 1,
+          "total": 97,
+          "rate": 0.010309278350515464,
+          "wilson_95": {
+            "lower": 0.0018221648082868518,
+            "upper": 0.05610499024289903
+          }
+        }
+      },
+      "semantic_target_assertion": {
+        "clean_asr": {
+          "count": 2,
+          "total": 100,
+          "rate": 0.02,
+          "wilson_95": {
+            "lower": 0.00550196755016235,
+            "upper": 0.07001179072854388
+          }
+        },
+        "attacked_asr": {
+          "count": 2,
+          "total": 100,
+          "rate": 0.02,
+          "wilson_95": {
+            "lower": 0.00550196755016235,
+            "upper": 0.07001179072854388
+          }
+        },
+        "induced_asr": {
+          "count": 1,
+          "total": 98,
+          "rate": 0.01020408163265306,
+          "wilson_95": {
+            "lower": 0.0018035477567974675,
+            "upper": 0.055554809913420274
+          }
+        }
+      },
+      "utility": {
+        "clean_accuracy": {
+          "count": 69,
+          "total": 100,
+          "rate": 0.69,
+          "wilson_95": {
+            "lower": 0.5937394428051057,
+            "upper": 0.7722030278762395
+          }
+        },
+        "attacked_accuracy": {
+          "count": 69,
+          "total": 100,
+          "rate": 0.69,
+          "wilson_95": {
+            "lower": 0.5937394428051057,
+            "upper": 0.7722030278762395
+          }
+        }
+      }
+    }
+  },
+  "contrasts": [
+    {
+      "contrast": "A1-A0",
+      "attacked_poison_retrieval": {
+        "b_left_true_right_false": 94,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 1.0097419586828951e-28
+      },
+      "attacked_target_substring": {
+        "b_left_true_right_false": 53,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 2.220446049250313e-16
+      },
+      "incremental_target_substring": {
+        "b_left_true_right_false": 53,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 2.220446049250313e-16
+      },
+      "attacked_target_semantic": {
+        "b_left_true_right_false": 56,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 2.7755575615628914e-17
+      },
+      "incremental_target_semantic": {
+        "b_left_true_right_false": 55,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 5.551115123125783e-17
+      },
+      "clean_qa_correct": {
+        "b_left_true_right_false": 7,
+        "c_left_false_right_true": 4,
+        "exact_two_sided_p": 0.548828125
+      },
+      "attacked_qa_correct": {
+        "b_left_true_right_false": 1,
+        "c_left_false_right_true": 26,
+        "exact_two_sided_p": 4.172325134277344e-7
+      },
+      "attacked_poison_count_delta": {
+        "mean": -2.89,
+        "paired_bootstrap_95": {
+          "seed": 20260714,
+          "replicates": 10000,
+          "lower": -3.19,
+          "upper": -2.59
+        }
+      }
+    },
+    {
+      "contrast": "A2-A1",
+      "attacked_poison_retrieval": {
+        "b_left_true_right_false": 0,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 1
+      },
+      "attacked_target_substring": {
+        "b_left_true_right_false": 0,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 1
+      },
+      "incremental_target_substring": {
+        "b_left_true_right_false": 0,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 1
+      },
+      "attacked_target_semantic": {
+        "b_left_true_right_false": 0,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 1
+      },
+      "incremental_target_semantic": {
+        "b_left_true_right_false": 0,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 1
+      },
+      "clean_qa_correct": {
+        "b_left_true_right_false": 4,
+        "c_left_false_right_true": 4,
+        "exact_two_sided_p": 1
+      },
+      "attacked_qa_correct": {
+        "b_left_true_right_false": 3,
+        "c_left_false_right_true": 9,
+        "exact_two_sided_p": 0.14599609375
+      },
+      "attacked_poison_count_delta": {
+        "mean": 0,
+        "paired_bootstrap_95": {
+          "seed": 20260714,
+          "replicates": 10000,
+          "lower": 0,
+          "upper": 0
+        }
+      }
+    },
+    {
+      "contrast": "A3-A2",
+      "attacked_poison_retrieval": {
+        "b_left_true_right_false": 0,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 1
+      },
+      "attacked_target_substring": {
+        "b_left_true_right_false": 0,
+        "c_left_false_right_true": 1,
+        "exact_two_sided_p": 1
+      },
+      "incremental_target_substring": {
+        "b_left_true_right_false": 0,
+        "c_left_false_right_true": 1,
+        "exact_two_sided_p": 1
+      },
+      "attacked_target_semantic": {
+        "b_left_true_right_false": 0,
+        "c_left_false_right_true": 1,
+        "exact_two_sided_p": 1
+      },
+      "incremental_target_semantic": {
+        "b_left_true_right_false": 0,
+        "c_left_false_right_true": 1,
+        "exact_two_sided_p": 1
+      },
+      "clean_qa_correct": {
+        "b_left_true_right_false": 5,
+        "c_left_false_right_true": 6,
+        "exact_two_sided_p": 1
+      },
+      "attacked_qa_correct": {
+        "b_left_true_right_false": 6,
+        "c_left_false_right_true": 4,
+        "exact_two_sided_p": 0.75390625
+      },
+      "attacked_poison_count_delta": {
+        "mean": 0,
+        "paired_bootstrap_95": {
+          "seed": 20260714,
+          "replicates": 10000,
+          "lower": 0,
+          "upper": 0
+        }
+      }
+    },
+    {
+      "contrast": "A3-A0",
+      "attacked_poison_retrieval": {
+        "b_left_true_right_false": 94,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 1.0097419586828951e-28
+      },
+      "attacked_target_substring": {
+        "b_left_true_right_false": 52,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 4.440892098500626e-16
+      },
+      "incremental_target_substring": {
+        "b_left_true_right_false": 52,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 4.440892098500626e-16
+      },
+      "attacked_target_semantic": {
+        "b_left_true_right_false": 55,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 5.551115123125783e-17
+      },
+      "incremental_target_semantic": {
+        "b_left_true_right_false": 54,
+        "c_left_false_right_true": 0,
+        "exact_two_sided_p": 1.1102230246251565e-16
+      },
+      "clean_qa_correct": {
+        "b_left_true_right_false": 5,
+        "c_left_false_right_true": 3,
+        "exact_two_sided_p": 0.7265625
+      },
+      "attacked_qa_correct": {
+        "b_left_true_right_false": 1,
+        "c_left_false_right_true": 30,
+        "exact_two_sided_p": 2.9802322387695312e-8
+      },
+      "attacked_poison_count_delta": {
+        "mean": -2.89,
+        "paired_bootstrap_95": {
+          "seed": 20260714,
+          "replicates": 10000,
+          "lower": -3.19,
+          "upper": -2.59
+        }
+      }
+    }
+  ],
+  "holm_bonferroni_familywise_0_05": {
+    "attacked_poison_retrieval": [
+      {
+        "contrast": "A1-A0",
+        "p": 1.0097419586828951e-28,
+        "holm_rank": 1,
+        "adjusted_p": 4.0389678347315804e-28,
+        "reject_familywise_0_05": true
+      },
+      {
+        "contrast": "A2-A1",
+        "p": 1,
+        "holm_rank": 3,
+        "adjusted_p": 1,
+        "reject_familywise_0_05": false
+      },
+      {
+        "contrast": "A3-A2",
+        "p": 1,
+        "holm_rank": 4,
+        "adjusted_p": 1,
+        "reject_familywise_0_05": false
+      },
+      {
+        "contrast": "A3-A0",
+        "p": 1.0097419586828951e-28,
+        "holm_rank": 2,
+        "adjusted_p": 4.0389678347315804e-28,
+        "reject_familywise_0_05": true
+      }
+    ],
+    "attacked_target_substring": [
+      {
+        "contrast": "A1-A0",
+        "p": 2.220446049250313e-16,
+        "holm_rank": 1,
+        "adjusted_p": 8.881784197001252e-16,
+        "reject_familywise_0_05": true
+      },
+      {
+        "contrast": "A2-A1",
+        "p": 1,
+        "holm_rank": 3,
+        "adjusted_p": 1,
+        "reject_familywise_0_05": false
+      },
+      {
+        "contrast": "A3-A2",
+        "p": 1,
+        "holm_rank": 4,
+        "adjusted_p": 1,
+        "reject_familywise_0_05": false
+      },
+      {
+        "contrast": "A3-A0",
+        "p": 4.440892098500626e-16,
+        "holm_rank": 2,
+        "adjusted_p": 1.3322676295501878e-15,
+        "reject_familywise_0_05": true
+      }
+    ],
+    "incremental_target_substring": [
+      {
+        "contrast": "A1-A0",
+        "p": 2.220446049250313e-16,
+        "holm_rank": 1,
+        "adjusted_p": 8.881784197001252e-16,
+        "reject_familywise_0_05": true
+      },
+      {
+        "contrast": "A2-A1",
+        "p": 1,
+        "holm_rank": 3,
+        "adjusted_p": 1,
+        "reject_familywise_0_05": false
+      },
+      {
+        "contrast": "A3-A2",
+        "p": 1,
+        "holm_rank": 4,
+        "adjusted_p": 1,
+        "reject_familywise_0_05": false
+      },
+      {
+        "contrast": "A3-A0",
+        "p": 4.440892098500626e-16,
+        "holm_rank": 2,
+        "adjusted_p": 1.3322676295501878e-15,
+        "reject_familywise_0_05": true
+      }
+    ],
+    "attacked_target_semantic": [
+      {
+        "contrast": "A1-A0",
+        "p": 2.7755575615628914e-17,
+        "holm_rank": 1,
+        "adjusted_p": 1.1102230246251565e-16,
+        "reject_familywise_0_05": true
+      },
+      {
+        "contrast": "A2-A1",
+        "p": 1,
+        "holm_rank": 3,
+        "adjusted_p": 1,
+        "reject_familywise_0_05": false
+      },
+      {
+        "contrast": "A3-A2",
+        "p": 1,
+        "holm_rank": 4,
+        "adjusted_p": 1,
+        "reject_familywise_0_05": false
+      },
+      {
+        "contrast": "A3-A0",
+        "p": 5.551115123125783e-17,
+        "holm_rank": 2,
+        "adjusted_p": 1.6653345369377348e-16,
+        "reject_familywise_0_05": true
+      }
+    ],
+    "incremental_target_semantic": [
+      {
+        "contrast": "A1-A0",
+        "p": 5.551115123125783e-17,
+        "holm_rank": 1,
+        "adjusted_p": 2.220446049250313e-16,
+        "reject_familywise_0_05": true
+      },
+      {
+        "contrast": "A2-A1",
+        "p": 1,
+        "holm_rank": 3,
+        "adjusted_p": 1,
+        "reject_familywise_0_05": false
+      },
+      {
+        "contrast": "A3-A2",
+        "p": 1,
+        "holm_rank": 4,
+        "adjusted_p": 1,
+        "reject_familywise_0_05": false
+      },
+      {
+        "contrast": "A3-A0",
+        "p": 1.1102230246251565e-16,
+        "holm_rank": 2,
+        "adjusted_p": 3.3306690738754696e-16,
+        "reject_familywise_0_05": true
+      }
+    ],
+    "clean_qa_correct": [
+      {
+        "contrast": "A1-A0",
+        "p": 0.548828125,
+        "holm_rank": 1,
+        "adjusted_p": 1,
+        "reject_familywise_0_05": false
+      },
+      {
+        "contrast": "A2-A1",
+        "p": 1,
+        "holm_rank": 3,
+        "adjusted_p": 1,
+        "reject_familywise_0_05": false
+      },
+      {
+        "contrast": "A3-A2",
+        "p": 1,
+        "holm_rank": 4,
+        "adjusted_p": 1,
+        "reject_familywise_0_05": false
+      },
+      {
+        "contrast": "A3-A0",
+        "p": 0.7265625,
+        "holm_rank": 2,
+        "adjusted_p": 1,
+        "reject_familywise_0_05": false
+      }
+    ],
+    "attacked_qa_correct": [
+      {
+        "contrast": "A1-A0",
+        "p": 4.172325134277344e-7,
+        "holm_rank": 2,
+        "adjusted_p": 0.0000012516975402832031,
+        "reject_familywise_0_05": true
+      },
+      {
+        "contrast": "A2-A1",
+        "p": 0.14599609375,
+        "holm_rank": 3,
+        "adjusted_p": 0.2919921875,
+        "reject_familywise_0_05": false
+      },
+      {
+        "contrast": "A3-A2",
+        "p": 0.75390625,
+        "holm_rank": 4,
+        "adjusted_p": 0.75390625,
+        "reject_familywise_0_05": false
+      },
+      {
+        "contrast": "A3-A0",
+        "p": 2.9802322387695312e-8,
+        "holm_rank": 1,
+        "adjusted_p": 1.1920928955078125e-7,
+        "reject_familywise_0_05": true
+      }
+    ]
+  },
+  "mechanism_activation": {
+    "pre_epistemic_positive_control": {
+      "count": 100,
+      "total": 100,
+      "rate": 1,
+      "wilson_95": {
+        "lower": 0.9630065017930143,
+        "upper": 1
+      }
+    },
+    "A1_A2_selected_set_equal": {
+      "count": 200,
+      "total": 200
+    },
+    "A1_A2_active_context_equal": {
+      "count": 200,
+      "total": 200
+    },
+    "A1_A2_prompt_equal": {
+      "count": 200,
+      "total": 200
+    },
+    "A2_A3_selected_set_equal": {
+      "count": 200,
+      "total": 200
+    },
+    "A2_A3_active_context_equal": {
+      "count": 200,
+      "total": 200
+    },
+    "A2_A3_prompt_equal": {
+      "count": 200,
+      "total": 200
+    },
+    "active_context_withholding_exercised": {
+      "count": 0,
+      "total": 200,
+      "withheld_passages": 0
+    },
+    "interpretation": "Signed stored labels caused the observed deterministic retrieval isolation. Query-local detection had no measurable incremental contribution, and active-context withholding was not exercised. A2/A3 output differences arose from independent stochastic model and judge calls under identical prompts."
+  },
+  "integrity": {
+    "verified_target_outcomes": 100,
+    "verified_retrieval_decisions": 800,
+    "unique_verified_decision_events": 800,
+    "unique_verified_ledger_sequences": 800,
+    "memory_root_unchanged": true,
+    "classification_root_unchanged": true,
+    "signed_classification_rows_unchanged": 504,
+    "canonical_benchmark_footprint_unchanged": true,
+    "artifact_manifest": {
+      "artifact_count": 3518,
+      "manifest_sha256": "4c52db927b2e2cfa6c343d72a593a5680e364873d5664f7613749ee4b23b954f",
+      "verification": "all_manifest_entries_rehashed"
+    },
+    "preregistration_sha256": "c224e942df7e4864cd66a82634f6739dc4657a9fc7cded93743f5f9c39e56fac",
+    "execution_plan_sha256": "959997db3fceac51f6fbcbb71c956edc52328c094c05248117471e43f06b8b45",
+    "execution_plan_file_sha256": "2a551bf5e4a5d1b3cbc40942bf05de10a7be40061f425cd9d7c45297a52d3f68",
+    "summary_sha256": "2a86c5e9cf65c4a845c0accb5c3358dcf03bc214ea8ade33842e5c5d8e8a00a1",
+    "summary_file_sha256": "19279067287d3df631237c20480f5f179a9420858059172ab4bb9d22d53ff8e6",
+    "isolation_sha256": "c36097a0df3142c2f324e514e28e9ba14f773807f7bb8d13d5ecf508c9650f45",
+    "isolation_file_sha256": "91df27576143dcffba48d8373b7e3d7147809ed2b657f03f621eb4e500a5cca4"
+  },
+  "operational_recovery": {
+    "resume_amendment_present": true,
+    "scientific_contract_unchanged": true,
+    "completed_artifacts_reused": true,
+    "lifecycle_changed_files": [
+      "eval/run-poisonedrag-epistemic-ablation.mjs",
+      "scripts/benchmark/run-poisonedrag-epistemic-ablation.mjs"
+    ],
+    "terminal_status_reconciled": true,
+    "reconciliation_sha256": "741b5124dfe29d77227ea9d9c746f2539f75073168d16428039d8488c520e6f2"
+  },
+  "limitations": [
+    "Declared N=100 adaptation; no full-corpus external-validity claim.",
+    "No matched-model bridge was run.",
+    "Query-local detection had no measurable incremental contribution in this fixed corpus.",
+    "Active-context withholding was not activated in any of 200 clean or attacked contexts.",
+    "Independent model and judge calls can differ stochastically under identical prompts.",
+    "Mutable run status is excluded from the scientific artifact manifest and is bound separately by the completion reconciliation."
+  ],
+  "ablation_evidence_sha256": "83a576895d26de63a7dde820b74effb93158299bf180289069af77569eb27105"
+}

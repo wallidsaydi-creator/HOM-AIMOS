@@ -1,0 +1,63 @@
+{
+  "schema": "hom.aimos.poisonedrag-epistemic-verification/v1",
+  "run_id": "20260722172124_db0d79",
+  "source_summary_sha256": "4ffaafbf57947add5247264f0ed57454e6d80bf25dc5481fb8a5e9c90964384b",
+  "source_summary_file_sha256": "127f3c86794bb5ce7ddd324b44ec87dc4bef30628eba8412d390c2e19dcf9154",
+  "database_name_sha256": "4cef4a4fd61e27de7251f198292c1afc89ce4bbc32cb87f32c7b41a886e60ec4",
+  "population": {
+    "unique_benchmark_memories": 19308,
+    "poison_memories": 500,
+    "clean_memories": 18808,
+    "classification_rows": 504
+  },
+  "current_labels": {
+    "poison": {
+      "poison_likely": 500
+    },
+    "clean": {
+      "unverified": 18804,
+      "poison_likely": 4
+    }
+  },
+  "poison_classification": {
+    "adverse_label_count": 500,
+    "total": 500,
+    "rate": 1,
+    "wilson_95": {
+      "lower": 0.9923756595384479,
+      "upper": 1
+    },
+    "retained_not_deleted": true,
+    "canonical_content_unchanged_by_classification": true
+  },
+  "clean_false_positive": {
+    "definition": "clean memory whose current signed epistemic label is poison_suspect, poison_likely, or poison_confirmed",
+    "count": 4,
+    "total": 18808,
+    "rate": 0.0002126754572522331,
+    "wilson_95": {
+      "lower": 0.0000827083419452822,
+      "upper": 0.0005467600089663068
+    }
+  },
+  "chain_verification": {
+    "checked": 19308,
+    "verified": 19308,
+    "failed": 0,
+    "poison_checked": 500,
+    "poison_verified": 500,
+    "clean_checked": 18808,
+    "clean_verified": 18808,
+    "chain_length_distribution": {
+      "0": 18804,
+      "1": 504
+    },
+    "reason_counts": {
+      "ok": 19308
+    },
+    "verifier": "public.verify_memory_epistemic_classification_chain(uuid)"
+  },
+  "verification_records_root_sha256": "3fbf06bbd6ee92d3eee4783d79589e2571cb7781270b624fb730151ab021e41a",
+  "disclosure_policy": "Aggregate counts and a deterministic record root only; no memory IDs, dataset text, certificates, signatures, answers, or absolute paths.",
+  "epistemic_verification_sha256": "bf49888904fdc34db17e7f65d2f825ed1f18cfe5e66cc6e6d7bd77d5aee197c3"
+}

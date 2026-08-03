@@ -1,0 +1,14 @@
+{
+  "schema_version": "aimos.keychain-helper-legacy-manifest/v1",
+  "abi": "v1",
+  "source_sha256": "bdfdb1958330359e53c00c7d45ecbe123b5fd8a90dada5a3bea5bc9e37910906",
+  "accepted_installed": {
+    "darwin-arm64": [
+      {
+        "sha256": "953321bf6bf27705e452713f3fe549b7da6a010766096c13e06cc07056a973eb",
+        "size": 35464
+      }
+    ],
+    "darwin-x64": []
+  }
+}

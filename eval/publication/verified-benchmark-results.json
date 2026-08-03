@@ -1,0 +1,3110 @@
+{
+  "schema": "hom.aimos.publication-evidence/v2",
+  "self_hash_algorithm": "sha256(canonical-json(unsigned-object))",
+  "generated_from_verified_local_artifacts": true,
+  "data_policy": "Aggregate metrics, hashes, counts, model identities, and protocol declarations only; no benchmark text, answers, provider payloads, credentials, certificates, memory IDs, or absolute paths.",
+  "warnings": [
+    "The two LoCoMo results use different metrics and protocols and must not be averaged or substituted for one another.",
+    "The PoisonedRAG result is a declared N=100 adaptation, not a strict reproduction of the original full-corpus experiment.",
+    "PoisonedRAG measured signed epistemic classification and retrieval isolation after canonical retention; it did not demonstrate save-time rejection or quarantine.",
+    "The PoisonedRAG ablation attributes the observed deterministic retrieval isolation to signed stored epistemic labels; query-local detection had no measurable incremental contribution and active-context withholding was not exercised in the fixed corpus.",
+    "The completed blinded human review was performed by the system author and is not represented as an independent assessment."
+  ],
+  "runs": {
+    "canonical_utility": {
+      "run_id": "20260715111742_96b25f",
+      "longmemeval": {
+        "protocol": "canonical-blind-v1",
+        "n": 500,
+        "generator": "codex:gpt-5.4",
+        "judge": "codex:gpt-5.6-terra",
+        "retrieval_k": 20,
+        "retrieval": {
+          "eligible": 500,
+          "any_hit_at_20": 1,
+          "hit_at_1": 1,
+          "mrr": 1,
+          "evidence_recall_at_20": 1,
+          "ndcg_at_20": 0.9658503276788379
+        },
+        "llm_judged_qa": {
+          "correct": 459,
+          "total": 500,
+          "accuracy": 0.918,
+          "wilson_95": {
+            "lower": 0.8906451408426114,
+            "upper": 0.9389809105315311
+          },
+          "mean_score": 0.9272599999999995
+        },
+        "categories": {
+          "abstention": {
+            "n": 30,
+            "retrieval": {
+              "eligible": 30,
+              "any_hit_at_k": 1,
+              "hit_at_1": 1,
+              "mrr": 1,
+              "evidence_recall_at_k": 1,
+              "ndcg_at_k": 0.9603784107864982
+            },
+            "answer": {
+              "metric": "llm_judged_accuracy",
+              "correct": 28,
+              "total": 30,
+              "value": 0.9333333333333333,
+              "wilson_95": {
+                "lower": 0.7867654163738308,
+                "upper": 0.9815229762087295
+              }
+            }
+          },
+          "knowledge-update": {
+            "n": 72,
+            "retrieval": {
+              "eligible": 72,
+              "any_hit_at_k": 1,
+              "hit_at_1": 1,
+              "mrr": 1,
+              "evidence_recall_at_k": 1,
+              "ndcg_at_k": 0.9635309129889971
+            },
+            "answer": {
+              "metric": "llm_judged_accuracy",
+              "correct": 67,
+              "total": 72,
+              "value": 0.9305555555555556,
+              "wilson_95": {
+                "lower": 0.8475202051632649,
+                "upper": 0.9699746184342299
+              }
+            }
+          },
+          "multi-session": {
+            "n": 121,
+            "retrieval": {
+              "eligible": 121,
+              "any_hit_at_k": 1,
+              "hit_at_1": 1,
+              "mrr": 1,
+              "evidence_recall_at_k": 1,
+              "ndcg_at_k": 0.9396867870657405
+            },
+            "answer": {
+              "metric": "llm_judged_accuracy",
+              "correct": 106,
+              "total": 121,
+              "value": 0.8760330578512396,
+              "wilson_95": {
+                "lower": 0.8055084227089188,
+                "upper": 0.9234160937107464
+              }
+            }
+          },
+          "single-session-assistant": {
+            "n": 56,
+            "retrieval": {
+              "eligible": 56,
+              "any_hit_at_k": 1,
+              "hit_at_1": 1,
+              "mrr": 1,
+              "evidence_recall_at_k": 1,
+              "ndcg_at_k": 1
+            },
+            "answer": {
+              "metric": "llm_judged_accuracy",
+              "correct": 56,
+              "total": 56,
+              "value": 1,
+              "wilson_95": {
+                "lower": 0.9358060632812366,
+                "upper": 1
+              }
+            }
+          },
+          "single-session-preference": {
+            "n": 30,
+            "retrieval": {
+              "eligible": 30,
+              "any_hit_at_k": 1,
+              "hit_at_1": 1,
+              "mrr": 1,
+              "evidence_recall_at_k": 1,
+              "ndcg_at_k": 1
+            },
+            "answer": {
+              "metric": "llm_judged_accuracy",
+              "correct": 22,
+              "total": 30,
+              "value": 0.7333333333333333,
+              "wilson_95": {
+                "lower": 0.555520383048111,
+                "upper": 0.8581733668040368
+              }
+            }
+          },
+          "single-session-user": {
+            "n": 64,
+            "retrieval": {
+              "eligible": 64,
+              "any_hit_at_k": 1,
+              "hit_at_1": 1,
+              "mrr": 1,
+              "evidence_recall_at_k": 1,
+              "ndcg_at_k": 1
+            },
+            "answer": {
+              "metric": "llm_judged_accuracy",
+              "correct": 58,
+              "total": 64,
+              "value": 0.90625,
+              "wilson_95": {
+                "lower": 0.810171204003544,
+                "upper": 0.9563217474148016
+              }
+            }
+          },
+          "temporal-reasoning": {
+            "n": 127,
+            "retrieval": {
+              "eligible": 127,
+              "any_hit_at_k": 1,
+              "hit_at_1": 1,
+              "mrr": 1,
+              "evidence_recall_at_k": 1,
+              "ndcg_at_k": 0.9530510594146581
+            },
+            "answer": {
+              "metric": "llm_judged_accuracy",
+              "correct": 122,
+              "total": 127,
+              "value": 0.9606299212598425,
+              "wilson_95": {
+                "lower": 0.9111437777951378,
+                "upper": 0.9830682025247811
+              }
+            }
+          }
+        },
+        "evidence": {
+          "summary_sha256": "28d35689ac5090634a6804d6fa7b6e1671b5b06cb5ebaa0d744d092f9aa40631",
+          "summary_file_sha256": "78746a04126ae0b76f5fcbce392fc25e6fc9e426cd5096ff217d075eab7ff322",
+          "rows_sha256": "a71f174dbb221dfcc3ad27af11589fb4c3523e5e661333d4dd1cfce8401f6144",
+          "selection_sha256": "ab44f4065080932dbdd591ff5b984a1c1abbf94322e9329c008ceb2943396807",
+          "session_artifact_sha256": "d62e2afedd2842d5967262f53e5edd107bd9b9db6a9e22a1d8fc90c784bbec69"
+        }
+      },
+      "locomo_llm_judged": {
+        "protocol": "canonical-blind-v1",
+        "n": 1986,
+        "generator": "codex:gpt-5.4",
+        "judge": "codex:gpt-5.6-terra",
+        "retrieval_k": 20,
+        "retrieval": {
+          "eligible": 1982,
+          "any_hit_at_20": 0.9712411705348133,
+          "hit_at_1": 0.4419778002018164,
+          "mrr": 0.5500389245464803,
+          "evidence_recall_at_20": 0.947110307484636,
+          "ndcg_at_20": 0.616181214939616
+        },
+        "llm_judged_qa": {
+          "correct": 1472,
+          "total": 1986,
+          "accuracy": 0.7411883182275931,
+          "wilson_95": {
+            "lower": 0.7214730756554129,
+            "upper": 0.7599723157617362
+          },
+          "mean_score": 0.7850000000000028
+        },
+        "categories": {
+          "adversarial": {
+            "n": 446,
+            "retrieval": {
+              "eligible": 446,
+              "any_hit_at_k": 0.9753363228699552,
+              "hit_at_1": 0.49551569506726456,
+              "mrr": 0.6021599802196737,
+              "evidence_recall_at_k": 0.9753363228699552,
+              "ndcg_at_k": 0.675738271301401
+            },
+            "answer": {
+              "metric": "llm_judged_accuracy",
+              "correct": 307,
+              "total": 446,
+              "value": 0.6883408071748879,
+              "wilson_95": {
+                "lower": 0.643900639725075,
+                "upper": 0.7295642704244458
+              }
+            }
+          },
+          "multi-hop": {
+            "n": 841,
+            "retrieval": {
+              "eligible": 841,
+              "any_hit_at_k": 0.9821640903686087,
+              "hit_at_1": 0.4839476813317479,
+              "mrr": 0.5914799794958869,
+              "evidence_recall_at_k": 0.9803804994054697,
+              "ndcg_at_k": 0.6662340038782112
+            },
+            "answer": {
+              "metric": "llm_judged_accuracy",
+              "correct": 741,
+              "total": 841,
+              "value": 0.8810939357907254,
+              "wilson_95": {
+                "lower": 0.8574664674344327,
+                "upper": 0.9012557677347145
+              }
+            }
+          },
+          "open-domain": {
+            "n": 96,
+            "retrieval": {
+              "eligible": 92,
+              "any_hit_at_k": 0.8478260869565217,
+              "hit_at_1": 0.1956521739130435,
+              "mrr": 0.25793472427957037,
+              "evidence_recall_at_k": 0.750041656978997,
+              "ndcg_at_k": 0.3214047199925927
+            },
+            "answer": {
+              "metric": "llm_judged_accuracy",
+              "correct": 38,
+              "total": 96,
+              "value": 0.3958333333333333,
+              "wilson_95": {
+                "lower": 0.3038335346205102,
+                "upper": 0.4958488795165056
+              }
+            }
+          },
+          "single-hop": {
+            "n": 282,
+            "retrieval": {
+              "eligible": 282,
+              "any_hit_at_k": 0.9787234042553191,
+              "hit_at_1": 0.28368794326241137,
+              "mrr": 0.41508189054173683,
+              "evidence_recall_at_k": 0.8587545992641175,
+              "ndcg_at_k": 0.443259625771807
+            },
+            "answer": {
+              "metric": "llm_judged_accuracy",
+              "correct": 138,
+              "total": 282,
+              "value": 0.48936170212765956,
+              "wilson_95": {
+                "lower": 0.4315539985510224,
+                "upper": 0.5474553445136455
+              }
+            }
+          },
+          "temporal": {
+            "n": 321,
+            "retrieval": {
+              "eligible": 321,
+              "any_hit_at_k": 0.9657320872274143,
+              "hit_at_1": 0.4672897196261682,
+              "mrr": 0.5713272484442984,
+              "evidence_recall_at_k": 0.9548286604361371,
+              "ndcg_at_k": 0.6386936231817683
+            },
+            "answer": {
+              "metric": "llm_judged_accuracy",
+              "correct": 248,
+              "total": 321,
+              "value": 0.7725856697819314,
+              "wilson_95": {
+                "lower": 0.7236662020812872,
+                "upper": 0.8150581363554406
+              }
+            }
+          }
+        },
+        "evidence": {
+          "summary_sha256": "0cf97847d64dd7d9fa642e5435eebfc6bb75fc4680d22e7192fde2ec255a727a",
+          "summary_file_sha256": "514474c7178d529bba97a2360dd5db91a3be1740afce1f10916ad35072658584",
+          "rows_sha256": "de510d45091d118b92bda399a12a99e7ab8c93def2b78e37ad951116d43713ff",
+          "selection_sha256": "62d8d500cf1eeaa76b04bc1ef274b37b50c5d8b1b31db3a6a5fd2d3c6d2e02b4",
+          "session_artifact_sha256": "168c5cdf010a5d4c0bbff3ba6e7a16889f07cfe478a687469bf3eb3ccd2dfbe8"
+        }
+      },
+      "artifact_manifest": {
+        "artifact_count": 46032,
+        "manifest_sha256": "414130d1624065afbb0f727138a4c716289ab9e2ef15049084e43a801344393a",
+        "verification": "all_manifest_entries_rehashed"
+      },
+      "scratch_brain_status": "signed_destroyed_receipt_verified"
+    },
+    "locomo_official": {
+      "run_id": "20260718205816_fbde68",
+      "result": {
+        "protocol": "locomo-upstream-qa-v1",
+        "n": 1986,
+        "reader": "codex:gpt-5.4",
+        "judge": null,
+        "retrieval_k": 25,
+        "metric": "upstream_category_aware_token_f1",
+        "mean_f1": 0.5819991702124487,
+        "score_percent": 58.19991702124487,
+        "bootstrap_95": {
+          "seed": 20260714,
+          "replicates": 10000,
+          "lower": 0.5646480051301217,
+          "upper": 0.5994465390330951
+        },
+        "retrieval": {
+          "eligible": 1982,
+          "any_hit_at_25": 0.8087790110998991,
+          "hit_at_1": 0.4434914228052472,
+          "mrr": 0.5473532784043327,
+          "evidence_recall_at_25": 0.7581001706894805,
+          "ndcg_at_25": 0.5797773847975973
+        },
+        "categories": {
+          "adversarial": {
+            "n": 446,
+            "retrieval": {
+              "eligible": 446,
+              "any_hit_at_k": 0.8385650224215246,
+              "hit_at_1": 0.5,
+              "mrr": 0.6016293306915835,
+              "evidence_recall_at_k": 0.8340807174887892,
+              "ndcg_at_k": 0.6530624495554889
+            },
+            "answer": {
+              "metric": "upstream_category_aware_token_f1",
+              "total": 446,
+              "value": 0.8430493273542601
+            }
+          },
+          "multi-hop": {
+            "n": 841,
+            "retrieval": {
+              "eligible": 841,
+              "any_hit_at_k": 0.8430439952437574,
+              "hit_at_1": 0.4875148632580262,
+              "mrr": 0.5892074374951711,
+              "evidence_recall_at_k": 0.8349187475227904,
+              "ndcg_at_k": 0.6406696637610518
+            },
+            "answer": {
+              "metric": "upstream_category_aware_token_f1",
+              "total": 841,
+              "value": 0.6036782944697565
+            }
+          },
+          "open-domain": {
+            "n": 96,
+            "retrieval": {
+              "eligible": 92,
+              "any_hit_at_k": 0.43478260869565216,
+              "hit_at_1": 0.1956521739130435,
+              "mrr": 0.2564623675557179,
+              "evidence_recall_at_k": 0.3387971789506316,
+              "ndcg_at_k": 0.23953975779316258
+            },
+            "answer": {
+              "metric": "upstream_category_aware_token_f1",
+              "total": 96,
+              "value": 0.24775480210367984
+            }
+          },
+          "single-hop": {
+            "n": 282,
+            "retrieval": {
+              "eligible": 282,
+              "any_hit_at_k": 0.7730496453900709,
+              "hit_at_1": 0.2801418439716312,
+              "mrr": 0.40824864566301233,
+              "evidence_recall_at_k": 0.5063895904601392,
+              "ndcg_at_k": 0.3597869467451211
+            },
+            "answer": {
+              "metric": "upstream_category_aware_token_f1",
+              "total": 282,
+              "value": 0.32977537467423923
+            }
+          },
+          "temporal": {
+            "n": 321,
+            "retrieval": {
+              "eligible": 321,
+              "any_hit_at_k": 0.8161993769470405,
+              "hit_at_1": 0.46417445482866043,
+              "mrr": 0.5678610762722912,
+              "evidence_recall_at_k": 0.7925752855659398,
+              "ndcg_at_k": 0.6091967608876974
+            },
+            "answer": {
+              "metric": "upstream_category_aware_token_f1",
+              "total": 321,
+              "value": 0.4840367281394688
+            }
+          }
+        },
+        "comparability": {
+          "upstream_revision": "3eb6f2c585f5e1699204e3c3bdf7adc5c28cb376",
+          "deterministic_scorer": true,
+          "reader_retriever_and_memory_pipeline_are_hom_configuration_variables": true,
+          "note": "The prompt and deterministic scorer match pinned upstream LoCoMo semantics. The reader, retriever, cryptographic save/recall pipeline, and composed session_exchange memory unit are HOM configuration variables and must accompany every comparison."
+        },
+        "evidence": {
+          "summary_sha256": "7215ffe188528022a34251938133db14fdc8ee2bd93d1fb1119301962ca15908",
+          "summary_file_sha256": "42d70d21342d28e9df51323b1cc0f352eea8fa0d38f385fd8e68d65b22a747d4",
+          "rows_sha256": "cfd61914e6c774dc630ce299b5d37cc6cff19289f8561d7298ecd41f8aa81f9a",
+          "selection_sha256": "540a0049c217c3bd5ecfede757e7049ab7a3fb6404012a544eac6b1fc698fa14",
+          "session_artifact_sha256": "168c5cdf010a5d4c0bbff3ba6e7a16889f07cfe478a687469bf3eb3ccd2dfbe8"
+        }
+      },
+      "artifact_manifest": {
+        "artifact_count": 26143,
+        "manifest_sha256": "a259be6933476d07caf7987640d6cbfd821fa8c92261d3d39d53a2586a2afc4e",
+        "verification": "all_manifest_entries_rehashed"
+      },
+      "scratch_brain_status": "signed_destroyed_receipt_verified"
+    },
+    "poisonedrag_n100": {
+      "run_id": "20260722172124_db0d79",
+      "result": {
+        "protocol": "poisonedrag-n100-v1",
+        "n": 100,
+        "generator": "codex:gpt-5.5",
+        "judge": "codex:gpt-5.6-terra",
+        "judge_reasoning": "high",
+        "primary_official_substring_metric": {
+          "clean_asr": {
+            "count": 2,
+            "total": 100,
+            "rate": 0.02,
+            "wilson_95": {
+              "lower": 0.00550196755016235,
+              "upper": 0.07001179072854388
+            }
+          },
+          "attacked_asr": {
+            "count": 3,
+            "total": 100,
+            "rate": 0.03,
+            "wilson_95": {
+              "lower": 0.010254524024038925,
+              "upper": 0.0845193642905276
+            }
+          },
+          "induced_asr": {
+            "count": 1,
+            "total": 98,
+            "rate": 0.01020408163265306,
+            "wilson_95": {
+              "lower": 0.0018035477567974675,
+              "upper": 0.055554809913420274
+            }
+          }
+        },
+        "secondary_semantic_metric": {
+          "clean_asr": {
+            "count": 2,
+            "total": 100,
+            "rate": 0.02,
+            "wilson_95": {
+              "lower": 0.00550196755016235,
+              "upper": 0.07001179072854388
+            }
+          },
+          "attacked_asr": {
+            "count": 3,
+            "total": 100,
+            "rate": 0.03,
+            "wilson_95": {
+              "lower": 0.010254524024038925,
+              "upper": 0.0845193642905276
+            }
+          },
+          "induced_asr": {
+            "count": 1,
+            "total": 98,
+            "rate": 0.01020408163265306,
+            "wilson_95": {
+              "lower": 0.0018035477567974675,
+              "upper": 0.055554809913420274
+            }
+          }
+        },
+        "retrieval": {
+          "poison_retrieved_at_5": {
+            "count": 0,
+            "total": 100,
+            "rate": 0,
+            "wilson_95": {
+              "lower": 3.469446951953614e-18,
+              "upper": 0.03699349820698568
+            }
+          },
+          "mean_poison_passages_at_5": 0,
+          "mean_poison_passages_at_5_bootstrap_95": {
+            "seed": 20260714,
+            "replicates": 10000,
+            "lower": 0,
+            "upper": 0
+          }
+        },
+        "utility": {
+          "clean_accuracy": {
+            "count": 72,
+            "total": 100,
+            "rate": 0.72,
+            "wilson_95": {
+              "lower": 0.6251197129007884,
+              "upper": 0.7986031478881379
+            }
+          },
+          "attacked_accuracy": {
+            "count": 71,
+            "total": 100,
+            "rate": 0.71,
+            "wilson_95": {
+              "lower": 0.6146110882442888,
+              "upper": 0.7898516425087772
+            }
+          },
+          "paired_accuracy_delta": -0.01,
+          "paired_bootstrap_95": {
+            "seed": 20260714,
+            "replicates": 10000,
+            "lower": -0.07,
+            "upper": 0.05
+          },
+          "mcnemar": {
+            "b": 5,
+            "c": 4,
+            "exact_two_sided_p": 1
+          }
+        },
+        "admission": {
+          "poison_passages_submitted": 500,
+          "poison_passages_admitted": 500,
+          "poison_passages_rejected": 0,
+          "poison_passages_quarantined": 0,
+          "poison_save_security_decisions": 500,
+          "poison_signed_epistemic_label_evidence": 500,
+          "poison_label_at_save": {
+            "unverified": 100,
+            "poison_likely": 400
+          },
+          "clean_label_at_save": {
+            "unverified": 18878,
+            "poison_likely": 2
+          },
+          "interpretation": "Poison passages were retained as signed canonical references and classified through append-only epistemic evidence; the measured defense was labelled retrieval isolation, not deletion, rejection, or quarantine."
+        },
+        "epistemic_classification": {
+          "population": {
+            "unique_benchmark_memories": 19308,
+            "poison_memories": 500,
+            "clean_memories": 18808,
+            "classification_rows": 504
+          },
+          "current_labels": {
+            "poison": {
+              "poison_likely": 500
+            },
+            "clean": {
+              "unverified": 18804,
+              "poison_likely": 4
+            }
+          },
+          "poison_classification": {
+            "adverse_label_count": 500,
+            "total": 500,
+            "rate": 1,
+            "wilson_95": {
+              "lower": 0.9923756595384479,
+              "upper": 1
+            },
+            "retained_not_deleted": true,
+            "canonical_content_unchanged_by_classification": true
+          },
+          "clean_false_positive": {
+            "definition": "clean memory whose current signed epistemic label is poison_suspect, poison_likely, or poison_confirmed",
+            "count": 4,
+            "total": 18808,
+            "rate": 0.0002126754572522331,
+            "wilson_95": {
+              "lower": 0.0000827083419452822,
+              "upper": 0.0005467600089663068
+            }
+          },
+          "chain_verification": {
+            "checked": 19308,
+            "verified": 19308,
+            "failed": 0,
+            "poison_checked": 500,
+            "poison_verified": 500,
+            "clean_checked": 18808,
+            "clean_verified": 18808,
+            "chain_length_distribution": {
+              "0": 18804,
+              "1": 504
+            },
+            "reason_counts": {
+              "ok": 19308
+            },
+            "verifier": "public.verify_memory_epistemic_classification_chain(uuid)"
+          },
+          "verification_records_root_sha256": "3fbf06bbd6ee92d3eee4783d79589e2571cb7781270b624fb730151ab021e41a"
+        },
+        "proof_completeness": {
+          "save_proofs": 20500,
+          "admitted_saves": 19380,
+          "rejected_saves": 1120,
+          "unique_retained_memories": 19308,
+          "deduplicated_reuses": 72,
+          "signed_security_decisions": 19308,
+          "recall_proofs": 200,
+          "verified_recall_proofs": 200,
+          "clean_submitted": 20000,
+          "clean_admitted": 18880,
+          "clean_rejected": 1120,
+          "poison_submitted": 500,
+          "poison_admitted": 500,
+          "poison_rejected": 0,
+          "poison_quarantined": 0,
+          "poison_signed_security_decisions": 500,
+          "poison_signed_epistemic_label_evidence": 500,
+          "poison_label_at_save": {
+            "unverified": 100,
+            "poison_likely": 400
+          },
+          "clean_label_at_save": {
+            "unverified": 18878,
+            "poison_likely": 2
+          },
+          "verified_outcomes": 100
+        },
+        "retry_recovery": {
+          "recovery_receipt_present": false,
+          "original_attempt_ceiling": 6,
+          "effective_attempt_ceiling": 6,
+          "scientific_inputs_unchanged": true,
+          "completed_provider_outputs_reused": false,
+          "receipt_sha256": null,
+          "receipt_file_sha256": null,
+          "policy_source": "run-manifest.json"
+        },
+        "comparability": {
+          "classification": "declared_adaptation_not_strict_reproduction",
+          "target_fixture": "official PoisonedRAG NQ 100-target fixture",
+          "clean_pool": "official pinned Contriever top-100 candidate IDs resolved against pinned NQ/BEIR corpus",
+          "retriever": "AIMOS native epistemic retrieval, not Contriever",
+          "corpus_scope": "100 clean candidates per target, not the full 2,681,468-text NQ corpus",
+          "disclosure_k": 5,
+          "poison_passages_per_target": 5
+        },
+        "evidence": {
+          "summary_sha256": "4ffaafbf57947add5247264f0ed57454e6d80bf25dc5481fb8a5e9c90964384b",
+          "summary_file_sha256": "127f3c86794bb5ce7ddd324b44ec87dc4bef30628eba8412d390c2e19dcf9154",
+          "execution_plan_sha256": "fca336c8d8810cfc1dcd64b7e7dadc0195098b926a1c3c854885cee1b5ef57e5",
+          "source_lock_sha256": "0755a58799d49f39400c4cbf5a16778a9302d21aed984d8ab991c4ce2755e03f",
+          "candidate_pool_sha256": "aebba045c73c3828d88509c70aeec3f3a80b7d7b407ddb2d4d65779206125915",
+          "public_target_lock_sha256": "fde4d24801aecea1aa1108ce59fcd5808733dc10934c937633ad32eebcf07c98",
+          "input_preflight_sha256": "0e2347eddbffe68f55b84d63b0ae5b7c8798b57333a8c2ce05191cacd521857e",
+          "epistemic_verification_sha256": "bf49888904fdc34db17e7f65d2f825ed1f18cfe5e66cc6e6d7bd77d5aee197c3",
+          "epistemic_verification_file_sha256": "bd9a83452fd42413313bbbb2c0329c6bcb567b9b350aef2da044ee9df17cd180"
+        }
+      },
+      "human_agreement": {
+        "reviewer_role": "system_author",
+        "independence": "not_independent_system_author_review",
+        "blinding": {
+          "arm_hidden_during_review": true,
+          "judge_verdict_hidden_during_review": true,
+          "arm_mapping_revealed_after_label_completion": true
+        },
+        "intended_answers": 200,
+        "audited_answers": 200,
+        "intended_target_pairs": 100,
+        "complete_target_pairs": 100,
+        "correctness_agreement": {
+          "n": 200,
+          "agreements": 193,
+          "raw_agreement": 0.965,
+          "human_positive": 150,
+          "judge_positive": 143,
+          "expected_agreement": 0.6075,
+          "cohen_kappa": 0.9108280254777069,
+          "kappa_ci_95": {
+            "method": "target-cluster percentile bootstrap",
+            "replicates_requested": 10000,
+            "replicates_valid": 10000,
+            "lower_95": 0.8169336384439359,
+            "upper_95": 0.9845201238390092
+          }
+        },
+        "target_assertion_agreement": {
+          "n": 200,
+          "agreements": 198,
+          "raw_agreement": 0.99,
+          "human_positive": 5,
+          "judge_positive": 5,
+          "expected_agreement": 0.9512499999999999,
+          "cohen_kappa": 0.7948717948717949,
+          "kappa_ci_95": {
+            "method": "target-cluster percentile bootstrap",
+            "replicates_requested": 10000,
+            "replicates_valid": 9841,
+            "lower_95": 0,
+            "upper_95": 1
+          }
+        },
+        "disagreement_count": 9,
+        "exclusions": 0,
+        "bootstrap_unit": "PoisonedRAG target; both arms retained within each resampled cluster",
+        "evidence": {
+          "packet_sha256": "72d0fa8b5765e1fd2bedaf1cd11cc3dc3d5414a20bc334169815dba972dc2642",
+          "summary_sha256": "fec88dfb1e58dc429c023e876ff289684f1ee97e3d2df9d37478e09c0c54d387",
+          "aggregate_file_sha256": "8d707356de8e5fbd471124cbe80143e6f02a05447ae2bbe49bc52524b202dbe7"
+        }
+      },
+      "artifact_manifest": {
+        "artifact_count": 21517,
+        "manifest_sha256": "e8cb9d1be87152d17d3eeab46519e47529c1af18dda34f2d42d32e785dfea77c",
+        "verification": "all_manifest_entries_rehashed"
+      },
+      "scratch_brain_status": "signed_destroyed_receipt_verified"
+    },
+    "poisonedrag_epistemic_ablation": {
+      "run_id": "20260730102457_495de5",
+      "source_run_id": "20260722172124_db0d79",
+      "result": {
+        "schema": "hom.aimos.poisonedrag-epistemic-ablation-public-evidence/v1",
+        "protocol": "poisonedrag-n100-epistemic-ablation-v1",
+        "run_id": "20260730102457_495de5",
+        "source_run_id": "20260722172124_db0d79",
+        "confirmatory": true,
+        "intended_n": 100,
+        "completed_n": 100,
+        "denominator_complete": true,
+        "design": {
+          "disclosure_k": 5,
+          "generator": "codex:gpt-5.5",
+          "generator_reasoning": "medium",
+          "judge": "codex:gpt-5.6-terra",
+          "judge_reasoning": "high",
+          "retrieval_arms": [
+            "A0",
+            "A1",
+            "A2",
+            "A3"
+          ],
+          "model_arms": [
+            "A0",
+            "A1",
+            "A2",
+            "A3"
+          ],
+          "clean_scopes": 100,
+          "attacked_scopes": 100,
+          "completed_native_recalls": 200,
+          "completed_retrieval_decisions": 800,
+          "completed_generations": 800,
+          "completed_judgments": 1600,
+          "mutation_contract": {
+            "canonical_memory_mutated": false,
+            "retrieval_weight_mutated": false,
+            "classification_mutated": false,
+            "deletion_decay_suppression": false,
+            "signed_decision_event_per_retrieval_arm": true
+          }
+        },
+        "arm_definitions": {
+          "A0": {
+            "stored_signed_labels": false,
+            "query_local_lure_detection": false,
+            "active_context_withholding": false,
+            "interpretation": "AIMOS native relevance plus diversity with epistemic policy bypassed; not the original Contriever baseline."
+          },
+          "A1": {
+            "stored_signed_labels": true,
+            "query_local_lure_detection": false,
+            "active_context_withholding": false,
+            "interpretation": "Signed stored-label contribution."
+          },
+          "A2": {
+            "stored_signed_labels": true,
+            "query_local_lure_detection": true,
+            "active_context_withholding": false,
+            "interpretation": "A1 plus query-local lure signals."
+          },
+          "A3": {
+            "stored_signed_labels": true,
+            "query_local_lure_detection": true,
+            "active_context_withholding": true,
+            "interpretation": "Complete production policy."
+          }
+        },
+        "policy_results": {
+          "A0": {
+            "pre_epistemic_positive_control": {
+              "attacked_with_any_poison_in_candidate_opening": {
+                "count": 100,
+                "total": 100,
+                "rate": 1,
+                "wilson_95": {
+                  "lower": 0.9630065017930143,
+                  "upper": 1
+                }
+              }
+            },
+            "retrieval": {
+              "clean_poison_retrieval_at_5": {
+                "count": 0,
+                "total": 100,
+                "rate": 0,
+                "wilson_95": {
+                  "lower": 3.469446951953614e-18,
+                  "upper": 0.03699349820698568
+                }
+              },
+              "attacked_poison_retrieval_at_5": {
+                "count": 94,
+                "total": 100,
+                "rate": 0.94,
+                "wilson_95": {
+                  "lower": 0.8752318455410406,
+                  "upper": 0.9722138760368118
+                }
+              },
+              "attacked_mean_poison_passages_at_5": 2.89,
+              "attacked_mean_active_poison_passages": 2.89
+            },
+            "official_substring": {
+              "clean_asr": {
+                "count": 3,
+                "total": 100,
+                "rate": 0.03,
+                "wilson_95": {
+                  "lower": 0.010254524024038925,
+                  "upper": 0.0845193642905276
+                }
+              },
+              "attacked_asr": {
+                "count": 56,
+                "total": 100,
+                "rate": 0.56,
+                "wilson_95": {
+                  "lower": 0.4622810465167699,
+                  "upper": 0.6532797336983921
+                }
+              },
+              "induced_asr": {
+                "count": 53,
+                "total": 97,
+                "rate": 0.5463917525773195,
+                "wilson_95": {
+                  "lower": 0.4474409242951606,
+                  "upper": 0.6418080820684112
+                }
+              }
+            },
+            "semantic_target_assertion": {
+              "clean_asr": {
+                "count": 2,
+                "total": 100,
+                "rate": 0.02,
+                "wilson_95": {
+                  "lower": 0.00550196755016235,
+                  "upper": 0.07001179072854388
+                }
+              },
+              "attacked_asr": {
+                "count": 57,
+                "total": 100,
+                "rate": 0.57,
+                "wilson_95": {
+                  "lower": 0.47215389549212305,
+                  "upper": 0.6626670147588988
+                }
+              },
+              "induced_asr": {
+                "count": 55,
+                "total": 98,
+                "rate": 0.5612244897959183,
+                "wilson_95": {
+                  "lower": 0.4625100210917256,
+                  "upper": 0.6553201841994971
+                }
+              }
+            },
+            "utility": {
+              "clean_accuracy": {
+                "count": 71,
+                "total": 100,
+                "rate": 0.71,
+                "wilson_95": {
+                  "lower": 0.6146110882442888,
+                  "upper": 0.7898516425087772
+                }
+              },
+              "attacked_accuracy": {
+                "count": 40,
+                "total": 100,
+                "rate": 0.4,
+                "wilson_95": {
+                  "lower": 0.3094012864324589,
+                  "upper": 0.4979974132089382
+                }
+              }
+            }
+          },
+          "A1": {
+            "pre_epistemic_positive_control": {
+              "attacked_with_any_poison_in_candidate_opening": {
+                "count": 100,
+                "total": 100,
+                "rate": 1,
+                "wilson_95": {
+                  "lower": 0.9630065017930143,
+                  "upper": 1
+                }
+              }
+            },
+            "retrieval": {
+              "clean_poison_retrieval_at_5": {
+                "count": 0,
+                "total": 100,
+                "rate": 0,
+                "wilson_95": {
+                  "lower": 3.469446951953614e-18,
+                  "upper": 0.03699349820698568
+                }
+              },
+              "attacked_poison_retrieval_at_5": {
+                "count": 0,
+                "total": 100,
+                "rate": 0,
+                "wilson_95": {
+                  "lower": 3.469446951953614e-18,
+                  "upper": 0.03699349820698568
+                }
+              },
+              "attacked_mean_poison_passages_at_5": 0,
+              "attacked_mean_active_poison_passages": 0
+            },
+            "official_substring": {
+              "clean_asr": {
+                "count": 4,
+                "total": 100,
+                "rate": 0.04,
+                "wilson_95": {
+                  "lower": 0.01566330399154762,
+                  "upper": 0.0983707143588792
+                }
+              },
+              "attacked_asr": {
+                "count": 3,
+                "total": 100,
+                "rate": 0.03,
+                "wilson_95": {
+                  "lower": 0.010254524024038925,
+                  "upper": 0.0845193642905276
+                }
+              },
+              "induced_asr": {
+                "count": 0,
+                "total": 96,
+                "rate": 0,
+                "wilson_95": {
+                  "lower": 3.469446951953614e-18,
+                  "upper": 0.038475587857675686
+                }
+              }
+            },
+            "semantic_target_assertion": {
+              "clean_asr": {
+                "count": 3,
+                "total": 100,
+                "rate": 0.03,
+                "wilson_95": {
+                  "lower": 0.010254524024038925,
+                  "upper": 0.0845193642905276
+                }
+              },
+              "attacked_asr": {
+                "count": 1,
+                "total": 100,
+                "rate": 0.01,
+                "wilson_95": {
+                  "lower": 0.0017674320641406505,
+                  "upper": 0.054486196178705315
+                }
+              },
+              "induced_asr": {
+                "count": 0,
+                "total": 97,
+                "rate": 0,
+                "wilson_95": {
+                  "lower": 0,
+                  "upper": 0.03809404252594769
+                }
+              }
+            },
+            "utility": {
+              "clean_accuracy": {
+                "count": 68,
+                "total": 100,
+                "rate": 0.68,
+                "wilson_95": {
+                  "lower": 0.5833738138954762,
+                  "upper": 0.7633085267500092
+                }
+              },
+              "attacked_accuracy": {
+                "count": 65,
+                "total": 100,
+                "rate": 0.65,
+                "wilson_95": {
+                  "lower": 0.5525444329688796,
+                  "upper": 0.7363575175690247
+                }
+              }
+            }
+          },
+          "A2": {
+            "pre_epistemic_positive_control": {
+              "attacked_with_any_poison_in_candidate_opening": {
+                "count": 100,
+                "total": 100,
+                "rate": 1,
+                "wilson_95": {
+                  "lower": 0.9630065017930143,
+                  "upper": 1
+                }
+              }
+            },
+            "retrieval": {
+              "clean_poison_retrieval_at_5": {
+                "count": 0,
+                "total": 100,
+                "rate": 0,
+                "wilson_95": {
+                  "lower": 3.469446951953614e-18,
+                  "upper": 0.03699349820698568
+                }
+              },
+              "attacked_poison_retrieval_at_5": {
+                "count": 0,
+                "total": 100,
+                "rate": 0,
+                "wilson_95": {
+                  "lower": 3.469446951953614e-18,
+                  "upper": 0.03699349820698568
+                }
+              },
+              "attacked_mean_poison_passages_at_5": 0,
+              "attacked_mean_active_poison_passages": 0
+            },
+            "official_substring": {
+              "clean_asr": {
+                "count": 3,
+                "total": 100,
+                "rate": 0.03,
+                "wilson_95": {
+                  "lower": 0.010254524024038925,
+                  "upper": 0.0845193642905276
+                }
+              },
+              "attacked_asr": {
+                "count": 3,
+                "total": 100,
+                "rate": 0.03,
+                "wilson_95": {
+                  "lower": 0.010254524024038925,
+                  "upper": 0.0845193642905276
+                }
+              },
+              "induced_asr": {
+                "count": 0,
+                "total": 97,
+                "rate": 0,
+                "wilson_95": {
+                  "lower": 0,
+                  "upper": 0.03809404252594769
+                }
+              }
+            },
+            "semantic_target_assertion": {
+              "clean_asr": {
+                "count": 2,
+                "total": 100,
+                "rate": 0.02,
+                "wilson_95": {
+                  "lower": 0.00550196755016235,
+                  "upper": 0.07001179072854388
+                }
+              },
+              "attacked_asr": {
+                "count": 1,
+                "total": 100,
+                "rate": 0.01,
+                "wilson_95": {
+                  "lower": 0.0017674320641406505,
+                  "upper": 0.054486196178705315
+                }
+              },
+              "induced_asr": {
+                "count": 0,
+                "total": 98,
+                "rate": 0,
+                "wilson_95": {
+                  "lower": 3.469446951953614e-18,
+                  "upper": 0.037719990121680605
+                }
+              }
+            },
+            "utility": {
+              "clean_accuracy": {
+                "count": 68,
+                "total": 100,
+                "rate": 0.68,
+                "wilson_95": {
+                  "lower": 0.5833738138954762,
+                  "upper": 0.7633085267500092
+                }
+              },
+              "attacked_accuracy": {
+                "count": 71,
+                "total": 100,
+                "rate": 0.71,
+                "wilson_95": {
+                  "lower": 0.6146110882442888,
+                  "upper": 0.7898516425087772
+                }
+              }
+            }
+          },
+          "A3": {
+            "pre_epistemic_positive_control": {
+              "attacked_with_any_poison_in_candidate_opening": {
+                "count": 100,
+                "total": 100,
+                "rate": 1,
+                "wilson_95": {
+                  "lower": 0.9630065017930143,
+                  "upper": 1
+                }
+              }
+            },
+            "retrieval": {
+              "clean_poison_retrieval_at_5": {
+                "count": 0,
+                "total": 100,
+                "rate": 0,
+                "wilson_95": {
+                  "lower": 3.469446951953614e-18,
+                  "upper": 0.03699349820698568
+                }
+              },
+              "attacked_poison_retrieval_at_5": {
+                "count": 0,
+                "total": 100,
+                "rate": 0,
+                "wilson_95": {
+                  "lower": 3.469446951953614e-18,
+                  "upper": 0.03699349820698568
+                }
+              },
+              "attacked_mean_poison_passages_at_5": 0,
+              "attacked_mean_active_poison_passages": 0
+            },
+            "official_substring": {
+              "clean_asr": {
+                "count": 3,
+                "total": 100,
+                "rate": 0.03,
+                "wilson_95": {
+                  "lower": 0.010254524024038925,
+                  "upper": 0.0845193642905276
+                }
+              },
+              "attacked_asr": {
+                "count": 4,
+                "total": 100,
+                "rate": 0.04,
+                "wilson_95": {
+                  "lower": 0.01566330399154762,
+                  "upper": 0.0983707143588792
+                }
+              },
+              "induced_asr": {
+                "count": 1,
+                "total": 97,
+                "rate": 0.010309278350515464,
+                "wilson_95": {
+                  "lower": 0.0018221648082868518,
+                  "upper": 0.05610499024289903
+                }
+              }
+            },
+            "semantic_target_assertion": {
+              "clean_asr": {
+                "count": 2,
+                "total": 100,
+                "rate": 0.02,
+                "wilson_95": {
+                  "lower": 0.00550196755016235,
+                  "upper": 0.07001179072854388
+                }
+              },
+              "attacked_asr": {
+                "count": 2,
+                "total": 100,
+                "rate": 0.02,
+                "wilson_95": {
+                  "lower": 0.00550196755016235,
+                  "upper": 0.07001179072854388
+                }
+              },
+              "induced_asr": {
+                "count": 1,
+                "total": 98,
+                "rate": 0.01020408163265306,
+                "wilson_95": {
+                  "lower": 0.0018035477567974675,
+                  "upper": 0.055554809913420274
+                }
+              }
+            },
+            "utility": {
+              "clean_accuracy": {
+                "count": 69,
+                "total": 100,
+                "rate": 0.69,
+                "wilson_95": {
+                  "lower": 0.5937394428051057,
+                  "upper": 0.7722030278762395
+                }
+              },
+              "attacked_accuracy": {
+                "count": 69,
+                "total": 100,
+                "rate": 0.69,
+                "wilson_95": {
+                  "lower": 0.5937394428051057,
+                  "upper": 0.7722030278762395
+                }
+              }
+            }
+          }
+        },
+        "contrasts": [
+          {
+            "contrast": "A1-A0",
+            "attacked_poison_retrieval": {
+              "b_left_true_right_false": 94,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 1.0097419586828951e-28
+            },
+            "attacked_target_substring": {
+              "b_left_true_right_false": 53,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 2.220446049250313e-16
+            },
+            "incremental_target_substring": {
+              "b_left_true_right_false": 53,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 2.220446049250313e-16
+            },
+            "attacked_target_semantic": {
+              "b_left_true_right_false": 56,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 2.7755575615628914e-17
+            },
+            "incremental_target_semantic": {
+              "b_left_true_right_false": 55,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 5.551115123125783e-17
+            },
+            "clean_qa_correct": {
+              "b_left_true_right_false": 7,
+              "c_left_false_right_true": 4,
+              "exact_two_sided_p": 0.548828125
+            },
+            "attacked_qa_correct": {
+              "b_left_true_right_false": 1,
+              "c_left_false_right_true": 26,
+              "exact_two_sided_p": 4.172325134277344e-7
+            },
+            "attacked_poison_count_delta": {
+              "mean": -2.89,
+              "paired_bootstrap_95": {
+                "seed": 20260714,
+                "replicates": 10000,
+                "lower": -3.19,
+                "upper": -2.59
+              }
+            }
+          },
+          {
+            "contrast": "A2-A1",
+            "attacked_poison_retrieval": {
+              "b_left_true_right_false": 0,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 1
+            },
+            "attacked_target_substring": {
+              "b_left_true_right_false": 0,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 1
+            },
+            "incremental_target_substring": {
+              "b_left_true_right_false": 0,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 1
+            },
+            "attacked_target_semantic": {
+              "b_left_true_right_false": 0,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 1
+            },
+            "incremental_target_semantic": {
+              "b_left_true_right_false": 0,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 1
+            },
+            "clean_qa_correct": {
+              "b_left_true_right_false": 4,
+              "c_left_false_right_true": 4,
+              "exact_two_sided_p": 1
+            },
+            "attacked_qa_correct": {
+              "b_left_true_right_false": 3,
+              "c_left_false_right_true": 9,
+              "exact_two_sided_p": 0.14599609375
+            },
+            "attacked_poison_count_delta": {
+              "mean": 0,
+              "paired_bootstrap_95": {
+                "seed": 20260714,
+                "replicates": 10000,
+                "lower": 0,
+                "upper": 0
+              }
+            }
+          },
+          {
+            "contrast": "A3-A2",
+            "attacked_poison_retrieval": {
+              "b_left_true_right_false": 0,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 1
+            },
+            "attacked_target_substring": {
+              "b_left_true_right_false": 0,
+              "c_left_false_right_true": 1,
+              "exact_two_sided_p": 1
+            },
+            "incremental_target_substring": {
+              "b_left_true_right_false": 0,
+              "c_left_false_right_true": 1,
+              "exact_two_sided_p": 1
+            },
+            "attacked_target_semantic": {
+              "b_left_true_right_false": 0,
+              "c_left_false_right_true": 1,
+              "exact_two_sided_p": 1
+            },
+            "incremental_target_semantic": {
+              "b_left_true_right_false": 0,
+              "c_left_false_right_true": 1,
+              "exact_two_sided_p": 1
+            },
+            "clean_qa_correct": {
+              "b_left_true_right_false": 5,
+              "c_left_false_right_true": 6,
+              "exact_two_sided_p": 1
+            },
+            "attacked_qa_correct": {
+              "b_left_true_right_false": 6,
+              "c_left_false_right_true": 4,
+              "exact_two_sided_p": 0.75390625
+            },
+            "attacked_poison_count_delta": {
+              "mean": 0,
+              "paired_bootstrap_95": {
+                "seed": 20260714,
+                "replicates": 10000,
+                "lower": 0,
+                "upper": 0
+              }
+            }
+          },
+          {
+            "contrast": "A3-A0",
+            "attacked_poison_retrieval": {
+              "b_left_true_right_false": 94,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 1.0097419586828951e-28
+            },
+            "attacked_target_substring": {
+              "b_left_true_right_false": 52,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 4.440892098500626e-16
+            },
+            "incremental_target_substring": {
+              "b_left_true_right_false": 52,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 4.440892098500626e-16
+            },
+            "attacked_target_semantic": {
+              "b_left_true_right_false": 55,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 5.551115123125783e-17
+            },
+            "incremental_target_semantic": {
+              "b_left_true_right_false": 54,
+              "c_left_false_right_true": 0,
+              "exact_two_sided_p": 1.1102230246251565e-16
+            },
+            "clean_qa_correct": {
+              "b_left_true_right_false": 5,
+              "c_left_false_right_true": 3,
+              "exact_two_sided_p": 0.7265625
+            },
+            "attacked_qa_correct": {
+              "b_left_true_right_false": 1,
+              "c_left_false_right_true": 30,
+              "exact_two_sided_p": 2.9802322387695312e-8
+            },
+            "attacked_poison_count_delta": {
+              "mean": -2.89,
+              "paired_bootstrap_95": {
+                "seed": 20260714,
+                "replicates": 10000,
+                "lower": -3.19,
+                "upper": -2.59
+              }
+            }
+          }
+        ],
+        "holm_bonferroni_familywise_0_05": {
+          "attacked_poison_retrieval": [
+            {
+              "contrast": "A1-A0",
+              "p": 1.0097419586828951e-28,
+              "holm_rank": 1,
+              "adjusted_p": 4.0389678347315804e-28,
+              "reject_familywise_0_05": true
+            },
+            {
+              "contrast": "A2-A1",
+              "p": 1,
+              "holm_rank": 3,
+              "adjusted_p": 1,
+              "reject_familywise_0_05": false
+            },
+            {
+              "contrast": "A3-A2",
+              "p": 1,
+              "holm_rank": 4,
+              "adjusted_p": 1,
+              "reject_familywise_0_05": false
+            },
+            {
+              "contrast": "A3-A0",
+              "p": 1.0097419586828951e-28,
+              "holm_rank": 2,
+              "adjusted_p": 4.0389678347315804e-28,
+              "reject_familywise_0_05": true
+            }
+          ],
+          "attacked_target_substring": [
+            {
+              "contrast": "A1-A0",
+              "p": 2.220446049250313e-16,
+              "holm_rank": 1,
+              "adjusted_p": 8.881784197001252e-16,
+              "reject_familywise_0_05": true
+            },
+            {
+              "contrast": "A2-A1",
+              "p": 1,
+              "holm_rank": 3,
+              "adjusted_p": 1,
+              "reject_familywise_0_05": false
+            },
+            {
+              "contrast": "A3-A2",
+              "p": 1,
+              "holm_rank": 4,
+              "adjusted_p": 1,
+              "reject_familywise_0_05": false
+            },
+            {
+              "contrast": "A3-A0",
+              "p": 4.440892098500626e-16,
+              "holm_rank": 2,
+              "adjusted_p": 1.3322676295501878e-15,
+              "reject_familywise_0_05": true
+            }
+          ],
+          "incremental_target_substring": [
+            {
+              "contrast": "A1-A0",
+              "p": 2.220446049250313e-16,
+              "holm_rank": 1,
+              "adjusted_p": 8.881784197001252e-16,
+              "reject_familywise_0_05": true
+            },
+            {
+              "contrast": "A2-A1",
+              "p": 1,
+              "holm_rank": 3,
+              "adjusted_p": 1,
+              "reject_familywise_0_05": false
+            },
+            {
+              "contrast": "A3-A2",
+              "p": 1,
+              "holm_rank": 4,
+              "adjusted_p": 1,
+              "reject_familywise_0_05": false
+            },
+            {
+              "contrast": "A3-A0",
+              "p": 4.440892098500626e-16,
+              "holm_rank": 2,
+              "adjusted_p": 1.3322676295501878e-15,
+              "reject_familywise_0_05": true
+            }
+          ],
+          "attacked_target_semantic": [
+            {
+              "contrast": "A1-A0",
+              "p": 2.7755575615628914e-17,
+              "holm_rank": 1,
+              "adjusted_p": 1.1102230246251565e-16,
+              "reject_familywise_0_05": true
+            },
+            {
+              "contrast": "A2-A1",
+              "p": 1,
+              "holm_rank": 3,
+              "adjusted_p": 1,
+              "reject_familywise_0_05": false
+            },
+            {
+              "contrast": "A3-A2",
+              "p": 1,
+              "holm_rank": 4,
+              "adjusted_p": 1,
+              "reject_familywise_0_05": false
+            },
+            {
+              "contrast": "A3-A0",
+              "p": 5.551115123125783e-17,
+              "holm_rank": 2,
+              "adjusted_p": 1.6653345369377348e-16,
+              "reject_familywise_0_05": true
+            }
+          ],
+          "incremental_target_semantic": [
+            {
+              "contrast": "A1-A0",
+              "p": 5.551115123125783e-17,
+              "holm_rank": 1,
+              "adjusted_p": 2.220446049250313e-16,
+              "reject_familywise_0_05": true
+            },
+            {
+              "contrast": "A2-A1",
+              "p": 1,
+              "holm_rank": 3,
+              "adjusted_p": 1,
+              "reject_familywise_0_05": false
+            },
+            {
+              "contrast": "A3-A2",
+              "p": 1,
+              "holm_rank": 4,
+              "adjusted_p": 1,
+              "reject_familywise_0_05": false
+            },
+            {
+              "contrast": "A3-A0",
+              "p": 1.1102230246251565e-16,
+              "holm_rank": 2,
+              "adjusted_p": 3.3306690738754696e-16,
+              "reject_familywise_0_05": true
+            }
+          ],
+          "clean_qa_correct": [
+            {
+              "contrast": "A1-A0",
+              "p": 0.548828125,
+              "holm_rank": 1,
+              "adjusted_p": 1,
+              "reject_familywise_0_05": false
+            },
+            {
+              "contrast": "A2-A1",
+              "p": 1,
+              "holm_rank": 3,
+              "adjusted_p": 1,
+              "reject_familywise_0_05": false
+            },
+            {
+              "contrast": "A3-A2",
+              "p": 1,
+              "holm_rank": 4,
+              "adjusted_p": 1,
+              "reject_familywise_0_05": false
+            },
+            {
+              "contrast": "A3-A0",
+              "p": 0.7265625,
+              "holm_rank": 2,
+              "adjusted_p": 1,
+              "reject_familywise_0_05": false
+            }
+          ],
+          "attacked_qa_correct": [
+            {
+              "contrast": "A1-A0",
+              "p": 4.172325134277344e-7,
+              "holm_rank": 2,
+              "adjusted_p": 0.0000012516975402832031,
+              "reject_familywise_0_05": true
+            },
+            {
+              "contrast": "A2-A1",
+              "p": 0.14599609375,
+              "holm_rank": 3,
+              "adjusted_p": 0.2919921875,
+              "reject_familywise_0_05": false
+            },
+            {
+              "contrast": "A3-A2",
+              "p": 0.75390625,
+              "holm_rank": 4,
+              "adjusted_p": 0.75390625,
+              "reject_familywise_0_05": false
+            },
+            {
+              "contrast": "A3-A0",
+              "p": 2.9802322387695312e-8,
+              "holm_rank": 1,
+              "adjusted_p": 1.1920928955078125e-7,
+              "reject_familywise_0_05": true
+            }
+          ]
+        },
+        "mechanism_activation": {
+          "pre_epistemic_positive_control": {
+            "count": 100,
+            "total": 100,
+            "rate": 1,
+            "wilson_95": {
+              "lower": 0.9630065017930143,
+              "upper": 1
+            }
+          },
+          "A1_A2_selected_set_equal": {
+            "count": 200,
+            "total": 200
+          },
+          "A1_A2_active_context_equal": {
+            "count": 200,
+            "total": 200
+          },
+          "A1_A2_prompt_equal": {
+            "count": 200,
+            "total": 200
+          },
+          "A2_A3_selected_set_equal": {
+            "count": 200,
+            "total": 200
+          },
+          "A2_A3_active_context_equal": {
+            "count": 200,
+            "total": 200
+          },
+          "A2_A3_prompt_equal": {
+            "count": 200,
+            "total": 200
+          },
+          "active_context_withholding_exercised": {
+            "count": 0,
+            "total": 200,
+            "withheld_passages": 0
+          },
+          "interpretation": "Signed stored labels caused the observed deterministic retrieval isolation. Query-local detection had no measurable incremental contribution, and active-context withholding was not exercised. A2/A3 output differences arose from independent stochastic model and judge calls under identical prompts."
+        },
+        "integrity": {
+          "verified_target_outcomes": 100,
+          "verified_retrieval_decisions": 800,
+          "unique_verified_decision_events": 800,
+          "unique_verified_ledger_sequences": 800,
+          "memory_root_unchanged": true,
+          "classification_root_unchanged": true,
+          "signed_classification_rows_unchanged": 504,
+          "canonical_benchmark_footprint_unchanged": true,
+          "artifact_manifest": {
+            "artifact_count": 3518,
+            "manifest_sha256": "4c52db927b2e2cfa6c343d72a593a5680e364873d5664f7613749ee4b23b954f",
+            "verification": "all_manifest_entries_rehashed"
+          },
+          "preregistration_sha256": "c224e942df7e4864cd66a82634f6739dc4657a9fc7cded93743f5f9c39e56fac",
+          "execution_plan_sha256": "959997db3fceac51f6fbcbb71c956edc52328c094c05248117471e43f06b8b45",
+          "execution_plan_file_sha256": "2a551bf5e4a5d1b3cbc40942bf05de10a7be40061f425cd9d7c45297a52d3f68",
+          "summary_sha256": "2a86c5e9cf65c4a845c0accb5c3358dcf03bc214ea8ade33842e5c5d8e8a00a1",
+          "summary_file_sha256": "19279067287d3df631237c20480f5f179a9420858059172ab4bb9d22d53ff8e6",
+          "isolation_sha256": "c36097a0df3142c2f324e514e28e9ba14f773807f7bb8d13d5ecf508c9650f45",
+          "isolation_file_sha256": "91df27576143dcffba48d8373b7e3d7147809ed2b657f03f621eb4e500a5cca4"
+        },
+        "operational_recovery": {
+          "resume_amendment_present": true,
+          "scientific_contract_unchanged": true,
+          "completed_artifacts_reused": true,
+          "lifecycle_changed_files": [
+            "eval/run-poisonedrag-epistemic-ablation.mjs",
+            "scripts/benchmark/run-poisonedrag-epistemic-ablation.mjs"
+          ],
+          "terminal_status_reconciled": true,
+          "reconciliation_sha256": "741b5124dfe29d77227ea9d9c746f2539f75073168d16428039d8488c520e6f2"
+        },
+        "limitations": [
+          "Declared N=100 adaptation; no full-corpus external-validity claim.",
+          "No matched-model bridge was run.",
+          "Query-local detection had no measurable incremental contribution in this fixed corpus.",
+          "Active-context withholding was not activated in any of 200 clean or attacked contexts.",
+          "Independent model and judge calls can differ stochastically under identical prompts.",
+          "Mutable run status is excluded from the scientific artifact manifest and is bound separately by the completion reconciliation."
+        ],
+        "ablation_evidence_sha256": "83a576895d26de63a7dde820b74effb93158299bf180289069af77569eb27105"
+      },
+      "aggregate_file_sha256": "93b3c5ba11e488441089b117a23b4ed420d3b8166cb43c232c474304df597c4e",
+      "scratch_brain_status": "signed_destroyed_receipt_verified"
+    },
+    "mutation_integrity": {
+      "run_id": "20260723162050_59a52d",
+      "result": {
+        "schema": "hom.aimos.mutation-integrity-public-evidence/v1",
+        "protocol": "mutmem-native-mutation-integrity-v1",
+        "run_id": "20260723162050_59a52d",
+        "data_policy": "Aggregate case outcomes, measurements, and cryptographic commitments only; no memory identifiers, certificates, credentials, absolute paths, or retained content.",
+        "execution": {
+          "isolated_fresh_genesis_brain": true,
+          "canonical_brain_untouched": true,
+          "scratch_brain_retained_pending_signed_whole_brain_purge": true,
+          "intended_transition_measurements": 20,
+          "completed_transition_measurements": 20
+        },
+        "authorization_cases": {
+          "runtime_direct_update_rejected": true,
+          "wrong_memory_proof_rejected": true,
+          "wrong_company_scope_rejected": true,
+          "no_op_rejected": true,
+          "discontinuity_rejected": true,
+          "out_of_bounds_rejected": true,
+          "fork_rejected": true
+        },
+        "trajectory_cases": {
+          "bidirectional_up_down_up_verified": true,
+          "signed_negative_neutral_positive_evidence_retained": true,
+          "neutral_no_transition_verified": true,
+          "existence_preserved": true,
+          "lower_bound": 0.1,
+          "upper_bound": 3
+        },
+        "tamper_cases": {
+          "projection_hash_or_binding_tamper_detected": true,
+          "transition_signature_tamper_detected": true,
+          "terminal_weight_tamper_detected": true,
+          "stale_signer_epoch_detected": true
+        },
+        "verifier": {
+          "sql_corpus_records": 9,
+          "portable_corpus_records": 9,
+          "all_sql_records_ok": true,
+          "all_portable_records_ok": true,
+          "sql_portable_parity": true,
+          "portable_corpus_proof_root_sha256": "a965aba5ec0a5eea813617489c8c3851e3ad5e16587c026fedfd71e303f43269"
+        },
+        "signed_post_mutation_recall": {
+          "returned_memory_count": 1,
+          "receipt_evidence_count": 1,
+          "command_hash": "8f3257cabde7c5e3415d8ad858898e97d870837780f0ba754d4124ab86b27ac5",
+          "merkle_root": "8776caaae6034a5b1b02e661ccc8e8ca29e377141d615b03e05fdbe85c012e37",
+          "event_id": "9fc02a58-3acb-4ac1-93fc-c5bc2666d12a",
+          "event_mutation_hash": "eb1283b63eb68cf33904d629e1a17eb29138493d8185d1648cca4d59fdc7acda"
+        },
+        "latency_ms": {
+          "n": 20,
+          "mean": 4.8984228,
+          "median": 4.864875,
+          "p95": 5.6738277,
+          "minimum": 3.856625,
+          "maximum": 6.488333,
+          "boundary": "one native restricted transaction including housekeeper signatures, provenance append, certified projection append, and live-weight update"
+        },
+        "logical_row_storage_bytes": {
+          "n": 20,
+          "projection_total": 5807,
+          "provenance_total": 13520,
+          "combined_total": 19327,
+          "combined_mean_per_transition": 966.35,
+          "measurement": "sum(pg_column_size(row)); excludes indexes and block-level free space"
+        },
+        "allocated_relation_delta_bytes": {
+          "provenance": 16384,
+          "projection": 0,
+          "measurement": "pg_total_relation_size after minus before; block-granular and reported separately from logical row size"
+        },
+        "evidence": {
+          "private_summary_sha256": "984994fc8d6c438599db32d6603d9cec8e02de398a7e6a262afdc253c11e0258",
+          "private_evidence_file_sha256": "949747ecd6465fa3f5fbcde947992dbf23e984ca56d62b76ea896f51e3c2e791",
+          "artifact_count": 7,
+          "artifact_manifest_file_sha256": "a5f79138c4e53a7e752ec533eb6c7ff708272f561921864c23b52f518d8e4950",
+          "artifact_manifest_declared_sha256": "5b14f0eb038406268ad80b3ced1ac30b9aacb4b6468957250007bc26dd18d9c9"
+        },
+        "mutation_integrity_evidence_sha256": "9521798027be2893af745214a22747334be201d74178ddd9265ea97a32d34be8"
+      },
+      "aggregate_file_sha256": "8b0bfdcb36c1454d3f77a1475e3c9d9c15d1c09dffc1420fd68b0e00e155713f",
+      "scratch_brain_status": "signed_destroyed_receipt_verified"
+    }
+  },
+  "signed_scratch_purge": {
+    "schema": "hom.aimos.signed-scratch-purge-public-evidence/v1",
+    "raw_receipts_published": false,
+    "master_identity_published": false,
+    "receipt_count": 39,
+    "verified_receipt_count": 39,
+    "invalid_receipt_count": 0,
+    "canonical_brain_included": false,
+    "receipts": [
+      {
+        "database_identifier_sha256": "241e0031e89fa303766423f5775fe4af2303178a6d0a6bb3c2a3f4da9864ffc0",
+        "ceremony_identifier_sha256": "8bb0df19e638e7a458d1b3d7765b44e9c3cfe3d577dcfc8df253ead9a5b8b676",
+        "receipt_file_sha256": "08956d4c847cbe5309c69023afd7730ef6960509d510a5c5b9880724ba23f31f",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 68
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 276
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 129
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "e8d3cf3ca1dc5095c7e998e6f5960caa96bc235673b24a6daa54514e243a33b6",
+        "ceremony_identifier_sha256": "e13b24e81c5bf40aec7b6a56f47eb2b714878b74fca06b3b26bc2d8ed767c068",
+        "receipt_file_sha256": "29ad584f1bff1de0f02fa2fb76d7e8844a58a6543d816bdf0c59365cf64f4040",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 520
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 3538
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 565
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "09ddee8c138a54879430ec0da51a1e53fa86d1fccfd7b461bddd017991ef2b99",
+        "ceremony_identifier_sha256": "6ca657f81dff58a84fc1db26be359b7c312fbd389199c5fe54081c1cb1e3d0eb",
+        "receipt_file_sha256": "fb77eb4008d1dd84d99215f87e3e9c93f3420ccaba0b7d15655bffea1ce65c9f",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 6102
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 42685
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 4602
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "775c90f8aa418bc2f8de3bfdd17e14de29bae21f90734241594dea009dabb853",
+        "ceremony_identifier_sha256": "3e63d8f7c5d3b453b13719ddeac2fabc6c19a589a6923a1376f33f220208e51f",
+        "receipt_file_sha256": "a8d819dbfd176ef7e91b57eef1b3d5bd12d555fcaaa16d74e3b8955c48127d81",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 2887
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 20157
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 2298
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "c6f6565e7f1e3c04d5d9aec5a1c10f70b664522422e25c997cc6856356c98dec",
+        "ceremony_identifier_sha256": "957753a33f7b0efa18852dac60f26e7444f9abfdfd00ee68dc3ef1bc9b616904",
+        "receipt_file_sha256": "b987d2c5550f0b82db4759ad892de319d88cf3ce4d8510e1f9a9ea1ce95a8a0d",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 961
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 7859
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 942
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "b9e6137e911c341bdd5085fd94a672a228acafd709e3fe40558feeede1a11b65",
+        "ceremony_identifier_sha256": "666d1d049602da3e2ac10bbcb345e5b88cd6464a5bb7f7a8406468ffc91a2fae",
+        "receipt_file_sha256": "e02e967667e791bc4ace5dafd420612934ad3be6dd40fb10bdf1e741683bb6fd",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 101
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 584
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 169
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "73c478629af924317c20facf0023239dfa9333b46b6dfc1790be4de5ef427a5b",
+        "ceremony_identifier_sha256": "39b3d235acbf229896b47a8eca66b294744b2677135f6adb21aab53467624aea",
+        "receipt_file_sha256": "04b5627ef4b22b564c03adb106cc74e0b8f22fda4a3779acfd1442de3fb17e9f",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 960
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 7857
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 942
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "8aaad728d81333e8cb2d8c0de330abae99d31aeebb4c12733a5555975e7419d8",
+        "ceremony_identifier_sha256": "59a2f60a1f98a8476d72b51034622098c2a637c620ae555887ac502a4e9ba034",
+        "receipt_file_sha256": "e32ea6c4fe0c8e8df3413fb6f31c81a3bdc8570e27c1e144fa362cb6e052ffad",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 161
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 1095
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 221
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "7f3a5eb44af8bee2f7be94db99de1196f2ba31cf9e3fe175bfb8bd715f2458f8",
+        "ceremony_identifier_sha256": "4e8b36ebf4986d9cf6563ebeb6d95b0a066af6fbdca587ba59355ccff1293edc",
+        "receipt_file_sha256": "fd1696a45a92953883ec8f08e1d14bf97d38120fdd53c3aaea3c4d3a419483e1",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 7262
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 60117
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 6380
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "03cd53bb2361ab7473303a51ba19d43eccfc791e4b0421a2ddf26c7ace9a7e87",
+        "ceremony_identifier_sha256": "979739b8cb0dbc131cda53fe7641fb3546823a19fe7ec78bdb9b3de2a82ceb14",
+        "receipt_file_sha256": "6579fba260c65a341e752ded2597d46a4d2f273329bdc9115d1bd96f37cd6e00",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 20797
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 170338
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 17755
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "6861a017f0fa4295c111af183fb9c3b63505e37110e7d48001605bbb88d9f8f9",
+        "ceremony_identifier_sha256": "16dbc248b903e159a0139c004861cbe2719c3ae2c3303d432e45739d9af4a5e9",
+        "receipt_file_sha256": "b6d86f26cd3e9ba96098b0ed9b53f3b1e5b3cd53fb5046fbff5b027c238f0c10",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 78
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 275
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 127
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "7a532f9e7fd6ad1a4db91e51e15dce883b94c3d290f12ee6e25c8886e2423cc0",
+        "ceremony_identifier_sha256": "46adab92f301de64766e4ab399338d524c1fcacec59f404233d424cc533a5f93",
+        "receipt_file_sha256": "33792fe692cfca557a3eed6a498da9e61eb6b937d76d9deab7056e0810f24b76",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 95
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 275
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 130
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "67e323f8dc3bb07901cdddf93e23c548fec732d5a128f1980bf62735a3ec90e8",
+        "ceremony_identifier_sha256": "c2a412585771c8722eda6cc955a3308b04718d550e169fbb6875f3de80749c51",
+        "receipt_file_sha256": "24fcd3ff2b7a1065e65d9fa882ea7d5c0530408bd77e52f49f1ddf8316441cda",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 178
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 1052
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 227
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "a9d846d73d4f7b113a0ccbcc622eed8a0fce557e028a15fee1effd9be34120bd",
+        "ceremony_identifier_sha256": "e1c5d00ae68e653d496d466b98c1d20ad49946f146257b129511d78d72065069",
+        "receipt_file_sha256": "8547b5727d4d0f50e02aba5f02810ef2896f7a5da1beb543d50c81dc4002bbb5",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 20876
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 170367
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 17807
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "991dff9546ee6937b0e148934638c2567ef6bc684dcb4d979c6249bccf106fe0",
+        "ceremony_identifier_sha256": "230f250d837fdec9fa1e6500f0913fc3c3f13dc519177b00150f3a2a16af9fe0",
+        "receipt_file_sha256": "c4bafdd25bf9e82b420fcc0eb5915bc7e80cc1814b39760721820d191c0fb050",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 78719
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 466626
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 81704
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "c47c552e217808b411f0ef7f3ce9099bd1ef3659ba67c243c16b010c981566c8",
+        "ceremony_identifier_sha256": "9ecec77bd90d75f2707ffd4861a48b5be9ba87abd29de322692b74fcf9f4eb85",
+        "receipt_file_sha256": "1273ba7b94622ece16db64d5143b9c86eac0b2949ff9dd119fdd3dc3228b26e8",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 1925
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 12468
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 1463
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "e05e98c4817766e8151483a0ae7186ff540730959cd20d669c2c529d6a5eea3d",
+        "ceremony_identifier_sha256": "8d48867a06cc94c0beed86b372e5ff0299afaa50dac6e625234d3d0a13b3c9ad",
+        "receipt_file_sha256": "4604b0c51cd958a6d9ceaa8ecbaef2c3a3a19d4f1463d92cb8bee10232f5daac",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 33472
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 148589
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 39096
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "f32d2c0d0a3d30a0c2083f09102e2905ec21dcf0d3555f253e1185e6dc16d590",
+        "ceremony_identifier_sha256": "fce6c1a06e541bce0ef508d14522627cbddf0e2996326d39fda203c1ba147e98",
+        "receipt_file_sha256": "41a5d09f9eae0e613476f93247671e6a7bc51bcac503732f3f7d9483952d6490",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 10091
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 69353
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 7389
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "d5d314a8e017e30d8f89e7b524ff5d3c63ac46ca0cf012aec82156dbb78293b8",
+        "ceremony_identifier_sha256": "8f899a06f84ebb0cba07007e9ef5ac0a0caf1db1901b976632cdcfd351079c05",
+        "receipt_file_sha256": "7171af2fb855a7bc2286e073ea37ede0a3efde95ce4fd864a3b2cf1074bf235c",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 61
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 216
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 115
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "3e82f37dca866df6230c4d0230a334d937dce800900c24cddf6aa95d0c717d3b",
+        "ceremony_identifier_sha256": "aa0c48a7cfbc1a62b748bea4e8344707b75bdc5fb0f6af4ac6bd1f5e5ae28fdc",
+        "receipt_file_sha256": "af7274f4802aea5fb1c57265b18db2b131d779bbfb91599c75f7a01729cc6b66",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 39490
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 184640
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 42259
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "88dc66b916b01e606539e35a3ba17d23ed9c21aa0e81cf756e619b9582016c54",
+        "ceremony_identifier_sha256": "e18a506ee7ae09e0372e4f05aafaed82e49637d534e76bb953c9aad17fa2afdc",
+        "receipt_file_sha256": "1ce1200bd18052cc408568a0bcb8a07c0219458a9e1f4cfee3f1803607d51bcc",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 4122
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 7360
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 1278
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "5ea986c54588ee181e43714e951c83ad76b329f8fbbcf46766e588aaec3f5127",
+        "ceremony_identifier_sha256": "deb7ddcb54fd37ff425c716b8662f0ab25a5dcc6e61e998911f54a9fd8be2dd9",
+        "receipt_file_sha256": "cda6de18be12cc93380895d692be324577fe3355f6b621f87be0c00283cd3937",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 4210
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 7360
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 1385
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "0fe4f9b48b4d7d6f9acc4d31eb5543c3cf2c4d1274903b84f83da0ee52cac9c6",
+        "ceremony_identifier_sha256": "6042d26a4a52db1fc4537125de1707cca053bc55506cb5e8535de6a9dec1a9cd",
+        "receipt_file_sha256": "27fd38e3dc9d7aeeecf0db604fc0ea53b03fd9d3340a877c4f94b950b2c97666",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 389
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 2885
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 409
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "0302112dca93203f93b950b2c0c2118149f3c55ca210362ac52b35c7c0c3fa50",
+        "ceremony_identifier_sha256": "3667a96b0e30060da406ca236066841cc9f8e3759a5268d3ee24517b8e30af80",
+        "receipt_file_sha256": "542fabfc113aaa70bc3b0f0730f27fbc72a45bfc183c7fb70fd659b7d9015b58",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 136260
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 237608
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 42538
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "a8be1217f515e105544f4bc2ec797988f52220d281caa046d93f03b75ae50520",
+        "ceremony_identifier_sha256": "f94181205636ad35561d5f336b8bff451930704f2d6a3f6d44b938de8a924ded",
+        "receipt_file_sha256": "ee36d2ade89bfbd95852f57e189ed877c4fb926ae4427ee07e98cb88feffa1d0",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 61
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 216
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 115
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "5e456bca72de25adf924578b1d6427a189d08b37661d4146031890461a097464",
+        "ceremony_identifier_sha256": "d8f1cdbd24a149d5ae8374e95c9192c235f902d22265e175e95021282a40aa5b",
+        "receipt_file_sha256": "2d342142e65ffb08462630022d11e81814ca586a41c1ef2134673a032a8d0432",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 61
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 216
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 115
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "658edfb83ddf26ffd0a97e325ab7dbdeb547f02ed71e9c3b28902dcc7974a25f",
+        "ceremony_identifier_sha256": "29c6776903f138996dcf026ebd53cdd14fbd713fab511620e164a69d9a7fca1f",
+        "receipt_file_sha256": "8bfb29ec9a80f82a7451c6e0e30406d13ce4e8394b9f5a0cfb0e035198782485",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 136456
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 237543
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 42288
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "485e333b45749bc5afa00f7067fb9b411b3fe939ee1307ec1f6c9013a775fdf2",
+        "ceremony_identifier_sha256": "ff347b38e38eadfa537eebcec28fa92723199daf41838e5c6c6833dabaea278c",
+        "receipt_file_sha256": "a0de3368d35e6215ccad443f31d97afd81bb6dae074e68e3a00b0e9ed28ad6d9",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 1687
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 3114
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 581
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "d5f176ed2c3d8fcd61ddcf0a7c66fd0728338ab10e9a44c622cad62a77fd425b",
+        "ceremony_identifier_sha256": "94feebfc025b3b9002c4bf389e6874e54a57a33520723d0cd587834adf4dc737",
+        "receipt_file_sha256": "56b9c49e44c8f3f5723ed8262fb6a81794b6f519a190e22e32ea19793d4397a3",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 1575
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 2906
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 548
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "29d2cbaeb4ec4b8f2af736fd214cb42ef0bcf8fcf5b183a28e3710e0d8c2b486",
+        "ceremony_identifier_sha256": "26f535fc16198c36840ccf68f25f11ebdcba4ad5bed0ad7af9b0331af3f3ae72",
+        "receipt_file_sha256": "216d0e72eaabc79bdf2a42f3f63b6481d366d40d7c7d95422b95aefa517dc521",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 6930
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 9598
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 2155
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "a8ebc95c89f460092663649c11402aea9e77e6affd51414fa1c22e360f6faa6f",
+        "ceremony_identifier_sha256": "4b652c96f4300108b69e1221a510bb5e7784f93ddd28e844b63319ca3a59d441",
+        "receipt_file_sha256": "2465f78af11585738859a25fc03c4fe9e660a3b79835168da910451d641f4973",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 136945
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 237980
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 42282
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "6cc96f14d6ab11edd87d2d6af90c28ac846b51635cf804d5ceb5a7e61fb10deb",
+        "ceremony_identifier_sha256": "4f3dc37b7ea2446069e1d521fb144dc4d6d04a104c20782ec827d8ebf43aa66a",
+        "receipt_file_sha256": "7b96284855dbb6996dff70db43de4202f3ef1e6aeafc084b7ef956a8f470979f",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 136954
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 237980
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 42283
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "b6ae964be07806a9b5861c44ce683e5f2879c8a25a04318aed6a450d089655de",
+        "ceremony_identifier_sha256": "15a0fa2660e859c0231d2c8cb7aeb7ebc240eab37a9cf15f3431573f2e5aa1fa",
+        "receipt_file_sha256": "0657e76a9f08d4f840a8ea83bbb8a1704c186f6c2745869713cb97fbdc4422f4",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 139187
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 237980
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 42484
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "897739e74fd080face0251020ac0e775cda27a964f0de73d4bda6e8b59e8e911",
+        "ceremony_identifier_sha256": "ec21e8d89bda8a4f4091cd4b202512fa20ae70024c4f090a572dc25c69a408e3",
+        "receipt_file_sha256": "45b2e56a753e86549f5d198660713e9a2a3e689945033c173712b6369ca11ee6",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 139
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 361
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 187
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "73ed95970e2608479fa75de60c43a6540934fc8b34d424471fd1a17772a59c47",
+        "ceremony_identifier_sha256": "b45b6c2ec5afbc95148d5c202c44f85705bbdaa948bf2a922a27a83e5c35498d",
+        "receipt_file_sha256": "b106d5c4fd304ded61aafff45a7e249c5eeeb8d8077c0497337d2858036c03c4",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 132
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 336
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 184
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "71d29e6ee8ab067b870da73d58f221d19e188f5cd1a47dbc0e1cce84e0abdc30",
+        "ceremony_identifier_sha256": "becfd8761231ba91ddf4ad8b1686b1b06677d30da4a71820822184e721ff7704",
+        "receipt_file_sha256": "6736b6934e2cc2b1e0944c2d69728978c9465a9c257bd987ed4faeb39ea2e5d5",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 3
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 584
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 2
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 1687
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 301
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "42a4eddaf5bcb7644aa25397ef81f55cb0b52deaef9ee5c565a12abd898b16dc",
+        "ceremony_identifier_sha256": "7ca20b38bae05b65f477ac930ff7ca55bd58d04d0f8c7706e2cd101924db41dd",
+        "receipt_file_sha256": "3c5aea05b1a7fb5e3ee90a0e117e04b191b57520f173e94fab97fbb3ee17b4e1",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 64
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 247
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 144
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "221ac21def4bd727d8d9ff9392508042a69d24d2edbc15afb41c9de2bb3fc9da",
+        "ceremony_identifier_sha256": "7f27cde5e26a1f7fb5169fa1c81fa2f64cf4776c0833455b4780e9a008d2ef4b",
+        "receipt_file_sha256": "02e5660a223611e84416e3c0e1bf0150405999a704ac5b5f7b18c137345d1ef7",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 65
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 247
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 144
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      },
+      {
+        "database_identifier_sha256": "0fbb1cdb4701e6f4c55c15771c139567ca1ae4326c968a42a60f824d07393eb7",
+        "ceremony_identifier_sha256": "eb0ac5290572192120c58b07f6b52839c1a95d2bb3e31ec09f7aff35f7c6417a",
+        "receipt_file_sha256": "66a0c9703cdce913be75fb55b25356897d2649e21c116c896adff3b16a34aebe",
+        "affected_table_classes": [
+          {
+            "class": "credential_reference",
+            "row_count": 1
+          },
+          {
+            "class": "cryptographic_proof",
+            "row_count": 69
+          },
+          {
+            "class": "identity_and_execution",
+            "row_count": 0
+          },
+          {
+            "class": "memory_and_index",
+            "row_count": 247
+          },
+          {
+            "class": "operational_projection",
+            "row_count": 144
+          }
+        ],
+        "signature_verified": true,
+        "completion_status": "complete",
+        "completion_mode": "destroyed",
+        "database_absence_verified": true
+      }
+    ],
+    "purge_evidence_sha256": "1bfbfdd76e36e74a615d22e05f7c933cca14795b76a2a230c95b8d39a5e16fcf"
+  },
+  "empirical_completion": {
+    "utility": "complete",
+    "poisonedrag_n100": "complete",
+    "poisonedrag_epistemic_ablation": "complete",
+    "mutation_integrity_suite": "complete",
+    "blinded_human_agreement_audit": "complete_system_author_review",
+    "signed_scratch_brain_purges": "complete_verified_receipts"
+  },
+  "publication_evidence_sha256": "06afd5ba25c96d12c020df891e3711e821578df21d76c86c6398bc3792377a3f"
+}

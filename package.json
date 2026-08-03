@@ -1,0 +1,56 @@
+{
+  "name": "aimos-backend",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cryptographically auditable persistent memory backend for agents",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "migrate": "node migrations/run.js",
+    "test": "npm run test:source",
+    "test:source": "node scripts/test/run-source-tests.mjs",
+    "test:benchmark:contracts": "node scripts/test/run-source-tests.mjs --benchmark-only",
+    "test:security:isolated": "node scripts/test/run-isolated-security.mjs",
+    "test:release:artifact": "node scripts/test/verify-release-artifacts.mjs",
+    "test:release:public-tree": "node scripts/test/verify-public-source-tree.mjs",
+    "test:release:source": "npm run lint && npm run test:source && npm run test:benchmark:contracts && npm run test:architecture-authority && node scripts/test/gate-reserved-ports.mjs && npm run test:release:artifact && npm audit --omit=dev --audit-level=high",
+    "release:build-public-tree": "node scripts/release/build-public-repository.mjs",
+    "lint": "find server.js routes services jobs db middleware migrations scripts eval -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \\) -print0 | xargs -0 -n1 node --check",
+    "identity:enroll-master": "node scripts/identity/enroll-master.js",
+    "identity:enroll-agent": "node scripts/identity/enroll-agent.js",
+    "identity:revoke-agent": "node scripts/identity/revoke-agent.js",
+    "identity:authorize-recall": "node scripts/identity/authorize-recall.js",
+    "identity:init-authority": "node scripts/identity/init-architecture-authority.js",
+    "identity:set-config": "node scripts/identity/set-system-config.js",
+    "identity:toggle-governor-flag": "node scripts/identity/toggle-governor-flag.js",
+    "test:architecture-authority": "node scripts/identity/init-architecture-authority.js --dry-run",
+    "eval:locomo-longmem": "node eval/run-locomo-longmem-benchmarks.js",
+    "benchmark:isolated": "node scripts/benchmark/run-isolated.mjs",
+    "benchmark:mutation-integrity": "node scripts/benchmark/run-mutation-integrity-suite.mjs",
+    "benchmark:human-audit:prepare": "node scripts/benchmark/prepare-poisonedrag-human-audit.mjs",
+    "benchmark:human-audit:aggregate": "node scripts/benchmark/aggregate-poisonedrag-human-audit.mjs",
+    "benchmark:export:mutation-integrity": "node scripts/benchmark/export-mutation-integrity-evidence.mjs",
+    "benchmark:export:poisonedrag-epistemic": "node scripts/benchmark/export-poisonedrag-epistemic-verification.mjs",
+    "benchmark:export:publication": "node scripts/benchmark/export-publication-evidence.mjs",
+    "genesis:install": "node scripts/genesis-install.mjs",
+    "ceremony:purge:dry": "node scripts/ceremony/purge-brain.mjs",
+    "ceremony:purge": "node scripts/ceremony/purge-brain.mjs --live"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
+    "cors": "^2.8.5",
+    "express": "^5.2.1",
+    "express-rate-limit": "^8.5.2",
+    "node-cron": "^4.2.1",
+    "pg": "^8.11.3",
+    "yauzl": "^3.4.0"
+  },
+  "overrides": {
+    "adm-zip": "0.6.0",
+    "sharp": "0.35.3"
+  },
+  "engines": {
+    "node": "^20.0.0 || ^24.0.0"
+  }
+}

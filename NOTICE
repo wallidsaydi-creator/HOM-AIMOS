@@ -1,0 +1,17 @@
+AIMOS — cryptographically auditable persistent memory for agents
+Copyright (C) 2026 Walid Saidi
+
+The AIMOS-authored source in this repository is licensed under the GNU Affero
+General Public License, version 3 or any later version. See LICENSE.
+
+A separate commercial license may be available from the copyright holder. See
+COMMERCIAL-LICENSE.md. That notice grants no commercial rights by itself.
+
+Third-party software retains its own copyright and license. Runtime dependency
+licenses are enumerated in package-lock.json and the generated CycloneDX SBOM.
+
+Benchmark datasets are not licensed by this repository and are not
+redistributed as AIMOS source. LongMemEval, LoCoMo, Natural Questions/BEIR, and
+PoisonedRAG materials remain governed by their upstream terms. The public
+repository provides downloaders, pinned revisions, hashes, protocols, and
+sanitized derived evidence where permitted.
