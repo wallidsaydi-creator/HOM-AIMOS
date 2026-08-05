@@ -7,7 +7,7 @@
   "root_algorithm": "sha256(canonical-json(files))",
   "manifest_self_excluded": true,
   "file_count": 624,
-  "files_root_sha256": "afa0f3e449c25587b350341ce82ca0f4cac806d55b47cdcc20df2379f92c98a9",
+  "files_root_sha256": "888443914913fad715665dcebbaabc6e2fa72a1f68c66f857d83fe77b02c03f7",
   "files": [
     {
       "path": ".github/dependabot.yml",
@@ -817,7 +817,7 @@
     {
       "path": "package-lock.json",
       "bytes": 74486,
-      "sha256": "a7afa8fa79873d8e88b485a39adda9a7d0bdbca14d821e047b59f4b7d91363ff"
+      "sha256": "20eb1b4694b262a3d3f0137c5161ab68a27a273410c7e9581b27750943c8c7ea"
     },
     {
       "path": "package.json",
@@ -826,8 +826,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 13364,
-      "sha256": "f0da660e99e516d142fe7706e94b9e66a666eed7f17e581e4c82bcdd9cf6c009"
+      "bytes": 16070,
+      "sha256": "84f9f7a44f5309c7084ca266d1cdb93e0f343c8e2c7ffb866157b1005ac5ebae"
     },
     {
       "path": "RELEASE-TIERING.md",
@@ -3130,5 +3130,5 @@
       "sha256": "fb13e85af164d2bd34fe9d707d91ac31d77a4143de50bdacab5874895078daae"
     }
   ],
-  "manifest_sha256": "4484fcb7652322c49e8037da965c05de0b1046a3a021f7fc9fd291c35e5f55f3"
+  "manifest_sha256": "70d2b4c410f97f2f1c086dee89c3869310e2b31f800114b3387d5f0e081f6f9c"
 }

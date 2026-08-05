@@ -5,6 +5,42 @@ signed identity, append-only provenance, hybrid retrieval, temporal reasoning,
 and a housekeeper identity that owns autonomous maintenance without depending
 on an enrolled user agent.
 
+## Security is the architecture
+
+Persistent memory is an agent control surface: compromise what an agent is
+allowed to retain, adapt, or disclose and every downstream decision can be
+influenced. HOM-AIMOS therefore implements security inside the save, recall,
+mutation, credential, tool-action, and autonomous-maintenance paths rather than
+placing a security wrapper around storage.
+
+| Boundary | Implemented capability |
+|---|---|
+| Identity and authority | Certificate-bound Ed25519 identities; method-, path-, body-, and nonce-bound request signatures; exact signer-epoch authorization; replay and revocation checks; macOS Keychain custody |
+| Memory integrity | Immutable canonical versions, append-only provenance, and signed reversible epistemic labels bound to retained content hashes |
+| Authorized adaptation | Housekeeper-authorized, no-fork cognitive-weight transitions verified by the restricted database writer and an independent portable verifier |
+| Recall disclosure | Provenance and authorization admission, epistemic trust selection, bounded evidence, and RFC 6962-style domain-separated Merkle receipts |
+| Operational evidence | Append-only request, authorization, credential-use, tool-action, event, and cognitive-transition ledgers |
+| Runtime defense | Context-aware security decisions, canary write gates, post-run scheming assessment, and a cyber-security firewall on the declared agent execution path |
+| Defensive self-assessment | A diagnostic-only harness with OWASP-LLM-mapped campaigns, benign calibration, canary checks, and SABER-style posture scoring |
+
+Potentially poisoned content is retained rather than silently deleted. Signed
+epistemic state remains revisable and auditable, and recall consumes it as
+trust evidence. In the promoted PoisonedRAG N=100 run, no poison passage entered
+the attacked top-5 disclosures (0/100); when the signed-label retrieval policy
+was bypassed on the same target set, poison was retrieved for 94/100 targets.
+The complete results, denominators, uncertainty, and protocol boundaries are
+reported in [Measured](#measured) and the self-hashed publication aggregate.
+
+**Scope:** this release is a persistent-memory system with an implemented
+security architecture. It is not a formally certified security product and
+has not received an independent penetration test. Its cryptographic evidence
+supports integrity, authorization, traceability, and historical continuity;
+it does not establish that remembered content is true.
+
+See [SECURITY.md](SECURITY.md), [THREAT-MODEL.md](THREAT-MODEL.md), and the
+[cognitive-weight chain specification](docs/security/cognitive-weight-chain-SPEC.md)
+for the enforced boundaries and verification model.
+
 ## What HOM-AIMOS is
 
 HOM-AIMOS is a complete persistent-memory backend, not a provenance layer
