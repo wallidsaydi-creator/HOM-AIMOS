@@ -41,9 +41,9 @@
     "@huggingface/transformers": "^4.2.0",
     "cors": "^2.8.5",
     "express": "^5.2.1",
-    "express-rate-limit": "^8.5.2",
-    "node-cron": "^4.2.1",
-    "pg": "^8.11.3",
+    "express-rate-limit": "^8.6.1",
+    "node-cron": "^4.6.0",
+    "pg": "^8.22.0",
     "yauzl": "^3.4.0"
   },
   "overrides": {
