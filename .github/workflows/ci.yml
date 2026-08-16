@@ -52,6 +52,12 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: 'npm'
 
+      - name: Install locked Python verifier dependencies
+        run: |
+          python3 -m venv "$RUNNER_TEMP/aimos-python"
+          "$RUNNER_TEMP/aimos-python/bin/python" -m pip install --disable-pip-version-check --requirement verifiers/mutmem-python/requirements.lock
+          echo "$RUNNER_TEMP/aimos-python/bin" >> "$GITHUB_PATH"
+
       - name: Install locked dependencies
         run: npm ci
 

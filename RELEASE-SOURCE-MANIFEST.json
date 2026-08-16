@@ -7,7 +7,7 @@
   "root_algorithm": "sha256(canonical-json(files))",
   "manifest_self_excluded": true,
   "file_count": 836,
-  "files_root_sha256": "b50b7890db989a1333c23ca1bc3719a044af8b3bb71b87e1a6e74446f6646784",
+  "files_root_sha256": "bd75a0b5e9df701b812eac2e6be9bdeb008e93d795608106f19b4d53008c9df6",
   "files": [
     {
       "path": ".github/dependabot.yml",
@@ -16,8 +16,8 @@
     },
     {
       "path": ".github/workflows/ci.yml",
-      "bytes": 1707,
-      "sha256": "05e042b1cf86728a1e61fe22636919e3ed64b006b14c41af2cb536ccd1d2df59"
+      "bytes": 2048,
+      "sha256": "8dadf9ccd548cb637639e7cb33bda51e7d3f102d640977e715319538d5c7f9ff"
     },
     {
       "path": ".github/workflows/release-ceremony.yml",
@@ -31,8 +31,8 @@
     },
     {
       "path": ".gitleaks.toml",
-      "bytes": 1061,
-      "sha256": "c34ea00682c86e2064b1b8572880968ad56db6e10239fa8f27812484aea718f7"
+      "bytes": 1097,
+      "sha256": "07ce97d8d23c3f61c19f39b1d8295317a9b89287c9d82c0c5387fbfa50363e72"
     },
     {
       "path": ".npmignore",
@@ -4190,5 +4190,5 @@
       "sha256": "ca81f8cc2cb705c98a58901eeda2ebd55c48c20775ec070088b4597afaf7a557"
     }
   ],
-  "manifest_sha256": "d0105b14f96e2c77b8786ad179942405383a27b0b438d0603ac812a035b2cae4"
+  "manifest_sha256": "e5c867d19b985c8466aa56fd5983e7e9b4870b780522a5d99409371385285a25"
 }
