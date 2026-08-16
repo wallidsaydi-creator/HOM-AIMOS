@@ -1,0 +1,138 @@
+{
+  "SPDXID": "SPDXRef-DOCUMENT",
+  "spdxVersion": "SPDX-2.3",
+  "dataLicense": "CC0-1.0",
+  "name": "HOM-AIMOS MutMem independent Python verifier SBOM",
+  "documentNamespace": "https://hom.autos/spdx/mutmem-python-verifier/0.1.0",
+  "creationInfo": {
+    "created": "2026-08-12T00:00:00Z",
+    "creators": [
+      "Organization: HOM-AIMOS"
+    ]
+  },
+  "packages": [
+    {
+      "SPDXID": "SPDXRef-Package-CPython",
+      "name": "CPython",
+      "versionInfo": "3.14.2",
+      "downloadLocation": "https://www.python.org/downloads/release/python-3142/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Python-2.0",
+      "licenseDeclared": "Python-2.0",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "PLATFORM",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:generic/cpython@3.14.2"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-MutMemVerifier",
+      "name": "mutmem-python-verifier",
+      "versionInfo": "0.1.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "AGPL-3.0-only",
+      "licenseDeclared": "AGPL-3.0-only",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "APPLICATION",
+      "externalRefs": []
+    },
+    {
+      "SPDXID": "SPDXRef-Package-MutMemNodeRecallVerifier",
+      "name": "mutmem-node-recall-verifier",
+      "versionInfo": "0.1.0",
+      "downloadLocation": "NOASSERTION",
+      "filesAnalyzed": false,
+      "licenseConcluded": "AGPL-3.0-only",
+      "licenseDeclared": "AGPL-3.0-only",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "APPLICATION",
+      "externalRefs": []
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Cryptography",
+      "name": "cryptography",
+      "versionInfo": "49.0.0",
+      "downloadLocation": "https://pypi.org/project/cryptography/49.0.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0 OR BSD-3-Clause",
+      "licenseDeclared": "Apache-2.0 OR BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/cryptography@49.0.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-CFFI",
+      "name": "cffi",
+      "versionInfo": "2.0.0",
+      "downloadLocation": "https://pypi.org/project/cffi/2.0.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/cffi@2.0.0"
+        }
+      ]
+    },
+    {
+      "SPDXID": "SPDXRef-Package-Pycparser",
+      "name": "pycparser",
+      "versionInfo": "3.0",
+      "downloadLocation": "https://pypi.org/project/pycparser/3.0/",
+      "filesAnalyzed": false,
+      "licenseConcluded": "BSD-3-Clause",
+      "licenseDeclared": "BSD-3-Clause",
+      "copyrightText": "NOASSERTION",
+      "primaryPackagePurpose": "LIBRARY",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:pypi/pycparser@3.0"
+        }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-MutMemVerifier"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-MutMemVerifier",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-CPython"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-MutMemVerifier",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-Cryptography"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-Cryptography",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-CFFI"
+    },
+    {
+      "spdxElementId": "SPDXRef-Package-CFFI",
+      "relationshipType": "DEPENDS_ON",
+      "relatedSpdxElement": "SPDXRef-Package-Pycparser"
+    }
+  ]
+}

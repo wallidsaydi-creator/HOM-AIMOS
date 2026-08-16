@@ -215,6 +215,7 @@ export async function runSentinelCheck(payload = {}) {
   const summary = {
     pass,
     failed,
+    security_decision_event_id: seCheck.security_receipt?.event_id || null,
     content_sha: sha256(content),
     risk_level: pass ? 'low' : threatDiagnostics.threat_level,
     isCybersecAction: Boolean(payload.isCybersecAction),

@@ -42,50 +42,14 @@ import {
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { canonicalJson } from './protocol/canonical-json.js';
+
+export { canonicalJson } from './protocol/canonical-json.js';
 
 const DEFAULT_SKEW_SECONDS = 300;
-const CANONICAL_DEPTH_LIMIT = 32;
 const _certCache = new Map();
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// CANONICAL JSON (RFC 8785 practical subset)
-// ═══════════════════════════════════════════════════════════════════════════════
-// Sorted object keys (UTF-16 code-unit order), no insignificant whitespace,
-// integers and finite floats only, no NaN/Infinity, recursion-depth-limited.
-// Strings JSON-escaped; arrays preserve order. Sufficient for cert and payload
-// canonicalization within Aimos's domain. Not a full RFC 8785 implementation.
-
-export function canonicalJson(value, depth = 0) {
-  if (depth > CANONICAL_DEPTH_LIMIT) {
-    throw new Error('canonicalJson: depth limit exceeded');
-  }
-  if (value === null) return 'null';
-  if (value === undefined) {
-    throw new Error('canonicalJson: undefined is not serializable');
-  }
-  const t = typeof value;
-  if (t === 'boolean') return value ? 'true' : 'false';
-  if (t === 'number') {
-    if (!Number.isFinite(value)) {
-      throw new Error('canonicalJson: non-finite number');
-    }
-    return JSON.stringify(value);
-  }
-  if (t === 'string') return JSON.stringify(value);
-  if (t === 'bigint') {
-    throw new Error('canonicalJson: bigint not supported');
-  }
-  if (Array.isArray(value)) {
-    const parts = value.map(v => canonicalJson(v, depth + 1));
-    return '[' + parts.join(',') + ']';
-  }
-  if (t === 'object') {
-    const keys = Object.keys(value).sort();
-    const parts = keys.map(k => JSON.stringify(k) + ':' + canonicalJson(value[k], depth + 1));
-    return '{' + parts.join(',') + '}';
-  }
-  throw new Error(`canonicalJson: unsupported type ${t}`);
-}
+export const MASTER_CERTIFICATE_ISSUER = 'aimos-master';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // BASE64URL HELPERS
@@ -122,6 +86,37 @@ export function pubkeyEquals(a, b) {
   const bb = b64uToBuf(b);
   if (ba.length !== bb.length) return false;
   return ba.equals(bb);
+}
+
+/**
+ * Resolve the exact public key permitted to certify one retained identity.
+ *
+ * Current master-signed certificates use the symbolic `aimos-master` issuer.
+ * Older retained certificates used the enrolled master fingerprint. Both are
+ * valid only when the supplied master public key hashes to that exact retained
+ * fingerprint. No other non-self issuer is interpreted as master authority.
+ */
+export function resolveCertificateAuthorityPubkey({
+  certificateBody,
+  subjectPubkey,
+  masterPubkey,
+  masterFingerprint,
+} = {}) {
+  if (!certificateBody || typeof certificateBody !== 'object') return null;
+  if (certificateBody.issuer === certificateBody.agent_id) {
+    return typeof subjectPubkey === 'string' && subjectPubkey ? subjectPubkey : null;
+  }
+  const masterIssuer = certificateBody.issuer === MASTER_CERTIFICATE_ISSUER
+    || certificateBody.issuer === masterFingerprint;
+  if (!masterIssuer || typeof masterPubkey !== 'string' || !masterPubkey
+      || !/^[0-9a-f]{64}$/.test(String(masterFingerprint || ''))) {
+    return null;
+  }
+  try {
+    return pubkeyFingerprint(masterPubkey) === masterFingerprint ? masterPubkey : null;
+  } catch {
+    return null;
+  }
 }
 
 function loadPub(pubkeyB64u) {
@@ -233,7 +228,12 @@ export async function getAgentCert(agentId, opts = {}) {
     } catch {
       throw new Error('getAgentCert: cert_malformed');
     }
-    const rootPubkey = certBody?.issuer === id ? row.pubkey : row.master_pubkey;
+    const rootPubkey = resolveCertificateAuthorityPubkey({
+      certificateBody: certBody,
+      subjectPubkey: row.pubkey,
+      masterPubkey: row.master_pubkey,
+      masterFingerprint: row.enrolled_master_fingerprint,
+    });
     if (!rootPubkey) throw new Error('getAgentCert: certificate_authority_missing');
     const certProof = verifyCertChain(cert, rootPubkey, { nowFn: () => Math.floor(nowMs / 1000) });
     const validFromUnix = Math.floor(new Date(row.agent_valid_from).getTime() / 1000);

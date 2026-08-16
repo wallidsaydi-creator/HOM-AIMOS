@@ -19,7 +19,7 @@
 #
 # Assertions cover state, durable evidence, and non-empty outputs.
 #
-# SAFETY: refuses to run against `oracle` or `aimos_dev`. Resolves the selected
+# SAFETY: refuses to run against protected legacy database names. Resolves the selected
 # PostgreSQL 18 toolchain without assuming CPU architecture or patch version.
 # ─────────────────────────────────────────────────────────────────────────────
 set -uo pipefail

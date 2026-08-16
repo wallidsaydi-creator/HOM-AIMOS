@@ -163,21 +163,18 @@ function scopeIdsFromSelection(file, benchmark, runId) {
   const selection = JSON.parse(fs.readFileSync(file, 'utf8'));
   const unsigned = { ...selection };
   delete unsigned.selection_sha256;
-  if (selection?.schema !== 'hom.canonical-query-selection/v1'
+  const canonicalSelection = selection?.schema === 'hom.canonical-query-selection/v1';
+  const twinPrimeDiagnosticSelection = selection?.schema === 'hom.twin-prime-g1p-selection/v1';
+  if ((!canonicalSelection && !twinPrimeDiagnosticSelection)
     || selection.run_id !== runId
     || selection.benchmark !== benchmark
     || selection.question_count !== selection.entries?.length
     || selection.selection_sha256 !== sha256(JSON.stringify(unsigned))) {
     throw new Error('query_selection_invalid');
   }
-  const allowedEntryKeys = new Set([
-    'question_id',
-    'unit_id',
-    'scope_id',
-    'source_filter',
-    'input_sha256',
-    'gold_sha256',
-  ]);
+  const allowedEntryKeys = canonicalSelection
+    ? new Set(['question_id', 'unit_id', 'scope_id', 'source_filter', 'input_sha256', 'gold_sha256'])
+    : new Set(['question_id', 'unit_id', 'scope_id', 'source_filter', 'input_sha256', 'category']);
   for (const entry of selection.entries) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)
       || Object.keys(entry).some((key) => !allowedEntryKeys.has(key))

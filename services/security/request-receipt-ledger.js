@@ -239,9 +239,8 @@ export async function readVerifiedRequestReceiptById({
     if (ownsTransaction) await conn.query('BEGIN');
     await conn.query('SELECT set_config($1,$2,true)', ['app.current_client_id', company]);
     await conn.query('SELECT set_config($1,$2,true)', ['app.current_agent_id', 'housekeeper']);
-    const [locator, stream, master] = await Promise.all([
-      conn.query(
-        `SELECT receipt.*, identity.pubkey, identity.cert,
+    const locator = await conn.query(
+      `SELECT receipt.*, identity.pubkey, identity.cert,
                 revocation.ts_signed AS revocation_ts_signed
            FROM aimos_request_receipts receipt
            JOIN agent_identity identity
@@ -253,19 +252,20 @@ export async function readVerifiedRequestReceiptById({
           WHERE receipt.request_receipt_id = $1
             AND receipt.company_id = $2
             AND receipt.actor_agent_id = $3`,
-        [receiptId, company, actor],
-      ),
-      conn.query(
-        `SELECT request_receipt_id, company_id, actor_agent_id, actor_valid_from,
+      [receiptId, company, actor],
+    );
+    const stream = await conn.query(
+      `SELECT request_receipt_id, company_id, actor_agent_id, actor_valid_from,
                 request_sig_form, signed_method, signed_path, signed_claims,
                 signed_claims_hash, request_hash, prev_mutation_hash, mutation_hash,
                 ts_signed, nonce, sig, is_genesis
            FROM aimos_request_receipts
           WHERE company_id = $1 AND actor_agent_id = $2`,
-        [company, actor],
-      ),
-      conn.query('SELECT master_pubkey FROM aimos_master_identity WHERE id = 1'),
-    ]);
+      [company, actor],
+    );
+    const master = await conn.query(
+      'SELECT master_pubkey FROM aimos_master_identity WHERE id = 1',
+    );
     const row = locator.rows[0];
     if (!row) throw new Error('request_receipt_authority_not_found');
     const actorEpoch = new Date(row.actor_valid_from).toISOString();

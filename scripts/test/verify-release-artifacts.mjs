@@ -49,6 +49,8 @@ const forbidden = [
   /^services\/PHASE_0_STATUS\.md$/,
   /^tests\/benchmark\/(?:canonical-aggregate|canonical-corpus|canonical-single-query|locomo-official-protocol|poisonedrag-protocol|replay-sessions|run-isolated-resume)\.test\.mjs$/,
   /^architecture-authority\.json$/,
+  /(?:^|\/)__pycache__\//,
+  /\.pyc$/i,
   /(?:^|\/)\.env(?:\.|$)/,
   /\.pdf$/i,
 ];

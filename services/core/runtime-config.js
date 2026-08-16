@@ -10,7 +10,7 @@ import os from 'node:os';
 export const AIMOS_COMPANY_ID = 'hom';
 export const AIMOS_RUNTIME_ROLE = 'agent_runtime';
 export const AIMOS_RUNTIME_CREDENTIAL_SERVICE = 'agent_runtime_db_password';
-export const ORACLE_RESERVED_PORTS = Object.freeze([9000, 9001]);
+export const RESERVED_LEGACY_PORTS = Object.freeze([9000, 9001]);
 
 function cliValue(name, argv = process.argv.slice(2)) {
   const prefix = `${name}=`;
@@ -27,8 +27,8 @@ export function resolveAimosServerPort(argv = process.argv.slice(2)) {
   if (!Number.isInteger(port) || port < 1024 || port > 65535) {
     throw new Error(`Invalid --aimos-port value: ${raw}`);
   }
-  if (ORACLE_RESERVED_PORTS.includes(port)) {
-    throw new Error(`Refusing AIMOS port ${port}: reserved for HOM Oracle`);
+  if (RESERVED_LEGACY_PORTS.includes(port)) {
+    throw new Error(`Refusing AIMOS port ${port}: reserved for a separate legacy runtime`);
   }
   return port;
 }
@@ -41,8 +41,8 @@ export const AIMOS_API_BASE_URL = `${AIMOS_HTTP_ORIGIN}/aimos`;
  * Validate a signed HTTP-origin configuration value used by AIMOS transports.
  * Paths, credentials, query strings, and fragments are forbidden so callers
  * cannot disagree about whether a configured value is an origin or endpoint.
- * Oracle ports are rejected regardless of hostname: this fork must never be
- * configured back onto Oracle's runtime surface.
+ * Legacy runtime ports are rejected regardless of hostname: AIMOS must never
+ * be configured onto another system's runtime surface.
  */
 export function validateAimosHttpOrigin(value, configKey = 'AIMOS_HTTP_ORIGIN') {
   const raw = String(value ?? '').trim();
@@ -68,8 +68,8 @@ export function validateAimosHttpOrigin(value, configKey = 'AIMOS_HTTP_ORIGIN') 
   const effectivePort = parsed.port
     ? Number(parsed.port)
     : (parsed.protocol === 'https:' ? 443 : 80);
-  if (ORACLE_RESERVED_PORTS.includes(effectivePort)) {
-    return { ok: false, reason: 'oracle_port_reserved' };
+  if (RESERVED_LEGACY_PORTS.includes(effectivePort)) {
+    return { ok: false, reason: 'legacy_port_reserved' };
   }
 
   return {

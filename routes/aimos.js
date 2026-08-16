@@ -79,16 +79,10 @@ import { temporalSemanticMemoryScores } from '../services/temporal/temporal-sema
 import { xmemoryScores } from '../services/retrieval/xmemory-beyond-rag.js';
 import { emberRetentionScores } from '../services/retrieval/ember-retention-memory.js';
 import { contextualIntentScores } from '../services/retrieval/contextual-intent-memory.js';
-import { hmemScores } from '../services/retrieval/hmem-hierarchical-reasoning.js';
-import { hageScores } from '../services/retrieval/hage-hybrid-agent-graph.js';
 import { hebbianProjectionScores } from '../services/learning/hebbian-orthogonal-projection.js';
-import { hindsightMemoryGraphScores } from '../services/retrieval/hindsight-memory-graph.js';
-import { hingeMemScores } from '../services/retrieval/hingemem-boundary-hypergraph.js';
 import { longMemEvalV2Scores } from '../services/retrieval/longmemeval-v2-context-gathering.js';
 import { memAuditScores } from '../services/retrieval/memaudit-package-audit.js';
 import { memMachineScores } from '../services/retrieval/memmachine-retrieval-agent.js';
-import { reconstructedGraphMemoryScores } from '../services/retrieval/reconstructed-graph-memory.js';
-import { mnemisScores } from '../services/retrieval/mnemis-dual-route-graph.js';
 import { neuroplasticityScores } from '../services/learning/neuroplasticity-stability-control.js';
 import { neurogenesisScores } from '../services/learning/neurogenesis-catastrophic-forgetting.js';
 import { prismScores } from '../services/retrieval/prism-typed-path-retrieval.js';
@@ -1163,6 +1157,10 @@ function verifiedRequestAuthorityFromReq(req) {
     signedMethod: req.identitySignedMethod,
     signedPath: req.identitySignedPath,
     signedClaims: req.identitySignedClaims,
+    requestReceiptId: req.executionContext?.requestReceiptId || null,
+    requestReceiptMutationHash: req.executionContext?.requestReceiptMutationHash || null,
+    requestAdmissionEventId: req.executionContext?.requestAdmissionEventId || null,
+    requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash || null,
   };
 }
 
@@ -1181,7 +1179,7 @@ async function requireSessionWriteContext(req, res) {
     return null;
   }
   let clearanceCeiling = 0;
-  if (identity.tier === 'T1_SYSTEM_SELF' && identity.agentId === 'housekeeper') {
+  if (['T1', 'T1_SYSTEM_SELF'].includes(identity.tier) && identity.agentId === 'housekeeper') {
     clearanceCeiling = 12;
   } else {
     const grant = await recallAuthorizationService.getEffective({
@@ -1773,7 +1771,7 @@ router.post('/save', async (req, res, next) => {
   }
 
   let actorClearance = 0;
-  if (identityTier === 'T1_SYSTEM_SELF' && agent_id === 'housekeeper') {
+  if (['T1', 'T1_SYSTEM_SELF'].includes(identityTier) && agent_id === 'housekeeper') {
     actorClearance = 12;
   } else {
     const memoryAuthority = await recallAuthorizationService.getEffective({
@@ -1802,7 +1800,9 @@ router.post('/save', async (req, res, next) => {
     value,
     companyId: company_id || req.executionContext.companyId,
     agentId: agent_id,
+    runId: req.executionContext.requestReceiptId || '',
     authority: requestAuthority,
+    parentEventId: req.executionContext.requestAdmissionEventId || null,
   });
   let securityDecision = evaluateSecurityContent({
     text: typeof value === 'string' ? value : JSON.stringify(value),
@@ -1880,11 +1880,13 @@ router.post('/save', async (req, res, next) => {
         const valueStr = typeof value === 'string' ? value : JSON.stringify(value);
         const existingVal = undefined; // new write, no existing value in request context
         // R11b: thread the VERIFIED identity (tier + cert agent id) so the
-        // write-validator can grant the system self intrinsic write authority
-        // (the exact T1_SYSTEM_SELF housekeeper principal) without an agent_session.
+        // write-validator can grant intrinsic system-role write authority to
+        // the exact housekeeper principal under either its retained Genesis
+        // T1_SYSTEM_SELF cert or its master-signed T1 custody successor.
         writeValidation = await validateWrite(agent_id || 'app', key, valueStr, existingVal, {
           identityTier,
-          verifiedAgentId: req.identityCert?.agent_id || null
+          verifiedAgentId: req.identityCert?.agent_id || null,
+          executionContext: req.executionContext,
         });
         if (!writeValidation.valid) {
           return res.status(400).json({
@@ -2203,6 +2205,10 @@ async function handleAimosRecall(req, res, next) {
       signedMethod: req.identitySignedMethod,
       signedPath: req.identitySignedPath,
       signedClaims: req.identitySignedClaims,
+      requestReceiptId: req.executionContext?.requestReceiptId || null,
+      requestReceiptMutationHash: req.executionContext?.requestReceiptMutationHash || null,
+      requestAdmissionEventId: req.executionContext?.requestAdmissionEventId || null,
+      requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash || null,
     };
     const recallText = String(req.body?.query || req.body?.q || req.body?.key || req.body?.memory_id || '');
     const securityDecision = evaluateSecurityContent({
@@ -4211,6 +4217,10 @@ router.post('/mcp/tools/call', async (req, res, next) => {
         signedMethod: req.identitySignedMethod,
         signedPath: req.identitySignedPath,
         signedClaims: req.identitySignedClaims,
+        requestReceiptId: req.executionContext?.requestReceiptId || null,
+        requestReceiptMutationHash: req.executionContext?.requestReceiptMutationHash || null,
+        requestAdmissionEventId: req.executionContext?.requestAdmissionEventId || null,
+        requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash || null,
       };
       const recallAuthority = await resolveNativeRecallAuthority({
         rawCommand: args,
@@ -4254,7 +4264,44 @@ router.post('/mcp/tools/call', async (req, res, next) => {
         signedMethod: req.identitySignedMethod,
         signedPath: req.identitySignedPath,
         signedClaims: req.identitySignedClaims,
+        requestReceiptId: req.executionContext?.requestReceiptId || null,
+        requestReceiptMutationHash: req.executionContext?.requestReceiptMutationHash || null,
+        requestAdmissionEventId: req.executionContext?.requestAdmissionEventId || null,
+        requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash || null,
       };
+      const canaryDecision = await evaluateCanaryWrite({
+        key,
+        value,
+        companyId: company,
+        agentId: actor,
+        runId: req.executionContext.requestReceiptId || '',
+        authority: requestAuthority,
+        parentEventId: req.executionContext.requestAdmissionEventId || null,
+      });
+      let securityDecision = evaluateSecurityContent({
+        text: typeof value === 'string' ? value : JSON.stringify(value),
+        operation: 'memory_save',
+        contentType: memory_type,
+        key,
+        source: source || 'aimos-mcp-legacy',
+        transport: 'legacy_mcp',
+      });
+      if (canaryDecision.quarantine && !securityDecision.quarantine) {
+        securityDecision = {
+          ...securityDecision,
+          action: 'retain_quarantine',
+          reason: canaryDecision.reason,
+          severity: 'critical',
+          quarantine: true,
+          liveSignals: [...securityDecision.liveSignals, { tag: 'canary_persistence_boundary', severity: 'critical' }],
+        };
+      }
+      const securityReceipt = await appendSecurityDecision(securityDecision, {
+        companyId: company,
+        subjectAgentId: actor,
+        authority: requestAuthority,
+        parentEventId: canaryDecision.event_receipt?.event_id || null,
+      });
       const saved = await persistMemory({
         company_id: company,
         agent_id: actor,
@@ -4264,6 +4311,7 @@ router.post('/mcp/tools/call', async (req, res, next) => {
         clearance_level,
         memory_type,
         source,
+        security_disposition: { decision: securityDecision, receipt: securityReceipt },
         mutation_authority: requestAuthority,
       });
       if (saved?.rejected) {
@@ -4282,6 +4330,8 @@ router.post('/mcp/tools/call', async (req, res, next) => {
         epistemic_confidence_milli: Number(saved?.epistemic_confidence_milli || 0),
         epistemic_classification_event_id: saved?.epistemic_classification_event_id || null,
         epistemic_classification_hash: saved?.epistemic_classification_hash || null,
+        quarantined: saved?.quarantined === true,
+        security_decision_event_id: saved?.security_decision_event_id || securityReceipt.event_id,
       });
     }
 

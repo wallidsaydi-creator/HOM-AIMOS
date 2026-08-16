@@ -81,6 +81,18 @@ Aimos is a memory OS backed by PostgreSQL + pgvector (768d embeddings). It retai
 
 **Truth hierarchy:** Aimos > Files on disk > Session context. If they disagree, Aimos wins.
 
+### Retrieval composition law
+
+Retrieval mechanisms are bounded marginal gears inside one native engine. A
+graph, vector index, sparse channel, temporal channel, or structured-query
+mechanism contributes evidence by addition; it does not replace the established
+retrieval stack or own disclosure. The complete provenance-admitted baseline is
+candidate-monotone, and every graph discovery must re-enter the same principal,
+epistemic, Canary, SABER, Aladdin, and signed-recall boundaries. New graph gears
+are evaluated one at a time. Correlated graph sub-gears are normalized through
+one bounded graph-family channel so adding implementations cannot manufacture
+additional outer fusion authority.
+
 ---
 
 ## 2. Core Endpoints (Quick Reference)
@@ -365,12 +377,12 @@ Every memory always includes `timem` with day/session coordinates. Use `temporal
 
 **Note:** In standard `mode=linear`, top-level keys are `memories`, `working_memory`, `recall_meta`, `cache_hit`, `hallucination_risk`, `cached_at`. In `mode=adaptive`, keys are `results` and `metadata` (different schema).
 
-### The 17-Stage Recall Pipeline (with Stage Zero)
+### The 21-Stage Native Recall Pipeline
 
 ```
 Query arrives
   │
-  ├─  0. temporal_scoping ──────── Pre-pipeline: identify relevant days/sessions
+  ├─     temporal_scoping ──────── Prelude: identify relevant days/sessions
   │     ├─  Lightweight SQL pass matching keywords + tsvector
   │     ├─  Extract top 3 day buckets from recent matching memories
   │     └─  Feed source_boost into hybrid query (recent <1d: +0.05, <7d: +0.10, <30d: +0.20)
@@ -384,43 +396,46 @@ Query arrives
   │     └─ UNION ALL → deduplicated candidate set
   │     └─ RRF scoring combines vector/BM25 channels with signed retrieval-weight projection
   │                      + BM25 ts_rank * 3.0 + key similarity * 2.0
-  ├─  4. entity_recall ────────── HippoRAG: extract entities from query →
+  ├─  4. quim_lookup ──────────── Query-indexed-memory evidence channel
+  ├─  5. entity_recall ────────── HippoRAG: extract entities from query →
   │                                look up entity_memory_edges → inject unseen memories
-  ├─  5. recursive_graph_walk ─── WITH RECURSIVE on memory_cross_refs (1-4 hops)
+  ├─  6. recursive_graph_walk ─── WITH RECURSIVE on memory_cross_refs (1-4 hops)
   │                                each memory gets graph_links[] with connected memories
-  ├─  6. bm25_rescue ──────────── Second BM25 pass to catch what vector search missed
+  ├─  7. bm25_rescue ──────────── Second BM25 pass to catch what vector search missed
   │                                (large documents dilute embeddings)
-  ├─  7. reranking ────────────── BM25-inspired term overlap + recency boost
+  ├─  8. reranking ────────────── BM25-inspired term overlap + recency boost
   │                                ≤24h: +0.15, ≤7d: +0.10, ≤30d: +0.05
   │                                Uniformity guard: if all rerank scores identical (stdDev < 0.05),
   │                                early exit is blocked and confidence formula shifts to recency/authority
-  ├─  8. qmd_activation ───────── If top_rerank <= 0.6 OR avg_rerank < 0.4:
+  ├─  9. qmd_activation ───────── If top_rerank <= 0.6 OR avg_rerank < 0.4:
   │     ├─ Channel 1: Full-text search via tsvector (OR between terms)
   │     └─ Channel 2: Key-pattern + metadata search (papers, techniques)
   │     └─ Boost procedural_seed/procedural/tacit_knowledge +0.15
-  ├─  9. hyde_expansion ───────── If still low quality (top <= 0.5, avg < 0.3):
+  ├─ 10. hyde_expansion ───────── If still low quality (top <= 0.5, avg < 0.3):
   │                                HyDE (Hypothetical Document Embedding) expands query
   │                                multi-stage retrieval with expanded embedding
-  ├─ 10. early_exit_decision ──── If enabled by signed/request-scoped policy:
+  ├─ 11. magma_native_gear ────── Bounded lineage evidence joins the central native RRF
+  │                                baseline candidates remain candidate-monotone
+  ├─ 12. early_exit_decision ──── If enabled by signed/request-scoped policy:
   │                                exit if (top_1 > 0.82 AND gap > 0.15)
   │                                     OR (MVS < 0.42 AND avg_top5 > 0.65)
-  │                                 ↳ SKIP stages 11-15, return immediately
-  ├─ 11. salience_annotation ──── Annotate low-frequency evidence without suppressing eligibility
-  ├─ 12. trust_scoring ────────── rankByTrust(): credit_score, access patterns, age
-  ├─ 13. concept_graph_ppr ────── HippoRAG PPR (Personalized PageRank) on knowledge graph
+  │                                 ↳ SKIP optional enrichment; epistemic/security closure still runs
+  ├─ 13. salience_frequency_evaluation ─ Annotate low-frequency evidence without suppressing eligibility
+  ├─ 14. trust_scoring ────────── rankByTrust(): credit_score, access patterns, age
+  ├─ 15. concept_graph_ppr ────── HippoRAG PPR (Personalized PageRank) on knowledge graph
   │                                discovers memories by graph structure, not just text
   │                                PPR-only results are hydrated (content fetched from DB)
-  ├─ 14. recall_calibration ───── LMS (Least Mean Squares) calibration on rerank + trust
+  ├─ 16. recall_calibration ───── LMS (Least Mean Squares) calibration on rerank + trust
   │                                corrects systematic over/under-confidence
-  ├─ 15. mnemonic_encoding ────── Style match: query encoding style vs memory encoding
+  ├─ 17. mnemonic_encoding ────── Style match: query encoding style vs memory encoding
   │                                (visual_hook, narrative, procedural, etc.)
-  ├─ 16. confidence_scoring ───── Final composite score per memory:
+  ├─ 18. context_building ─────── Build bounded working-memory context
+  ├─ 19. confidence_scoring ───── Final composite score per memory:
   │     ├─ Default: semantic(46.6%) + authority(25%) + keyword(11.4%) + recency(5.7%) + type_authority(11.3%)
   │     ├─ Uniform rerank fallback: recency(20%) + authority(35%) + type_authority(25%) + freshness(20%)
   │     └─ Early exit uses: rerank(40%) + recency(20%) + authority(25%) + type_authority(15%)
-  ├─ 17. final_sort ──────────── TiMem-guided sort: day bucket → TMT level → confidence
-  │                                Chronological override if sort=chronological (newest-first)
-  │                                Every memory gets timem envelope with day/session/week coordinates
+  ├─ 20. epistemic_trust_selection ─ Signed epistemic admission and disclosure selection
+  ├─ 21. response_formatting ──── Response projection, TiMem envelope, and signed recall evidence
   └─ Response: memories[] + working_memory + recall_meta + temporal_scope + cache fill
 ```
 
@@ -515,7 +530,7 @@ The former route-level Knowledge Gate is retired. Paper-backed mathematical serv
 ### Early Exit Gate (Recall)
 **File:** `services/retrieval/adaptive-early-exit.js`
 **When:** enabled by verified signed or request-scoped configuration
-**What:** Skips stages 11-15 if confidence is already high enough. Saves ~50ms per recall.
+**What:** Skips optional post-fusion enrichment when confidence is already high enough. Signed epistemic selection, graph-security closure, Aladdin retention, and final recall evidence remain mandatory.
 
 ### Salience Annotation (Recall)
 **File:** `services/temporal/dormancy-manager.js`
@@ -526,7 +541,7 @@ The former route-level Knowledge Gate is retired. Paper-backed mathematical serv
 
 ## 9. Paper Provenance & Service Annotations
 
-The manifest currently binds 275 service files. Mathematical, graph, temporal, retrieval, and cognitive services trace their techniques to the cited local papers; infrastructure services instead declare their native ownership and connection contract.
+The manifest currently binds 300 service files. Mathematical, graph, temporal, retrieval, and cognitive services trace their techniques to the cited local papers; infrastructure services instead declare their native ownership and connection contract.
 
 ### How Paper Provenance Works
 
@@ -587,10 +602,10 @@ Every service has two annotation blocks:
 
 | Domain | Count | Key Papers |
 |--------|-------|------------|
-| `retrieval/` | 55 | HippoRAG, Adaptive RAG, QuIM-RAG, OrgForge RRF, GroupRAG |
+| `retrieval/` | 68 | HippoRAG, Adaptive RAG, QuIM-RAG, OrgForge RRF, GroupRAG |
 | `learning/` | 23 | STDP (SynForceNet), SPICED, SM-2, Prospect Theory, R-MDP |
 | `orchestration/` | 43 | DISARM, HVR-Met, DIG, ContextCov, Constitutional Monitoring |
-| `security/` | 36 | OWASP, Mitnick, Cialdini, Defensive Refusal Bias, Agentic P2P |
+| `security/` | 48 | OWASP, Mitnick, Cialdini, Defensive Refusal Bias, Agentic P2P |
 | `dream/` | 5 | SPICED (NeurIPS 2025), ThaCo, Sleep Homeostatic, MemGPT |
 | `write/` | 13 | Aladdin Law, Sutton&Barto RPE, Channel Separation |
 | `observe/` | 22 | OpenTelemetry, Senge, Moltbook, SVDD Anomaly |
@@ -624,14 +639,14 @@ Every service file contains a standardized header:
 // ─────────────────────────────────────────────────────────────────────────────
 ```
 
-**Pipeline Manifest:** `services/pipeline-manifest.js` — 146 declared service connections across 6 pipelines, validated at boot.
+**Pipeline Manifest:** `services/pipeline-manifest.js` — 156 declared service connections across 6 pipelines, validated at boot.
 
 **The 6 Pipelines:**
 
 | Pipeline | Entry | Declared service modules |
 |----------|-------|-------------------------:|
 | Save | `routes/aimos.js` | 13 |
-| Recall | `services/retrieval/native-recall-pipeline.js` | 68 |
+| Recall | `services/retrieval/native-recall-pipeline.js` | 78 |
 | Agent Run | `services/orchestration/agent-runner.js` | 34 |
 | Dream | `jobs/nightly-dream.js` | 20 |
 | Heartbeat | `jobs/heartbeat.js` | 1 |

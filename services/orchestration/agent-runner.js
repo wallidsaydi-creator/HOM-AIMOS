@@ -951,7 +951,9 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
     {
       sourceAgentId,
       targetAgentId: runtimeAgent.id,
-      parentEventId: options.securityParentEventId || null,
+      parentEventId: options.securityParentEventId
+        || options.executionContext?.requestAdmissionEventId
+        || null,
       authority: options.executionContext || options.credentialUseContext || null,
     },
   );

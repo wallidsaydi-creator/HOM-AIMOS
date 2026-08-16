@@ -10,11 +10,13 @@ import {
 } from '../../services/security/agent-identity.js';
 import {
   EVENT_LEDGER_VERSION,
-  eventGenesisHash,
-  eventMutationHash,
   verifyEventLedgerChain,
   verifyEventProof,
 } from '../../services/observe/event-ledger.js';
+import {
+  eventGenesisHash,
+  eventMutationHash,
+} from '../../services/security/protocol/mutmem-protocol.js';
 
 function sha256(value) {
   return createHash('sha256').update(value).digest();

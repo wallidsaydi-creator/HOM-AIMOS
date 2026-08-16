@@ -1,8 +1,7 @@
 # HOM-AIMOS public deployment and first-run ceremony
 
-This is the canonical public-install flow for the AIMOS fork. Oracle is a
-different system: ports `9000` and `9001` are reserved and must never be used by
-AIMOS. AIMOS defaults to `127.0.0.1:9100`.
+This is the canonical public-install flow for AIMOS. AIMOS defaults to
+`127.0.0.1:9100`; other runtimes are outside this deployment boundary.
 
 There is no `.env` configuration lane. Bootstrap facts come from versioned
 source or explicit non-secret CLI arguments; mutable policy is master-signed in
@@ -114,7 +113,7 @@ npm start -- --aimos-db aimos --aimos-port 9100
 Expected topology:
 
 - AIMOS: `127.0.0.1:9100`.
-- Oracle, if installed separately: outside this runtime and never an AIMOS target.
+- any separately installed legacy runtime: outside AIMOS and never an AIMOS target.
 - no ART sidecar and no second AIMOS authority server.
 
 The server verifies signed configuration and credentials, checks Guide and
@@ -199,7 +198,7 @@ npm run test:release:source
 
 For the disposable full Genesis/security ceremony, stop AIMOS 9100 first so the
 test can replace and restore the shared housekeeper certificate cache without a
-live process observing the temporary identity. Oracle remains untouched.
+live process observing the temporary identity. Other runtimes remain untouched.
 
 ```sh
 npm run test:security:isolated

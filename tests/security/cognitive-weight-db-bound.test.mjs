@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { cognitiveTransitionHash } from '../../services/security/housekeeper-signer.js';
+import { cognitiveTransitionHash } from '../../services/security/protocol/mutmem-protocol.js';
 
 const ROOT = new URL('../../', import.meta.url);
 

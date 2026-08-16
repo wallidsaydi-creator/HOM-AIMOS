@@ -249,7 +249,7 @@ function buildExecutionPlan(args, inputs, sourceBinding) {
   return plan;
 }
 
-async function signedPost(origin, route, body) {
+export async function signedPost(origin, route, body) {
   const signed = await signAsHousekeeper(body, { method: 'POST', path: route });
   const started = performance.now();
   const response = await fetch(`${origin}${route}`, {
@@ -321,7 +321,7 @@ export function mergeHydratedCandidate(trace, row) {
   };
 }
 
-async function hydrateCandidates(candidateSet) {
+export async function hydrateCandidates(candidateSet) {
   if (!Array.isArray(candidateSet) || candidateSet.length < 1) {
     throw new Error('ablation_candidate_trace_empty');
   }

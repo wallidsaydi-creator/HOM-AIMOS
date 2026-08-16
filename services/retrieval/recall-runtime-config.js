@@ -21,7 +21,6 @@ export const RECALL_SPEED_CONFIG = Object.freeze({
     fallbackQmdThreshold: 0.60,
   }),
   hybridWeights: Object.freeze({ vector: 0.65, bm25: 0.35 }),
-  quim: Object.freeze({ get enabled() { return enabled('RECALL_QUIM_ENABLED'); } }),
   governance: Object.freeze({ get enabled() { return enabled('RECALL_GOVERNANCE_ENABLED'); } }),
   instrumentation: Object.freeze({ get enabled() { return enabled('RECALL_INSTRUMENTATION_ENABLED'); } }),
   temporalTruth: Object.freeze({

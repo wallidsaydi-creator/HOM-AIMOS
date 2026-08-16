@@ -12,6 +12,12 @@ versioning after the first signed release.
 - Public deployment, contribution, security, threat-model, and agent guidance.
 - Clean-macOS prerequisite preflight and reviewed Homebrew/Genesis installer.
 - SHA-256, CycloneDX SBOM, and GitHub keyless release-provenance workflow.
+- Master-signed MAGMA candidate selection with principal-scoped native graph
+  reads, downstream epistemic/Canary/retention closure, and signed recall
+  evidence.
+- SABER-inspired operational red-team evidence with fixed manifests, signed
+  per-case decisions, portable campaign commitments, and signed terminal or
+  failed outcomes.
 
 ### Changed
 
@@ -26,6 +32,10 @@ versioning after the first signed release.
 
 - Production dependency audit is release-blocking.
 - GitHub Actions and model artifacts are pinned to immutable revisions.
+- Campaign diagnostics reconstruct from verified terminal event identifiers;
+  caller-supplied security aggregates are rejected.
+- Explicit Canary traversal boundaries are documented separately from
+  unmarked-poison epistemic classification.
 
 ## [1.0.0] - Pending
 

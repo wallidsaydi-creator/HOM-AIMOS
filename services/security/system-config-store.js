@@ -115,7 +115,11 @@ async function verifyConfigRow(row, masterPubkey, previous = null) {
   if (!validated.ok) {
     return { ok: false, reason: `INVALID_VALUE:${validated.reason}` };
   }
-  return { ok: true, value: validated.value };
+  return {
+    ok: true,
+    value: validated.value,
+    mutationHash: Buffer.from(row.mutation_hash).toString('hex'),
+  };
 }
 
 export function createSystemConfigStore(deps = {}) {
@@ -128,7 +132,9 @@ export function createSystemConfigStore(deps = {}) {
     : () => masterPubkeyCache.get();
   const logEventFn = typeof deps.logEventFn === 'function' ? deps.logEventFn : logEvent;
 
-  // name → { value: string, verified_at: number, source: 'verified' | 'fail_null' }
+  // name → { value, mutation_hash, verified_at, source }. The mutation hash
+  // is retained from the same fully verified row; consumers never re-query a
+  // raw configuration row to recover policy identity.
   const store = new Map();
   let loaded = false;
   let loading = null;
@@ -193,6 +199,7 @@ export function createSystemConfigStore(deps = {}) {
       }
       next.set(row.config_key, {
         value: verification.value,
+        mutation_hash: verification.mutationHash,
         verified_at: nowFn(),
         source: 'verified'
       });
@@ -233,6 +240,17 @@ export function createSystemConfigStore(deps = {}) {
     return entry.value;
   }
 
+  function readVerifiedConfig(name) {
+    const entry = store.get(name);
+    if (!entry) return null;
+    return Object.freeze({
+      value: entry.value,
+      mutation_hash: entry.mutation_hash,
+      verified_at: entry.verified_at,
+      source: entry.source,
+    });
+  }
+
   function isLoaded() {
     return loaded;
   }
@@ -245,7 +263,7 @@ export function createSystemConfigStore(deps = {}) {
     return refresh({ preserveCurrent: true });
   }
 
-  return { loadAll, reload, readConfigString, isLoaded, _peek };
+  return { loadAll, reload, readConfigString, readVerifiedConfig, isLoaded, _peek };
 }
 
 export const systemConfigStore = createSystemConfigStore();

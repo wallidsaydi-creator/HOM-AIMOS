@@ -150,4 +150,8 @@ test('session-scoped peer discovery cannot leak across paired source arms', asyn
   assert.match(observedSql, /\$2::text = '' AND \$3::text <> ''/);
   assert.equal(observedParams[1], 'sess:arm-a:%', 'session key pattern must be bound');
   assert.equal(observedParams[2], 'external:reference');
+  assert.equal(observedParams[4], 'sess:arm-a:');
+  assert.equal(observedParams[5], 'sess:arm-a:\uFFFF');
+  assert.match(observedSql, /key COLLATE "C" >= \$5::text COLLATE "C"/);
+  assert.match(observedSql, /key COLLATE "C" < \$6::text COLLATE "C"/);
 });

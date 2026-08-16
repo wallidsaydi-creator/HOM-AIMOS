@@ -37,6 +37,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 import { loadAgentPrivkey, signPayload, signPayloadWithContext, getAgentCert, signRaw } from './agent-identity.js';
+import { cognitiveBaselineHash, cognitiveTransitionHash } from './protocol/mutmem-protocol.js';
 
 export const HOUSEKEEPER_SIGNER_CONSTANTS = Object.freeze({
   HOUSEKEEPER_AGENT_ID: 'housekeeper',
@@ -84,110 +85,12 @@ export function loadHousekeeperPrivkey() {
   return cachedPrivkey;
 }
 
-const COGNITIVE_TRANSITION_DOMAIN = Buffer.from('aimos.cognitive-transition/v2\0', 'utf8');
-const COGNITIVE_BASELINE_DOMAIN = Buffer.from('aimos.cognitive-baseline/v1\0', 'utf8');
-
-function uuidBytes(value, errorCode) {
-  const bytes = Buffer.from(String(value || '').replaceAll('-', ''), 'hex');
-  if (bytes.length !== 16) throw new Error(errorCode);
-  return bytes;
-}
-
-function int64Bytes(value, errorCode) {
-  if (!Number.isSafeInteger(value)) throw new Error(errorCode);
-  const bytes = Buffer.alloc(8);
-  bytes.writeBigInt64BE(BigInt(value));
-  return bytes;
-}
-
-export function cognitiveTransitionHash({
-  companyId,
-  memoryId,
-  oldWeight,
-  newWeight,
-  provenanceMutationHash,
-} = {}) {
-  const company = Buffer.from(String(companyId || ''), 'utf8');
-  const memoryHex = String(memoryId || '').replaceAll('-', '');
-  const memory = Buffer.from(memoryHex, 'hex');
-  const provenance = Buffer.from(provenanceMutationHash || []);
-  const oldMilli = Math.round(Number(oldWeight) * 1000);
-  const newMilli = Math.round(Number(newWeight) * 1000);
-  if (!company.length || company.length > 0x7fffffff || memory.length !== 16 || provenance.length !== 32) {
-    throw new Error('cognitive_transition_identity_malformed');
-  }
-  if (oldMilli < 100 || oldMilli > 3000 || newMilli < 100 || newMilli > 3000 || oldMilli === newMilli) {
-    throw new Error('cognitive_transition_weight_malformed');
-  }
-  const companyLength = Buffer.alloc(4);
-  companyLength.writeInt32BE(company.length);
-  const oldBytes = Buffer.alloc(8);
-  const newBytes = Buffer.alloc(8);
-  oldBytes.writeBigInt64BE(BigInt(oldMilli));
-  newBytes.writeBigInt64BE(BigInt(newMilli));
-  return crypto.createHash('sha256').update(Buffer.concat([
-    COGNITIVE_TRANSITION_DOMAIN,
-    companyLength,
-    company,
-    memory,
-    oldBytes,
-    newBytes,
-    provenance,
-  ])).digest();
-}
-
 export function signCognitiveTransitionAsHousekeeper(transition) {
   const transitionHash = cognitiveTransitionHash(transition);
   return Object.freeze({
     transitionHash,
     transitionSig: signRaw(loadHousekeeperPrivkey(), transitionHash),
   });
-}
-
-export function cognitiveBaselineHash({
-  companyId,
-  memoryId,
-  eventId,
-  eventMutationHash,
-  liveContentHash,
-  observedWeight,
-  weightMilli,
-  observedTs,
-  signerValidFromIso,
-  certFingerprint,
-} = {}) {
-  const company = Buffer.from(String(companyId || ''), 'utf8');
-  const contentHash = Buffer.from(liveContentHash || []);
-  const eventHash = Buffer.from(eventMutationHash || []);
-  const certHash = Buffer.from(String(certFingerprint || ''), 'hex');
-  const observedWeightBytes = Buffer.alloc(4);
-  observedWeightBytes.writeFloatBE(Number(observedWeight));
-  const validFromSeconds = Math.round(new Date(signerValidFromIso).getTime() / 1000);
-  if (!company.length || company.length > 0x7fffffff || contentHash.length !== 32
-      || eventHash.length !== 32 || certHash.length !== 32
-      || !Number.isFinite(Number(observedWeight))
-      || Math.round(Number(observedWeight) * 1000) !== weightMilli
-      || !Number.isInteger(weightMilli) || weightMilli < 100 || weightMilli > 3000
-      || !Number.isSafeInteger(observedTs) || observedTs <= 0
-      || !Number.isSafeInteger(validFromSeconds) || validFromSeconds <= 0) {
-    throw new Error('cognitive_baseline_input_malformed');
-  }
-  const companyLength = Buffer.alloc(4);
-  companyLength.writeInt32BE(company.length);
-  return crypto.createHash('sha256').update(Buffer.concat([
-    COGNITIVE_BASELINE_DOMAIN,
-    companyLength,
-    company,
-    uuidBytes(memoryId, 'cognitive_baseline_memory_malformed'),
-    uuidBytes(eventId, 'cognitive_baseline_event_malformed'),
-    eventHash,
-    contentHash,
-    observedWeightBytes,
-    int64Bytes(weightMilli, 'cognitive_baseline_weight_malformed'),
-    int64Bytes(observedTs, 'cognitive_baseline_observation_malformed'),
-    int64Bytes(validFromSeconds, 'cognitive_baseline_epoch_malformed'),
-    certHash,
-  ])).digest();
 }
 
 export function signCognitiveBaselineAsHousekeeper(baseline) {
@@ -208,8 +111,11 @@ export function signCognitiveBaselineAsHousekeeper(baseline) {
  * @returns {Promise<string>} certString — JSON envelope with valid_from + pubkey
  * @throws  {Error} if cert not enrolled (deployment bootstrap not run)
  */
-export async function getHousekeeperCert() {
-  cachedCertString = await getAgentCert(HOUSEKEEPER_SIGNER_CONSTANTS.HOUSEKEEPER_AGENT_ID);
+export async function getHousekeeperCert(options = {}) {
+  cachedCertString = await getAgentCert(
+    HOUSEKEEPER_SIGNER_CONSTANTS.HOUSEKEEPER_AGENT_ID,
+    options,
+  );
   return cachedCertString;
 }
 

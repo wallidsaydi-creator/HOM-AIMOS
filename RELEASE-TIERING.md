@@ -40,7 +40,7 @@ state remain outside the repository and are created or enrolled locally.
 - `architecture-authority.json` from a live machine. The public
   `architecture-authority.template.json` ships instead.
 - Internal plans, remediation history, scratchpads, private audit notes,
-  personal correspondence, private Oracle material, or machine-specific paths.
+  personal correspondence, private predecessor-system material, or machine-specific paths.
 - Upstream benchmark text or datasets when redistribution is not explicitly
   permitted. The repository ships fetchers, pinned revisions, hashes, and
   derived aggregate evidence only.

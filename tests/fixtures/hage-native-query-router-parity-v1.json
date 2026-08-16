@@ -1,0 +1,25 @@
+{
+  "fixture_version": 1,
+  "oracle_runtime": "Python 3 standard-library math",
+  "oracle_formula": "z1=relu(0.5*1+0.1); z2=relu(2*z1+0.2); z3=1.5*z2-0.1; y=log1p(exp(z3))",
+  "sparse_parameters": {
+    "W1_0": 0.5,
+    "b1_0": 0.1,
+    "W2_0": 2,
+    "b2_0": 0.2,
+    "W3_0": 1.5,
+    "b3_0": -0.1
+  },
+  "expected": {
+    "pre_softplus": 2,
+    "structural_weight": 2.1269280110429727,
+    "gradients": {
+      "W1_0": 2.642391233933647,
+      "b1_0": 2.642391233933647,
+      "W2_0": 0.7927173701800941,
+      "b2_0": 1.3211956169668235,
+      "W3_0": 1.2331159091690351,
+      "b3_0": 0.8807970779778823
+    }
+  }
+}

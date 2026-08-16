@@ -474,7 +474,9 @@ async function executeAimosTool(name, args = {}, authContext = null, transportBi
         value,
         companyId,
         agentId,
+        runId: authContext.executionContext.requestReceiptId || '',
         authority: authContext.mutationAuthority,
+        parentEventId: authContext.executionContext.requestAdmissionEventId || null,
       });
       let securityDecision = evaluateSecurityContent({
         text: renderedValue,
@@ -928,6 +930,10 @@ router.post('/', async (req, res) => {
       signedMethod: req.identitySignedMethod,
       signedPath: req.identitySignedPath,
       signedClaims: req.identitySignedClaims,
+      requestReceiptId: req.executionContext?.requestReceiptId || null,
+      requestReceiptMutationHash: req.executionContext?.requestReceiptMutationHash || null,
+      requestAdmissionEventId: req.executionContext?.requestAdmissionEventId || null,
+      requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash || null,
     } : null,
   };
   if (sessionId && sessions.has(sessionId)) {
@@ -1052,22 +1058,6 @@ router.get('/manifest', (req, res) => {
     },
     resources: AIMOS_MCP_RESOURCES
   });
-});
-
-/**
- * POST /mcp/bridge/*
- * Forward to existing MCP bridge routes (routes/mcp.js) for external server management.
- * This keeps bridge functionality intact while native MCP server handles client connections.
- */
-router.post('/bridge/:path(*)', async (req, res, next) => {
-  // Forward to the existing bridge
-  const { default: bridgeRouter } = await import('./mcp.js').catch(() => ({ default: null }));
-  if (!bridgeRouter) {
-    return res.status(503).json({ error: 'MCP bridge not available' });
-  }
-  // Strip /mcp/bridge prefix and forward
-  req.url = '/' + req.params.path;
-  bridgeRouter(req, res, next);
 });
 
 export default router;

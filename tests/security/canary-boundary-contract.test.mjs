@@ -29,6 +29,13 @@ test('nested tool arguments and results are scanned without lossy object coercio
   );
 });
 
+test('Canary grammar rejects malformed tokens that merely contain a valid prefix', () => {
+  assert.deepEqual(detectCanaries('SECRET-DEADBEEF0'), []);
+  assert.deepEqual(detectCanaries('XSECRET-DEADBEEF'), []);
+  assert.deepEqual(detectCanaries('SECRET-DEADBEEF_suffix'), []);
+  assert.deepEqual(detectCanaries('(SECRET-DEADBEEF).'), ['SECRET-DEADBEEF']);
+});
+
 test('clean boundary scans are side-effect free', async () => {
   const execution = await scanToolExecution('web_search', { query: 'weather' }, 'clean-run');
   const exposure = await scanToolResult('web_search', { answer: 'sunny' }, 'clean-run');
@@ -76,6 +83,36 @@ test('tool execution and result scans occupy the native signed action boundary',
   assert.ok(terminal > resultScan, 'terminal action proof follows result-boundary evidence');
 });
 
+test('read-only tool intent is evaluated as read authority before Canary dispatch', async () => {
+  const source = await readFile(
+    new URL('../../services/orchestration/tool-registry.js', import.meta.url),
+    'utf8',
+  );
+  assert.match(
+    source,
+    /const policyVerb = toolDirection === TOOL_DIRECTIONS\.READ \? 'GET' : 'POST'/,
+  );
+  assert.match(source, /enforceVerbPolicy\(intentClass\.scope, policyVerb\)/);
+  assert.doesNotMatch(source, /enforceVerbPolicy\(intentClass\.scope, 'POST'\)/);
+});
+
+test('non-operator local reads require an exact master-signed purpose proof before tool action', async () => {
+  const [registry, actionLedger] = await Promise.all([
+    readFile(new URL('../../services/orchestration/tool-registry.js', import.meta.url), 'utf8'),
+    readFile(new URL('../../services/orchestration/tool-action-ledger.js', import.meta.url), 'utf8'),
+  ]);
+  const purposeGate = registry.indexOf("if (name === 'read_file' && !isOperatorAgentId(agentId))");
+  const actionStart = registry.indexOf('signedToolAction = await beginToolAction(');
+  const invocation = registry.indexOf('const invokeTool = () =>', actionStart);
+  assert.ok(purposeGate >= 0 && purposeGate < actionStart);
+  assert.ok(actionStart < invocation);
+  assert.match(registry, /master_signed_local_file_read_authorization_required/);
+  assert.match(registry, /purpose_authorization_protocol_commitment_required/);
+  assert.match(registry, /authorizePurposeLocalFileRead/);
+  assert.match(actionLedger, /purpose_authorization_sha256/);
+  assert.match(actionLedger, /purposeAuthorizationSha256/);
+});
+
 test('RELAYED is owned by recalled memory before prompt construction', async () => {
   const source = await readFile(
     new URL('../../services/orchestration/agent-runner.js', import.meta.url),
@@ -89,4 +126,15 @@ test('RELAYED is owned by recalled memory before prompt construction', async () 
   assert.ok(relay > load, 'relay scan must follow native memory retrieval');
   assert.ok(prompt > relay, 'relay scan must precede model prompt construction');
   assert.doesNotMatch(source, /scanAssembledPrompt/);
+  assert.match(source, /options\.executionContext\?\.requestAdmissionEventId/);
+});
+
+test('native recall evidence retains a continuous signed request ancestry', async () => {
+  const [route, recall] = await Promise.all([
+    readFile(new URL('../../routes/aimos.js', import.meta.url), 'utf8'),
+    readFile(new URL('../../services/retrieval/native-recall-pipeline.js', import.meta.url), 'utf8'),
+  ]);
+  assert.match(route, /requestAdmissionEventId: req\.executionContext\?\.requestAdmissionEventId \|\| null/);
+  assert.match(recall, /parentEventId: recallAuthority\.requestAuthority\?\.requestAdmissionEventId \|\| null/);
+  assert.match(recall, /requestAuthority: recallAuthority\.requestAuthority \|\| null/);
 });

@@ -128,7 +128,8 @@ test('public release documents contain no draft or operator placeholders', () =>
     const contents = read(relativePath);
     assert.doesNotMatch(contents, /content subject to operator approval|operator to set|NOT YET CONFIGURED/i, relativePath);
   }
-  assert.match(read('README.md'), /current 275-service census/);
+  const serviceCount = JSON.parse(read('hom-architecture-manifest.json')).total_services;
+  assert.match(read('README.md'), new RegExp(`current ${serviceCount}-service census`));
   assert.equal(existsSync(path.join(root, 'CONTRIBUTING.md')), true);
   assert.equal(existsSync(path.join(root, 'CHANGELOG.md')), true);
   assert.equal(existsSync(path.join(root, 'AGENTS.md')), true);

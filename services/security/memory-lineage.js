@@ -74,6 +74,7 @@
 import { createHash } from 'node:crypto';
 import {
   canonicalJson,
+  resolveCertificateAuthorityPubkey,
   verifyCertChain,
   verifyStoredPayloadSig,
 } from './agent-identity.js';
@@ -212,16 +213,19 @@ export function verifyHousekeeperSupersessionLineage(row = {}) {
     return { valid: false, reason: 'signed_lineage_genesis_shape_invalid' };
   }
   const certificate = certBody(row.signer_cert);
-  const authority = certificate?.issuer === certificate?.agent_id
-    ? certificate?.pubkey
-    : row.master_pubkey;
+  const authority = resolveCertificateAuthorityPubkey({
+    certificateBody: certificate,
+    subjectPubkey: row.signer_pubkey,
+    masterPubkey: row.master_pubkey,
+    masterFingerprint: row.master_fingerprint,
+  });
+  if (!authority) return { valid: false, reason: 'signed_lineage_certificate_issuer_invalid' };
   const certProof = verifyCertChain(row.signer_cert, authority, { nowFn: () => Number(row.ts_signed) });
   const fingerprint = createHash('sha256').update(String(row.signer_cert || ''), 'utf8').digest('hex');
   if (!certProof.valid
     || certificate?.agent_id !== row.attesting_agent_id
     || certificate?.pubkey !== row.signer_pubkey
     || Number(certificate?.valid_from) !== Math.floor(new Date(row.attesting_agent_valid_from).getTime() / 1000)
-    || (certificate?.issuer !== certificate?.agent_id && certificate?.issuer !== row.master_fingerprint)
     || fingerprint !== row.attesting_cert_fingerprint) {
     return { valid: false, reason: certProof.reason || 'signed_lineage_signer_mismatch' };
   }

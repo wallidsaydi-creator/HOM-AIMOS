@@ -48,21 +48,28 @@ import {
 
 const { Pool } = pg;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const ORACLE_DATASET = path.join(ROOT, 'eval', 'data', 'official-longmemeval-oracle.json');
+const LONGMEMEVAL_ORACLE_CONDITION_DATASET = path.join(ROOT, 'eval', 'data', 'official-longmemeval-oracle.json');
 const LOCOMO_DATASET = path.join(ROOT, 'eval', 'data', 'official-locomo10.json');
 const HOUSEKEEPER_KEY = path.join(os.homedir(), '.aimos', 'agents', 'housekeeper.key');
 const HOUSEKEEPER_CERT_CACHE = path.join(os.homedir(), '.aimos', 'agents', 'housekeeper.cert-cache.json');
 const ARCHITECTURE_AUTHORITY = path.join(ROOT, 'architecture-authority.json');
 const CANONICAL_BLIND_PROTOCOL = 'canonical-blind-v1';
+const TWIN_PRIME_G1P_PROTOCOL = 'twin-prime-g1p-v1';
+const TWIN_PRIME_G5_PROTOCOL = 'twin-prime-g5-v1';
+const MUTMEM_V2_S7_PROTOCOL = 'mutmem-v2-s7-v1';
+const TWIN_PRIME_G1P_CORPUS = path.join(ROOT, 'eval', 'data', 'twin-prime-g1p-canonical-v2');
+const TWIN_PRIME_G5_CONTRACT = path.join(ROOT, 'eval', 'twin-prime', 'tp-g5-contract-v6');
+const MUTMEM_V2_S7_CONTRACT = path.join(ROOT, 'eval', 'mutmem-v2', 's7-contract-v2');
 const POISONEDRAG_SOURCE_LOCK = path.join(ROOT, 'eval', 'poisonedrag', 'source-lock.json');
 const POISONEDRAG_PUBLIC_LOCK = path.join(ROOT, 'eval', 'poisonedrag', 'n100-public-target-lock.json');
 const POISONEDRAG_PRIVATE_ROOT = path.join(ROOT, 'eval', 'data', 'private', 'poisonedrag');
 
 export function parseArgs(argv) {
   const args = {
-    longmemevalFile: ORACLE_DATASET,
+    longmemevalFile: LONGMEMEVAL_ORACLE_CONDITION_DATASET,
     longmemevalFileExplicit: false,
     sample: 10,
+    sampleExplicit: false,
     full: false,
     smoke: false,
     lifecycleProof: false,
@@ -79,6 +86,8 @@ export function parseArgs(argv) {
     judgeProvider: 'codex',
     judgeModel: 'gpt-5.6-terra',
     modelOverrideExplicit: false,
+    keychainAccount: null,
+    predecessorRun: null,
     keepScratchDb: false,
     resumeRun: null,
     outputRoot: path.join(ROOT, 'eval', 'public-results')
@@ -91,7 +100,7 @@ export function parseArgs(argv) {
       args.longmemevalFileExplicit = true;
       i += 1;
     }
-    else if (arg === '--sample' && next) { args.sample = Number(next); i += 1; }
+    else if (arg === '--sample' && next) { args.sample = Number(next); args.sampleExplicit = true; i += 1; }
     else if (arg === '--port' && next) { args.port = Number(next); i += 1; }
     else if (arg === '--limit' && next) { args.limit = Number(next); args.limitExplicit = true; i += 1; }
     else if (arg === '--protocol' && next) { args.protocol = String(next).trim().toLowerCase(); i += 1; }
@@ -101,6 +110,8 @@ export function parseArgs(argv) {
     else if (arg === '--generator-provider' && next) { args.generatorProvider = next; args.modelOverrideExplicit = true; i += 1; }
     else if (arg === '--judge-model' && next) { args.judgeModel = next; args.modelOverrideExplicit = true; i += 1; }
     else if (arg === '--judge-provider' && next) { args.judgeProvider = next; args.modelOverrideExplicit = true; i += 1; }
+    else if (arg === '--keychain-account' && next) { args.keychainAccount = String(next).trim(); i += 1; }
+    else if (arg === '--predecessor-run' && next) { args.predecessorRun = String(next).trim().toLowerCase(); i += 1; }
     else if (arg === '--output-root' && next) { args.outputRoot = path.resolve(next); i += 1; }
     else if (arg === '--resume-run' && next) { args.resumeRun = String(next).trim().toLowerCase(); i += 1; }
     else if (arg === '--full') args.full = true;
@@ -111,8 +122,8 @@ export function parseArgs(argv) {
     else if (arg === '--keep-scratch-db') args.keepScratchDb = true;
   }
   if (!Number.isInteger(args.sample) || args.sample < 1) throw new Error('--sample must be a positive integer');
-  if (![CANONICAL_BLIND_PROTOCOL, LOCOMO_OFFICIAL_PROTOCOL, POISONEDRAG_PROTOCOL_ID].includes(args.protocol)) {
-    throw new Error('--protocol must be canonical-blind-v1|locomo-upstream-qa-v1|poisonedrag-n100-v1');
+  if (![CANONICAL_BLIND_PROTOCOL, LOCOMO_OFFICIAL_PROTOCOL, POISONEDRAG_PROTOCOL_ID, TWIN_PRIME_G1P_PROTOCOL, TWIN_PRIME_G5_PROTOCOL, MUTMEM_V2_S7_PROTOCOL].includes(args.protocol)) {
+    throw new Error('--protocol must be canonical-blind-v1|locomo-upstream-qa-v1|poisonedrag-n100-v1|twin-prime-g1p-v1|twin-prime-g5-v1|mutmem-v2-s7-v1');
   }
   if (args.protocol === LOCOMO_OFFICIAL_PROTOCOL) {
     if (args.benchmark !== 'locomo') throw new Error('locomo-upstream-qa-v1 requires --benchmark locomo');
@@ -134,9 +145,63 @@ export function parseArgs(argv) {
     if (!args.full && args.sample > 100) throw new Error('poisonedrag sample cannot exceed 100 targets');
     args.limit = 5;
   }
+  if (args.protocol === TWIN_PRIME_G1P_PROTOCOL) {
+    if (args.benchmark !== 'both') throw new Error('twin-prime-g1p-v1 requires --benchmark both');
+    if (args.historicalV1 || args.lifecycleProof || args.cognitive || args.gate || args.full) {
+      throw new Error('twin-prime-g1p-v1 conflicts with historical/lifecycle/cognitive/gate/full modes');
+    }
+    if (args.modelOverrideExplicit) throw new Error('twin-prime-g1p-v1 makes no model calls');
+    if (args.limitExplicit && args.limit !== 20) throw new Error('twin-prime-g1p-v1 requires --limit 20');
+    if (!args.sampleExplicit) args.sample = 128;
+    if (args.sample > 1540) throw new Error('twin-prime-g1p-v1 sample ceiling cannot exceed 1540');
+    args.limit = 20;
+  }
+  if (args.protocol === TWIN_PRIME_G5_PROTOCOL) {
+    if (args.benchmark !== 'both') throw new Error('twin-prime-g5-v1 requires --benchmark both');
+    if (args.historicalV1 || args.lifecycleProof || args.cognitive || args.full || args.smoke) {
+      throw new Error('twin-prime-g5-v1 conflicts with historical/lifecycle/cognitive/full/smoke modes');
+    }
+    if (args.gate !== 'b4') {
+      throw new Error('twin-prime-g5-v1 currently requires --gate b4; b5 unlocks only after verified gate10 evidence');
+    }
+    if (args.sampleExplicit) throw new Error('twin-prime-g5-v1 question population is fixed by its pre-outcome contract');
+    if (args.modelOverrideExplicit) throw new Error('twin-prime-g5-v1 model roles are fixed to GPT-5.5 and GPT-5.6 Terra');
+    if (args.limitExplicit && args.limit !== 20) throw new Error('twin-prime-g5-v1 requires --limit 20');
+    if (!args.keychainAccount) throw new Error('twin-prime-g5-v1 requires --keychain-account');
+    args.limit = 20;
+  }
+  if (args.protocol === MUTMEM_V2_S7_PROTOCOL) {
+    if (args.benchmark !== 'both') throw new Error('mutmem-v2-s7-v1 requires --benchmark both');
+    if (args.historicalV1 || args.lifecycleProof || args.cognitive || args.full || args.smoke) {
+      throw new Error('mutmem-v2-s7-v1 conflicts with historical/lifecycle/cognitive/full/smoke modes');
+    }
+    if (!['b4', 'b5'].includes(args.gate)) {
+      throw new Error('mutmem-v2-s7-v1 requires --gate b4|b5');
+    }
+    if (args.gate === 'b4' && args.predecessorRun !== null) {
+      throw new Error('mutmem-v2-s7-v1 Gate10 forbids --predecessor-run');
+    }
+    if (args.gate === 'b5'
+      && !/^\d{14}_[0-9a-f]{6}$/.test(String(args.predecessorRun || ''))) {
+      throw new Error('mutmem-v2-s7-v1 Gate50 requires --predecessor-run <completed Gate10 run id>');
+    }
+    if (args.sampleExplicit) throw new Error('mutmem-v2-s7-v1 population is fixed by its frozen contract');
+    if (args.modelOverrideExplicit) throw new Error('mutmem-v2-s7-v1 model roles are fixed to GPT-5.5 and GPT-5.6 Terra');
+    if (args.limitExplicit && args.limit !== 20) throw new Error('mutmem-v2-s7-v1 requires --limit 20');
+    if (!args.keychainAccount) throw new Error('mutmem-v2-s7-v1 requires --keychain-account');
+    args.limit = 20;
+  }
   if (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 200) throw new Error('--limit must be 1..200');
   if (!Number.isInteger(args.port) || args.port < 1024 || args.port > 65535) throw new Error('--port must be 1024..65535');
+  if (args.keychainAccount !== null
+    && (!args.keychainAccount || args.keychainAccount.length > 128 || /\s/.test(args.keychainAccount))) {
+    throw new Error('--keychain-account must be a non-empty Keychain account name without whitespace');
+  }
   if (args.resumeRun && !/^\d{14}_[0-9a-f]{6}$/.test(args.resumeRun)) throw new Error('--resume-run must be an existing canonical run id');
+  if (args.predecessorRun !== null
+    && !/^\d{14}_[0-9a-f]{6}$/.test(args.predecessorRun)) {
+    throw new Error('--predecessor-run must be a canonical run id');
+  }
   if ([9000, 9001, 9100].includes(args.port)) throw new Error(`port ${args.port} is reserved by a live HOM service`);
   if (!['both', 'locomo', 'longmemeval', 'poisonedrag'].includes(args.benchmark)) {
     throw new Error('--benchmark must be both|locomo|longmemeval|poisonedrag');
@@ -340,16 +405,24 @@ async function runSignedScratchPurge(databaseName, receiptPath) {
   };
 }
 
-async function waitForHealth(baseUrl, child, timeoutMs = 90_000) {
+// A retained benchmark brain can contain hundreds of thousands of signed
+// events. Startup verifies the complete housekeeper event history before the
+// server reports ready, so recovery must allow that native proof to finish.
+// This is a fixed protocol-side bound, not ambient or ENV-owned authority.
+async function waitForHealth(baseUrl, child, timeoutMs = 1_800_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (child.exitCode != null) throw new Error(`scratch server exited with ${child.exitCode}`);
+    let body = null;
     try {
       const response = await fetch(`${baseUrl}/healthz`, { signal: AbortSignal.timeout(1500) });
-      const body = await response.json();
+      body = await response.json();
       if (response.ok && body.ready === true) return body;
     } catch { /* server is still booting */ }
-    await new Promise(resolve => setTimeout(resolve, 500));
+    if (body?.bootError) throw new Error(`scratch server background boot failed:${body.bootError}`);
+    // Stay below the server's native 100-request/minute general limiter. A
+    // faster readiness loop can throttle itself during long ledger proofs.
+    await new Promise(resolve => setTimeout(resolve, 1000));
   }
   throw new Error(`scratch server did not become ready at ${baseUrl}`);
 }
@@ -672,6 +745,88 @@ export function canonicalRunConfiguration(args) {
       model_preflight: 'aimos.benchmark-model-preflight/v1',
     };
   }
+  if (args.protocol === TWIN_PRIME_G1P_PROTOCOL) {
+    return {
+      protocol: args.protocol,
+      benchmark: 'both',
+      full: false,
+      smoke: false,
+      sample_per_dataset: args.sample,
+      recall_depth_k: 20,
+      generator: null,
+      judge: null,
+      phase_retries: 6,
+      signed_save_interval_ms: 2100,
+      signed_recall_interval_ms: 2100,
+      corpus_preflight: 'hom.canonical-benchmark-query-inputs/v1',
+      origin_time_binding: 'hom-aimos-memory-binding/v4',
+      profile: 'hom-aimos/twin-prime-g1p-profile/v1',
+    };
+  }
+  if (args.protocol === TWIN_PRIME_G5_PROTOCOL) {
+    const pilotContractFile = path.join(TWIN_PRIME_G5_CONTRACT, 'pilot-contract.json');
+    const artifactManifestFile = path.join(TWIN_PRIME_G5_CONTRACT, 'artifact-manifest.json');
+    const pilotContract = JSON.parse(readFileSync(pilotContractFile, 'utf8'));
+    const artifactManifest = JSON.parse(readFileSync(artifactManifestFile, 'utf8'));
+    return {
+      protocol: args.protocol,
+      benchmark: 'both',
+      gate: 'b4',
+      gate_name: 'gate10',
+      question_count: 10,
+      arms: ['B0', 'B1', 'B2', 'T'],
+      recall_depth_k: 20,
+      generator: 'codex:gpt-5.5',
+      generator_reasoning: 'medium',
+      judge: 'codex:gpt-5.6-terra',
+      judge_reasoning: 'high',
+      phase_retries: 6,
+      signed_save_interval_ms: 2100,
+      signed_recall_interval_ms: 2100,
+      effective_policy_authority: 'signed_system_config_ledger',
+      t_enforcement_scope: 'exact_scratch_database_only',
+      canonical_policy_unchanged: true,
+      pilot_contract_sha256: pilotContract.pilot_contract_sha256,
+      artifact_manifest_sha256: artifactManifest.artifact_manifest_sha256,
+    };
+  }
+  if (args.protocol === MUTMEM_V2_S7_PROTOCOL) {
+    const selectionContractFile = path.join(MUTMEM_V2_S7_CONTRACT, 'selection-contract.json');
+    const artifactManifestFile = path.join(MUTMEM_V2_S7_CONTRACT, 'artifact-manifest.json');
+    const selectionContract = JSON.parse(readFileSync(selectionContractFile, 'utf8'));
+    const artifactManifest = JSON.parse(readFileSync(artifactManifestFile, 'utf8'));
+    const gateName = args.gate === 'b5' ? 'gate50' : 'gate10';
+    const utilityQuestions = gateName === 'gate50' ? 50 : 10;
+    return {
+      protocol: args.protocol,
+      benchmark: 'both',
+      gate: args.gate,
+      gate_name: gateName,
+      utility_questions: utilityQuestions,
+      utility_arms: ['M0', 'M1'],
+      predecessor_gate10_run_id: gateName === 'gate50' ? args.predecessorRun : null,
+      gate10_stop_retained: gateName === 'gate50',
+      latency_gate_rule: gateName === 'gate50'
+        ? 'enforced_candidate_m1_p95'
+        : 'max_arm_p95_frozen',
+      poison_targets: 5,
+      poison_arms: ['P0', 'P1'],
+      recall_depth_k: 20,
+      poison_disclosure_k: 5,
+      generator: 'codex:gpt-5.5',
+      generator_reasoning: 'medium',
+      judge: 'codex:gpt-5.6-terra',
+      judge_reasoning: 'high',
+      phase_retries: 6,
+      signed_save_interval_ms: 2100,
+      effective_policy_authority: 'signed_system_config_ledger',
+      scratch_only: true,
+      canonical_policy_unchanged: true,
+      signed_purge_on_success: true,
+      selection_contract_sha256: selectionContract.selection_contract_sha256,
+      artifact_manifest_sha256: artifactManifest.artifact_manifest_sha256,
+    };
+  }
   return {
     protocol: args.protocol,
     benchmark: args.benchmark,
@@ -687,6 +842,330 @@ export function canonicalRunConfiguration(args) {
     corpus_preflight: 'native-save-contract/v1',
     model_preflight: 'aimos.benchmark-model-preflight/v1',
   };
+}
+
+async function runTwinPrimeG1P(args, context) {
+  const logDir = path.join(context.outputDir, 'logs');
+  mkdirSync(logDir, { recursive: true, mode: 0o700 });
+  const common = [
+    'eval/run-twin-prime-g1p.mjs',
+    '--run-id', context.runId,
+    '--run-dir', context.outputDir,
+    '--corpus-dir', TWIN_PRIME_G1P_CORPUS,
+    '--sample-per-dataset', String(args.sample),
+    '--aimos-db', context.databaseName,
+    '--aimos-base', context.baseUrl,
+    '--retries', '6',
+    '--delay-ms', '2100',
+  ];
+  context.onPhase?.('tp-g1p-prepare');
+  await spawnLogged(process.execPath, [...common, '--phase', 'prepare'], path.join(logDir, 'tp-g1p-prepare.log'));
+
+  for (const benchmark of ['locomo', 'longmemeval']) {
+    const selectionFile = path.join(context.outputDir, `selection-${benchmark}.json`);
+    const sessionsFile = path.join(TWIN_PRIME_G1P_CORPUS, `${benchmark}-sessions.json`);
+    context.onPhase?.(`tp-g1p-${benchmark}-replay-preflight`);
+    await spawnLogged(process.execPath, [
+      'eval/replay-sessions.mjs',
+      '--benchmark', benchmark,
+      '--sessions-file', sessionsFile,
+      '--run-id', context.runId,
+      '--run-dir', context.outputDir,
+      '--selection-file', selectionFile,
+      '--aimos-db', context.databaseName,
+      '--aimos-base', context.baseUrl,
+      '--dry-run',
+    ], path.join(logDir, `tp-g1p-${benchmark}-replay-preflight.log`));
+
+    context.onPhase?.(`tp-g1p-${benchmark}-replay`);
+    await spawnLogged(process.execPath, [
+      'eval/replay-sessions.mjs',
+      '--benchmark', benchmark,
+      '--sessions-file', sessionsFile,
+      '--run-id', context.runId,
+      '--run-dir', context.outputDir,
+      '--selection-file', selectionFile,
+      '--aimos-db', context.databaseName,
+      '--aimos-base', context.baseUrl,
+      '--delay-ms', '2100',
+      '--retries', '6',
+    ], path.join(logDir, `tp-g1p-${benchmark}-replay.log`));
+  }
+
+  context.onPhase?.('tp-g1p-profile');
+  await spawnLogged(process.execPath, [...common, '--phase', 'profile'], path.join(logDir, 'tp-g1p-profile.log'));
+  context.onPhase?.('tp-g1p-aggregate');
+  await spawnLogged(process.execPath, [...common, '--phase', 'aggregate'], path.join(logDir, 'tp-g1p-aggregate.log'));
+  const summaryFile = path.join(context.outputDir, 'tp-g1p-summary.json');
+  const summary = JSON.parse(readFileSync(summaryFile, 'utf8'));
+  if (summary.schema !== 'hom.twin-prime-g1p-summary/v1'
+    || summary.run_id !== context.runId
+    || summary.generator_calls !== 0
+    || summary.judge_calls !== 0
+    || summary.gold_opened !== false
+    || !['stop', 'pass', 'expand'].includes(summary.feasibility?.decision)) {
+    throw new Error('tp_g1p_summary_invalid');
+  }
+  return { summary: { file: path.basename(summaryFile), sha256: sha256File(summaryFile), value: summary } };
+}
+
+async function runTwinPrimeG5(args, context) {
+  const logDir = path.join(context.outputDir, 'logs');
+  mkdirSync(logDir, { recursive: true, mode: 0o700 });
+  const gate = args.gate === 'b4' ? 'gate10' : 'gate50';
+  const common = [
+    'eval/twin-prime/run-g5-pilot.mjs',
+    '--run-id', context.runId,
+    '--run-dir', context.outputDir,
+    '--gate', gate,
+  ];
+
+  context.onPhase?.(`tp-g5-${gate}-prepare`);
+  await spawnLogged(process.execPath, [...common, '--phase', 'prepare'], path.join(logDir, `tp-g5-${gate}-prepare.log`));
+
+  const modelPreflight = await runModelPreflight(context, logDir, 'gpt-5.5');
+  for (const benchmark of ['locomo', 'longmemeval']) {
+    const selectionFile = path.join(context.outputDir, `selection-${benchmark}.json`);
+    const sessionsFile = path.join(TWIN_PRIME_G1P_CORPUS, `${benchmark}-sessions.json`);
+    context.onPhase?.(`tp-g5-${gate}-${benchmark}-replay-preflight`);
+    await spawnLogged(process.execPath, [
+      'eval/replay-sessions.mjs',
+      '--benchmark', benchmark,
+      '--sessions-file', sessionsFile,
+      '--run-id', context.runId,
+      '--run-dir', context.outputDir,
+      '--selection-file', selectionFile,
+      '--aimos-db', context.databaseName,
+      '--aimos-base', context.baseUrl,
+      '--dry-run',
+    ], path.join(logDir, `tp-g5-${gate}-${benchmark}-replay-preflight.log`));
+
+    context.onPhase?.(`tp-g5-${gate}-${benchmark}-replay`);
+    await spawnLogged(process.execPath, [
+      'eval/replay-sessions.mjs',
+      '--benchmark', benchmark,
+      '--sessions-file', sessionsFile,
+      '--run-id', context.runId,
+      '--run-dir', context.outputDir,
+      '--selection-file', selectionFile,
+      '--aimos-db', context.databaseName,
+      '--aimos-base', context.baseUrl,
+      '--delay-ms', '2100',
+      '--retries', '6',
+    ], path.join(logDir, `tp-g5-${gate}-${benchmark}-replay.log`));
+  }
+
+  context.onPhase?.(`tp-g5-${gate}-recall`);
+  await spawnInteractive(process.execPath, [
+    ...common,
+    '--phase', 'recall',
+    '--aimos-db', context.databaseName,
+    '--aimos-base', context.baseUrl,
+    '--server-pid', String(context.serverPid),
+    ...(args.keychainAccount ? ['--keychain-account', args.keychainAccount] : []),
+    '--live',
+  ]);
+
+  for (const phase of ['generate', 'judge', 'aggregate']) {
+    context.onPhase?.(`tp-g5-${gate}-${phase}`);
+    await spawnLogged(process.execPath, [...common, '--phase', phase], path.join(logDir, `tp-g5-${gate}-${phase}.log`));
+  }
+
+  const summaryFile = path.join(context.outputDir, 'twin-prime-g5', gate, 'pilot-summary.json');
+  if (!existsSync(summaryFile) || lstatSync(summaryFile).isSymbolicLink()) throw new Error('tp_g5_pilot_summary_missing');
+  const summary = JSON.parse(readFileSync(summaryFile, 'utf8'));
+  if (summary?.schema !== 'hom.aimos.twin-prime-pilot-summary/v1'
+    || summary.run_id !== context.runId
+    || summary.gate !== gate
+    || summary.question_count !== 10
+    || summary.arm_question_outputs !== 40
+    || !summary.by_arm?.B0 || !summary.by_arm?.B1 || !summary.by_arm?.B2 || !summary.by_arm?.T
+    || !/^[0-9a-f]{64}$/.test(String(summary.summary_sha256 || ''))) {
+    throw new Error('tp_g5_pilot_summary_invalid');
+  }
+  return {
+    model_preflight: modelPreflight,
+    summary: {
+      file: path.relative(context.outputDir, summaryFile),
+      sha256: sha256File(summaryFile),
+      value: summary,
+    },
+  };
+}
+
+function verifiedS7ReplaySummary(
+  runDir,
+  runId,
+  databaseName,
+  benchmark,
+  selectionFile,
+  sessionsFile,
+) {
+  const selection = JSON.parse(readFileSync(selectionFile, 'utf8'));
+  const corpus = JSON.parse(readFileSync(sessionsFile, 'utf8'));
+  const selectedScopes = new Set(selection.entries.map((entry) => String(entry.scope_id)));
+  const selected = corpus.scopes.filter((scope) => selectedScopes.has(String(scope.scope_id)));
+  const expectedSessions = selected.reduce((sum, scope) => sum + scope.sessions.length, 0);
+  const expectedScopes = selectedScopes.size;
+  if (selected.length !== expectedScopes || expectedSessions < 1) {
+    throw new Error(`mutmem_v2_s7_replay_population_invalid:${benchmark}`);
+  }
+  const candidates = readdirSync(runDir)
+    .filter((name) => name.startsWith(`replay-summary-${benchmark}-`) && name.endsWith('.json'))
+    .sort()
+    .reverse();
+  for (const name of candidates) {
+    const file = path.join(runDir, name);
+    if (lstatSync(file).isSymbolicLink() || !lstatSync(file).isFile()) continue;
+    let summary;
+    try { summary = JSON.parse(readFileSync(file, 'utf8')); } catch { continue; }
+    const unsigned = { ...summary };
+    delete unsigned.summary_sha256;
+    if (summary?.schema === 'hom.canonical-replay-summary/v1'
+      && summary.run_id === runId
+      && summary.benchmark === benchmark
+      && summary.database_name === databaseName
+      && summary.completed_sessions === expectedSessions
+      && summary.totals?.sessions === expectedSessions
+      && summary.totals?.scopes === expectedScopes
+      && summary.failed_sessions === 0
+      && summary.summary_sha256 === sha256(JSON.stringify(unsigned))) {
+      return Object.freeze({ file, summary });
+    }
+  }
+  return null;
+}
+
+async function runMutMemV2S7(args, context) {
+  const logDir = path.join(context.outputDir, 'logs');
+  mkdirSync(logDir, { recursive: true, mode: 0o700 });
+  const gate = args.gate === 'b5' ? 'gate50' : 'gate10';
+  const questionCount = gate === 'gate50' ? 50 : 10;
+  const predecessorArgs = gate === 'gate50'
+    ? ['--predecessor-run', args.predecessorRun]
+    : [];
+  const common = [
+    'eval/mutmem-v2/run-s7-gate10.mjs',
+    '--run-id', context.runId,
+    '--run-dir', context.outputDir,
+    '--gate', gate,
+    ...predecessorArgs,
+  ];
+
+  context.onPhase?.(`mutmem-v2-s7-${gate}-prepare`);
+  await spawnLogged(process.execPath, [
+    'eval/mutmem-v2/prepare-s7-gate10-execution.mjs',
+    '--run-id', context.runId,
+    '--run-dir', context.outputDir,
+    '--gate', gate,
+  ], path.join(logDir, `mutmem-v2-s7-${gate}-prepare.log`));
+
+  const modelPreflight = await runModelPreflight(context, logDir, 'gpt-5.5');
+  for (const benchmark of ['locomo', 'longmemeval']) {
+    const selectionFile = path.join(context.outputDir, `selection-${benchmark}.json`);
+    const sessionsFile = path.join(CORPUS_ROOT_FOR_S7(), `${benchmark}-sessions.json`);
+    const retainedReplay = verifiedS7ReplaySummary(
+      context.outputDir,
+      context.runId,
+      context.databaseName,
+      benchmark,
+      selectionFile,
+      sessionsFile,
+    );
+    if (retainedReplay) {
+      console.log(JSON.stringify({
+        event: 'mutmem_v2_s7_replay_reused',
+        benchmark,
+        completed_sessions: retainedReplay.summary.completed_sessions,
+        summary_sha256: retainedReplay.summary.summary_sha256,
+      }));
+      continue;
+    }
+    context.onPhase?.(`mutmem-v2-s7-${gate}-${benchmark}-replay-preflight`);
+    await spawnLogged(process.execPath, [
+      'eval/replay-sessions.mjs',
+      '--benchmark', benchmark,
+      '--sessions-file', sessionsFile,
+      '--run-id', context.runId,
+      '--run-dir', context.outputDir,
+      '--selection-file', selectionFile,
+      '--aimos-db', context.databaseName,
+      '--aimos-base', context.baseUrl,
+      '--dry-run',
+    ], path.join(logDir, `mutmem-v2-s7-${gate}-${benchmark}-replay-preflight.log`));
+    context.onPhase?.(`mutmem-v2-s7-${gate}-${benchmark}-replay`);
+    await spawnLogged(process.execPath, [
+      'eval/replay-sessions.mjs',
+      '--benchmark', benchmark,
+      '--sessions-file', sessionsFile,
+      '--run-id', context.runId,
+      '--run-dir', context.outputDir,
+      '--selection-file', selectionFile,
+      '--aimos-db', context.databaseName,
+      '--aimos-base', context.baseUrl,
+      '--delay-ms', '2100',
+      '--retries', '6',
+    ], path.join(logDir, `mutmem-v2-s7-${gate}-${benchmark}-replay.log`));
+  }
+
+  context.onPhase?.(`mutmem-v2-s7-${gate}-utility-recall`);
+  await spawnInteractive(process.execPath, [
+    ...common,
+    '--phase', 'utility-recall',
+    '--aimos-db', context.databaseName,
+    '--aimos-base', context.baseUrl,
+    '--server-pid', String(context.serverPid),
+    '--keychain-account', args.keychainAccount,
+    '--live',
+  ]);
+  context.onPhase?.(`mutmem-v2-s7-${gate}-poison-screen`);
+  await spawnLogged(process.execPath, [
+    ...common,
+    '--phase', 'poison-screen',
+    '--aimos-db', context.databaseName,
+    '--aimos-base', context.baseUrl,
+    '--server-pid', String(context.serverPid),
+    '--live',
+  ], path.join(logDir, `mutmem-v2-s7-${gate}-poison-screen.log`));
+
+  for (const phase of ['generate', 'judge', 'aggregate']) {
+    context.onPhase?.(`mutmem-v2-s7-${gate}-${phase}`);
+    await spawnLogged(process.execPath, [...common, '--phase', phase],
+      path.join(logDir, `mutmem-v2-s7-${gate}-${phase}.log`));
+  }
+  const summaryFile = path.join(context.outputDir, 'mutmem-v2-s7', gate, `${gate}-summary.json`);
+  if (!existsSync(summaryFile) || lstatSync(summaryFile).isSymbolicLink()) {
+    throw new Error(`mutmem_v2_s7_${gate}_summary_missing`);
+  }
+  const summary = JSON.parse(readFileSync(summaryFile, 'utf8'));
+  const terminalStates = gate === 'gate10'
+    ? ['PASS_GATE10_AWAIT_OPERATOR_DECISION', 'STOP_UTILITY_REGRESSION',
+        'FAIL_SECURITY_GATE', 'INDETERMINATE_POPULATION']
+    : ['PASS_GATE50_AWAIT_OPERATOR_DECISION', 'STOP_GATE50_UTILITY_REGRESSION',
+        'FAIL_SECURITY_GATE', 'INDETERMINATE_POPULATION'];
+  if (summary?.schema !== `hom.aimos.mutmem-v2-s7-${gate}-summary/v1`
+    || summary.run_id !== context.runId
+    || summary.gate !== gate
+    || summary.utility?.by_arm?.M0?.questions !== questionCount
+    || summary.utility?.by_arm?.M1?.questions !== questionCount
+    || !summary.utility?.by_arm?.M0
+    || !summary.utility?.by_arm?.M1
+    || !terminalStates.includes(summary.decision?.terminal_state)
+    || !/^[0-9a-f]{64}$/.test(String(summary.summary_sha256 || ''))) {
+    throw new Error(`mutmem_v2_s7_${gate}_summary_invalid`);
+  }
+  return {
+    model_preflight: modelPreflight,
+    summary: {
+      file: path.relative(context.outputDir, summaryFile),
+      sha256: sha256File(summaryFile),
+      value: summary,
+    },
+  };
+}
+
+function CORPUS_ROOT_FOR_S7() {
+  return path.join(ROOT, 'eval', 'data', 'canonical');
 }
 
 function writeRunStatus(outputDir, status) {
@@ -844,7 +1323,53 @@ async function main() {
   if (currentCanonicalFootprint.benchmark_rows !== 0) {
     throw new Error('canonical AIMOS already contains benchmark memories; run the authorized cleanup ceremony before benchmarking');
   }
-  const datasets = args.protocol === POISONEDRAG_PROTOCOL_ID
+  const datasets = args.protocol === MUTMEM_V2_S7_PROTOCOL
+    ? {
+        canonical_corpus_manifest: {
+          path: path.join(ROOT, 'eval', 'data', 'canonical', 'corpus-manifest.json'),
+          sha256: sha256File(path.join(ROOT, 'eval', 'data', 'canonical', 'corpus-manifest.json')),
+        },
+        locomo_sessions: {
+          path: path.join(ROOT, 'eval', 'data', 'canonical', 'locomo-sessions.json'),
+          sha256: sha256File(path.join(ROOT, 'eval', 'data', 'canonical', 'locomo-sessions.json')),
+        },
+        longmemeval_sessions: {
+          path: path.join(ROOT, 'eval', 'data', 'canonical', 'longmemeval-sessions.json'),
+          sha256: sha256File(path.join(ROOT, 'eval', 'data', 'canonical', 'longmemeval-sessions.json')),
+        },
+        s7_selection_contract: {
+          path: path.join(MUTMEM_V2_S7_CONTRACT, 'selection-contract.json'),
+          sha256: sha256File(path.join(MUTMEM_V2_S7_CONTRACT, 'selection-contract.json')),
+        },
+        s7_artifact_manifest: {
+          path: path.join(MUTMEM_V2_S7_CONTRACT, 'artifact-manifest.json'),
+          sha256: sha256File(path.join(MUTMEM_V2_S7_CONTRACT, 'artifact-manifest.json')),
+        },
+        poisonedrag_source_lock: {
+          file: path.relative(ROOT, POISONEDRAG_SOURCE_LOCK),
+          sha256: sha256File(POISONEDRAG_SOURCE_LOCK),
+        },
+        poisonedrag_public_target_lock: {
+          file: path.relative(ROOT, POISONEDRAG_PUBLIC_LOCK),
+          sha256: sha256File(POISONEDRAG_PUBLIC_LOCK),
+        },
+        poisonedrag_private_target_manifest: {
+          file: 'n100-private-target-manifest.json',
+          sha256: sha256File(path.join(POISONEDRAG_PRIVATE_ROOT, 'n100-private-target-manifest.json')),
+          redistributed: false,
+        },
+        poisonedrag_corpus_resolution: {
+          file: 'n100-corpus-resolution.json',
+          sha256: sha256File(path.join(POISONEDRAG_PRIVATE_ROOT, 'n100-corpus-resolution.json')),
+          redistributed: false,
+        },
+        poisonedrag_candidate_pool: {
+          file: 'n100-candidate-pool.jsonl',
+          sha256: sha256File(path.join(POISONEDRAG_PRIVATE_ROOT, 'n100-candidate-pool.jsonl')),
+          redistributed: false,
+        },
+      }
+    : args.protocol === POISONEDRAG_PROTOCOL_ID
     ? {
         poisonedrag_source_lock: {
           file: path.relative(ROOT, POISONEDRAG_SOURCE_LOCK),
@@ -870,7 +1395,40 @@ async function main() {
           redistributed: false,
         },
       }
-    : {
+    : [TWIN_PRIME_G1P_PROTOCOL, TWIN_PRIME_G5_PROTOCOL].includes(args.protocol)
+      ? {
+          twin_prime_g1p_corpus_manifest: {
+            path: path.join(TWIN_PRIME_G1P_CORPUS, 'corpus-manifest.json'),
+            sha256: sha256File(path.join(TWIN_PRIME_G1P_CORPUS, 'corpus-manifest.json')),
+          },
+          longmemeval_s_sessions: {
+            path: path.join(TWIN_PRIME_G1P_CORPUS, 'longmemeval-sessions.json'),
+            sha256: sha256File(path.join(TWIN_PRIME_G1P_CORPUS, 'longmemeval-sessions.json')),
+          },
+          longmemeval_s_query_inputs: {
+            path: path.join(TWIN_PRIME_G1P_CORPUS, 'longmemeval-query-inputs.json'),
+            sha256: sha256File(path.join(TWIN_PRIME_G1P_CORPUS, 'longmemeval-query-inputs.json')),
+          },
+          locomo_sessions: {
+            path: path.join(TWIN_PRIME_G1P_CORPUS, 'locomo-sessions.json'),
+            sha256: sha256File(path.join(TWIN_PRIME_G1P_CORPUS, 'locomo-sessions.json')),
+          },
+          locomo_query_inputs: {
+            path: path.join(TWIN_PRIME_G1P_CORPUS, 'locomo-query-inputs.json'),
+            sha256: sha256File(path.join(TWIN_PRIME_G1P_CORPUS, 'locomo-query-inputs.json')),
+          },
+          ...(args.protocol === TWIN_PRIME_G5_PROTOCOL ? {
+            twin_prime_g5_pilot_contract: {
+              path: path.join(TWIN_PRIME_G5_CONTRACT, 'pilot-contract.json'),
+              sha256: sha256File(path.join(TWIN_PRIME_G5_CONTRACT, 'pilot-contract.json')),
+            },
+            twin_prime_g5_artifact_manifest: {
+              path: path.join(TWIN_PRIME_G5_CONTRACT, 'artifact-manifest.json'),
+              sha256: sha256File(path.join(TWIN_PRIME_G5_CONTRACT, 'artifact-manifest.json')),
+            },
+          } : {}),
+        }
+      : {
         longmemeval: { path: args.longmemevalFile, sha256: sha256File(args.longmemevalFile) },
         locomo: { path: LOCOMO_DATASET, sha256: sha256File(LOCOMO_DATASET) },
         canonical_corpus_manifest: {
@@ -913,6 +1471,8 @@ async function main() {
     if (resuming) {
       if (!await databaseExists(databaseName)) throw new Error('resume_scratch_database_missing');
       scratchCreated = true;
+      resumable = Boolean(args.keepScratchDb
+        && existsSync(path.join(outputDir, 'run-manifest.json')));
     } else {
       scratchCreated = true;
       await spawnLogged(process.execPath, [
@@ -928,6 +1488,8 @@ async function main() {
         baseline,
         canonical_before: canonicalBefore,
       });
+      resumable = Boolean(args.keepScratchDb
+        && existsSync(path.join(outputDir, 'run-manifest.json')));
     }
     server = spawnLogged(process.execPath, [
       'server.js', '--aimos-db', databaseName, '--aimos-port', String(args.port)
@@ -1020,6 +1582,50 @@ async function main() {
           resumable,
         }),
       });
+    } else if (args.protocol === TWIN_PRIME_G1P_PROTOCOL) {
+      passes.twin_prime_g1p = await runTwinPrimeG1P(args, {
+        runId: runId.toLowerCase(),
+        databaseName,
+        outputDir,
+        baseUrl,
+        onPhase: (phase) => writeRunStatus(outputDir, {
+          run_id: runId,
+          database_name: databaseName,
+          state: 'running',
+          phase,
+          resumable,
+        }),
+      });
+    } else if (args.protocol === TWIN_PRIME_G5_PROTOCOL) {
+      passes.twin_prime_g5 = await runTwinPrimeG5(args, {
+        runId: runId.toLowerCase(),
+        databaseName,
+        outputDir,
+        baseUrl,
+        serverPid: server.pid,
+        onPhase: (phase) => writeRunStatus(outputDir, {
+          run_id: runId,
+          database_name: databaseName,
+          state: 'running',
+          phase,
+          resumable,
+        }),
+      });
+    } else if (args.protocol === MUTMEM_V2_S7_PROTOCOL) {
+      passes.mutmem_v2_s7 = await runMutMemV2S7(args, {
+        runId: runId.toLowerCase(),
+        databaseName,
+        outputDir,
+        baseUrl,
+        serverPid: server.pid,
+        onPhase: (phase) => writeRunStatus(outputDir, {
+          run_id: runId,
+          database_name: databaseName,
+          state: 'running',
+          phase,
+          resumable,
+        }),
+      });
     } else {
       passes.canonical = await runCanonicalBenchmark(args, {
         runId: runId.toLowerCase(),
@@ -1059,7 +1665,7 @@ async function main() {
     );
 
     restoreSharedFiles();
-    const purge = args.keepScratchDb
+    const purge = args.keepScratchDb && args.protocol !== MUTMEM_V2_S7_PROTOCOL
       ? null
       : await runSignedScratchPurge(databaseName, purgeReceiptPath);
     if (purge) {
@@ -1080,12 +1686,24 @@ async function main() {
           ? 'historical-v1'
           : args.protocol === POISONEDRAG_PROTOCOL_ID
             ? 'poisonedrag-n100'
-            : 'canonical-single-query',
+            : args.protocol === TWIN_PRIME_G1P_PROTOCOL
+              ? 'twin-prime-g1p'
+              : args.protocol === TWIN_PRIME_G5_PROTOCOL
+                ? 'twin-prime-g5'
+                : args.protocol === MUTMEM_V2_S7_PROTOCOL
+                  ? 'mutmem-v2-s7'
+              : 'canonical-single-query',
       protocol: args.protocol,
       benchmark: args.benchmark,
       scope: args.lifecycleProof
         ? 'lifecycle-proof'
-        : args.full ? 'full' : (args.gate || (args.smoke ? `smoke:${args.sample}` : `sample:${args.sample}`)),
+        : args.protocol === TWIN_PRIME_G1P_PROTOCOL
+          ? `label-blind:${args.sample}-per-dataset`
+          : args.protocol === TWIN_PRIME_G5_PROTOCOL
+            ? 'gate10:10-questions:four-arms'
+            : args.protocol === MUTMEM_V2_S7_PROTOCOL
+              ? 'gate10:10-utility-questions:two-arms:5-poison-targets:two-policies'
+          : args.full ? 'full' : (args.gate || (args.smoke ? `smoke:${args.sample}` : `sample:${args.sample}`)),
       recall_depth_k: args.limit,
       cognitive: args.lifecycleProof
         ? false
@@ -1097,12 +1715,18 @@ async function main() {
             ? { reader: 'codex:gpt-5.4', deterministic_scorer: LOCOMO_OFFICIAL_PROTOCOL }
             : args.protocol === POISONEDRAG_PROTOCOL_ID
               ? { generator: `codex:${POISONEDRAG_GENERATOR_MODEL}`, judge: 'codex:gpt-5.6-terra', judge_reasoning: 'high' }
-              : { generator: 'codex:gpt-5.4', judge: 'codex:gpt-5.6-terra', judge_reasoning: 'high' },
+              : args.protocol === TWIN_PRIME_G1P_PROTOCOL
+                ? false
+                : args.protocol === TWIN_PRIME_G5_PROTOCOL
+                  ? { generator: 'codex:gpt-5.5', generator_reasoning: 'medium', judge: 'codex:gpt-5.6-terra', judge_reasoning: 'high' }
+                  : args.protocol === MUTMEM_V2_S7_PROTOCOL
+                    ? { generator: 'codex:gpt-5.5', generator_reasoning: 'medium', judge: 'codex:gpt-5.6-terra', judge_reasoning: 'high' }
+                : { generator: 'codex:gpt-5.4', judge: 'codex:gpt-5.6-terra', judge_reasoning: 'high' },
       datasets,
       scratch: {
         database_name: databaseName,
         port: args.port,
-        retained: args.keepScratchDb,
+        retained: Boolean(args.keepScratchDb && !purge),
         baseline,
         after_benchmark: scratchAfter,
         pre_purge_artifacts: prePurgeVerification,
@@ -1116,7 +1740,7 @@ async function main() {
     writeFileSync(path.join(outputDir, 'isolation-proof.json'), `${JSON.stringify(isolationProof, null, 2)}\n`);
     writeFileSync(path.join(outputDir, 'benchmark-summary.json'), `${JSON.stringify({ run_id: runId, mode: isolationProof.mode, benchmark: args.benchmark, scope: isolationProof.scope, recall_depth_k: args.limit, passes }, null, 2)}\n`);
     writeFileSync(path.join(outputDir, 'reproduce-command.txt'),
-      `node scripts/benchmark/run-isolated.mjs${args.lifecycleProof ? ' --lifecycle-proof' : args.full ? ' --full' : args.gate ? ` --gate ${args.gate}` : ` --sample ${args.sample}`}${args.historicalV1 ? ' --historical-v1' : ''}${args.cognitive ? ' --cognitive' : ''} --benchmark ${args.benchmark} --protocol ${args.protocol} --port ${args.port} --limit ${args.limit}\n`);
+      `node scripts/benchmark/run-isolated.mjs${args.lifecycleProof ? ' --lifecycle-proof' : args.full ? ' --full' : args.gate ? ` --gate ${args.gate}` : ` --sample ${args.sample}`}${args.historicalV1 ? ' --historical-v1' : ''}${args.cognitive ? ' --cognitive' : ''} --benchmark ${args.benchmark} --protocol ${args.protocol} --port ${args.port} --limit ${args.limit}${args.keychainAccount ? ` --keychain-account ${args.keychainAccount}` : ''}${args.predecessorRun ? ` --predecessor-run ${args.predecessorRun}` : ''}${args.protocol === MUTMEM_V2_S7_PROTOCOL ? ' --keep-scratch-db' : ''}\n`);
     writeFileSync(path.join(outputDir, 'artifact-hashes.json'), `${JSON.stringify(await artifactHashes(outputDir), null, 2)}\n`);
     writeRunStatus(outputDir, {
       run_id: runId,
@@ -1138,7 +1762,7 @@ async function main() {
         message: String(error?.message || error || 'unknown_error').slice(0, 2000),
       },
       resume_command: resumable
-        ? `node scripts/benchmark/run-isolated.mjs --resume-run ${runId} ${resumeScopeArgs} --benchmark ${args.benchmark} --protocol ${args.protocol} --port ${args.port} --limit ${args.limit} --keep-scratch-db`
+        ? `node scripts/benchmark/run-isolated.mjs --resume-run ${runId} ${resumeScopeArgs} --benchmark ${args.benchmark} --protocol ${args.protocol} --port ${args.port} --limit ${args.limit}${args.keychainAccount ? ` --keychain-account ${args.keychainAccount}` : ''}${args.predecessorRun ? ` --predecessor-run ${args.predecessorRun}` : ''} --keep-scratch-db`
         : null,
     });
     throw error;

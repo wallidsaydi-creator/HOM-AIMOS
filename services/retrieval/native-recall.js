@@ -11,6 +11,8 @@ import { createHash } from 'node:crypto';
 import { agentPool } from '../../db/connection.js';
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { canonicalJson } from '../security/agent-identity.js';
+import { recallMerkleRoot } from '../security/protocol/mutmem-protocol.js';
+export { recallMerkleRoot } from '../security/protocol/mutmem-protocol.js';
 import { recallAuthorizationService } from '../security/recall-authorization.js';
 import { memoryProvenanceLedger } from '../security/memory-provenance.js';
 import { logEvent } from '../observe/event-ledger.js';
@@ -284,16 +286,72 @@ export function isNativeRecallCandidateWithinCommand(candidate, command = {}) {
   return true;
 }
 
-export async function admitNativeRecallCandidates(memories, authority) {
+export async function admitNativeRecallCandidatesInVerifiedSession(
+  memories,
+  authority,
+  client,
+  verifyEvidenceFn = (options) => memoryProvenanceLedger.verifyRecallEvidence(options),
+) {
+  if (!client || typeof client.query !== 'function') {
+    throw new Error('verified_recall_session_client_required');
+  }
+  if (!authority?.companyId || !authority?.actorAgentId || !authority?.actorValidFromIso) {
+    throw new Error('verified_recall_authority_required');
+  }
   const candidateRows = (Array.isArray(memories) ? memories : [])
     .filter((memory) => isNativeRecallCandidateWithinCommand(memory, authority.command));
   const ids = [...new Set(candidateRows.map((memory) => String(memory?.id || '')).filter(Boolean))];
   if (!ids.length) return { memories: [], rejected: [] };
-  const client = await agentPool.connect();
+  const evidence = await verifyEvidenceFn({ memoryIds: ids, client });
+  if (evidence.rejected.length) {
+    const error = new Error('recall_evidence_verification_failed');
+    error.rejected = evidence.rejected;
+    throw error;
+  }
+  const admitted = [];
+  for (const memory of candidateRows) {
+    const proof = evidence.proofs.get(String(memory.id));
+    if (!proof || !isNativeRecallProofAllowed(proof, authority)) continue;
+    const quarantineEvidence = proof.scope === 'quarantine' || proof.memory_type === 'quarantine';
+    admitted.push({
+      ...memory,
+      provenance_proof: proof,
+      version_status: proof.version_status,
+      retention_frequency_class: quarantineEvidence ? 'quiet' : 'normal',
+      evidence_handling: quarantineEvidence ? 'untrusted_reference_only' : 'ordinary_reference',
+    });
+  }
+  return { memories: admitted, rejected: [] };
+}
+
+/**
+ * Bind one native recall principal and actor epoch for a bounded request, then
+ * reuse that transaction for every newly discovered graph layer. Each call to
+ * `admit` still performs the complete live provenance/signature verification;
+ * only repeated connection, principal-binding, and actor-lock setup is shared.
+ */
+export async function openNativeRecallAdmissionSession({
+  authority,
+  connectFn = () => agentPool.connect(),
+  verifyEvidenceFn = (options) => memoryProvenanceLedger.verifyRecallEvidence(options),
+} = {}) {
+  if (!authority?.companyId || !authority?.actorAgentId || !authority?.actorValidFromIso) {
+    throw new Error('verified_recall_authority_required');
+  }
+  const client = await connectFn();
+  let closed = false;
   try {
     await client.query('BEGIN');
-    await client.query('SELECT set_config($1,$2,true)', ['app.current_client_id', authority.companyId]);
-    await client.query('SELECT set_config($1,$2,true)', ['app.current_agent_id', authority.actorAgentId]);
+    await client.query(
+      `SELECT set_config($1,$2,true),
+              set_config($3,$4,true),
+              set_config($5,$6,true)`,
+      [
+        'app.current_client_id', authority.companyId,
+        'app.current_agent_id', authority.actorAgentId,
+        'plan_cache_mode', 'force_generic_plan',
+      ],
+    );
     await lockActiveActor(client, authority);
     if (!authority.isHousekeeper) {
       const grant = await recallAuthorizationService.getEffective({
@@ -306,51 +364,47 @@ export async function admitNativeRecallCandidates(memories, authority) {
         throw new Error('recall_authority_changed_during_request');
       }
     }
-    const evidence = await memoryProvenanceLedger.verifyRecallEvidence({ memoryIds: ids, client });
-    if (evidence.rejected.length) {
-      const error = new Error('recall_evidence_verification_failed');
-      error.rejected = evidence.rejected;
-      throw error;
-    }
-    const admitted = [];
-    for (const memory of candidateRows) {
-      const proof = evidence.proofs.get(String(memory.id));
-      if (!proof || !isNativeRecallProofAllowed(proof, authority)) continue;
-      const quarantineEvidence = proof.scope === 'quarantine' || proof.memory_type === 'quarantine';
-      admitted.push({
-        ...memory,
-        provenance_proof: proof,
-        version_status: proof.version_status,
-        retention_frequency_class: quarantineEvidence ? 'quiet' : 'normal',
-        evidence_handling: quarantineEvidence ? 'untrusted_reference_only' : 'ordinary_reference',
-      });
-    }
-    await client.query('COMMIT');
-    return { memories: admitted, rejected: [] };
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch { /* connection may be gone */ }
-    throw error;
-  } finally {
     client.release();
+    throw error;
+  }
+
+  return Object.freeze({
+    admit: async (memories) => {
+      if (closed) throw new Error('recall_admission_session_closed');
+      return admitNativeRecallCandidatesInVerifiedSession(
+        memories,
+        authority,
+        client,
+        verifyEvidenceFn,
+      );
+    },
+    close: async ({ commit = false } = {}) => {
+      if (closed) return;
+      closed = true;
+      try {
+        await client.query(commit ? 'COMMIT' : 'ROLLBACK');
+      } finally {
+        client.release();
+      }
+    },
+  });
+}
+
+export async function admitNativeRecallCandidates(memories, authority) {
+  const session = await openNativeRecallAdmissionSession({ authority });
+  try {
+    const admitted = await session.admit(memories);
+    await session.close({ commit: true });
+    return admitted;
+  } catch (error) {
+    try { await session.close({ commit: false }); } catch { /* preserve admission failure */ }
+    throw error;
   }
 }
 
-export function recallMerkleRoot(entries = []) {
-  const leaves = entries.map((entry) => sha256(Buffer.concat([
-    Buffer.from([0x00]),
-    Buffer.from(canonicalJson(entry), 'utf8'),
-  ])));
-  if (!leaves.length) return sha256(Buffer.alloc(0));
-  function tree(nodes) {
-    if (nodes.length === 1) return nodes[0];
-    let split = 1;
-    while ((split << 1) < nodes.length) split <<= 1;
-    return sha256(Buffer.concat([Buffer.from([0x01]), tree(nodes.slice(0, split)), tree(nodes.slice(split))]));
-  }
-  return tree(leaves);
-}
-
-export async function finalizeNativeRecall({ memories, authority }) {
+export async function finalizeNativeRecall({ memories, authority, epistemicDecisionHash = null }) {
   const finiteScoreOrNull = (value) => {
     const score = Number(value);
     return Number.isFinite(score) ? score : null;
@@ -368,9 +422,21 @@ export async function finalizeNativeRecall({ memories, authority }) {
     calibration_mutation_hash: memory.calibration_mutation_hash,
     calibration_formula_version: memory.calibration_formula_version,
   }));
+  const normalizedDecisionHash = epistemicDecisionHash == null
+    ? null
+    : String(epistemicDecisionHash).trim().toLowerCase();
+  if (normalizedDecisionHash != null && !/^[0-9a-f]{64}$/.test(normalizedDecisionHash)) {
+    throw new TypeError('recall_epistemic_decision_hash_invalid');
+  }
+  const merkleEntries = normalizedDecisionHash
+    ? [{
+        entry_type: 'epistemic_decision',
+        decision_sha256: normalizedDecisionHash,
+      }, ...entries]
+    : entries;
   const commandHash = sha256(Buffer.from(canonicalJson(authority.command), 'utf8')).toString('hex');
   const outerRequestHash = sha256(Buffer.from(canonicalJson(authority.requestAuthority.body), 'utf8')).toString('hex');
-  const root = recallMerkleRoot(entries).toString('hex');
+  const root = recallMerkleRoot(merkleEntries).toString('hex');
   const receipt = await logEvent(authority.companyId, authority.actorAgentId, 'recall_receipt', commandHash, {
     command_hash: commandHash,
     outer_request_hash: outerRequestHash,
@@ -387,6 +453,11 @@ export async function finalizeNativeRecall({ memories, authority }) {
     result_count: entries.length,
     merkle_root: root,
     evidence: entries,
+    ...(normalizedDecisionHash ? {
+      merkle_schema: 'hom-aimos/recall-merkle/v2-epistemic-decision',
+      epistemic_decision_sha256: normalizedDecisionHash,
+      merkle_entries: merkleEntries,
+    } : {}),
     reasoning: `Housekeeper observed ${entries.length} fail-closed provenance-verified recall result(s).`,
     source_knowledge: 'RFC 6962 domain-separated Merkle receipt; native-recall.js',
   }, null, {
@@ -411,6 +482,11 @@ export async function finalizeNativeRecall({ memories, authority }) {
     request_receipt_mutation_hash: authority.requestReceiptMutationHash,
     merkle_root: root,
     evidence: entries,
+    ...(normalizedDecisionHash ? {
+      merkle_schema: 'hom-aimos/recall-merkle/v2-epistemic-decision',
+      epistemic_decision_sha256: normalizedDecisionHash,
+      merkle_entries: merkleEntries,
+    } : {}),
     event_receipt: receipt,
   };
 }

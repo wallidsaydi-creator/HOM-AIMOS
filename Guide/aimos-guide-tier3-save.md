@@ -149,7 +149,7 @@ POST /aimos/save
 | RPE Gate | Save | Routes depth, never blocks |
 | Sudo Guard | Save | Overwriting clearance 12+ without 12+ |
 | Quarantine | Save | Prompt injection detected (base64/URL decoded) |
-| Early Exit | Recall | High confidence — skips stages 11-15 (optimization) |
+| Early Exit | Recall | High confidence — skips optional enrichment; signed epistemic/security closure still runs |
 | Salience frequency | Recall | Annotates low-frequency evidence for ranking; never filters a retained memory |
 
 ## Correction Pattern

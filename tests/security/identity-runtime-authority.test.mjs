@@ -9,7 +9,7 @@ import {
   pubkeyFingerprint,
 } from '../../services/security/agent-identity.js';
 
-function identityFixture() {
+function identityFixture({ issuer = null } = {}) {
   const master = generateKeypair();
   const agent = generateKeypair();
   const validFrom = 1_783_764_000;
@@ -21,7 +21,7 @@ function identityFixture() {
     device_fp: 'identity-runtime-authority-device',
     valid_from: validFrom,
     valid_until: validUntil,
-    issuer: pubkeyFingerprint(master.pubkey),
+    issuer: issuer || pubkeyFingerprint(master.pubkey),
     issued_at: validFrom,
   });
   return {
@@ -48,6 +48,23 @@ test('certificate selection verifies the signed epoch and ignores mutable revoke
     queryFn: async () => ({ rows: [row] }),
   });
   assert.equal(selected, cert);
+});
+
+test('certificate selection accepts canonical master custody and rejects unknown issuer vocabulary', async () => {
+  const canonical = identityFixture({ issuer: 'aimos-master' });
+  assert.equal(await getAgentCert('agent-a', {
+    nowFn: () => 1_783_764_500_000,
+    queryFn: async () => ({ rows: [canonical.row] }),
+  }), canonical.cert);
+
+  const unknown = identityFixture({ issuer: 'unexpected-root' });
+  await assert.rejects(
+    getAgentCert('agent-a', {
+      nowFn: () => 1_783_764_500_000,
+      queryFn: async () => ({ rows: [unknown.row] }),
+    }),
+    /certificate_authority_missing/,
+  );
 });
 
 test('only a valid master-signed revocation event terminates certificate selection', async () => {

@@ -27,6 +27,7 @@
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { logEvent } from '../observe/event-ledger.js';
 import { getPermissions } from '../core/permissions.js';
+import { recallAuthorizationService } from '../security/recall-authorization.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -34,11 +35,11 @@ const COMPANY = AIMOS_COMPANY_ID;
 // The housekeeper is NOT a free agent. It is the system self, and its authority
 // to write (e.g. to ingest the Guide on first fire) comes from BEING the system
 // role, not from holding an agent_session. The request tier is
-// `T1_SYSTEM_SELF`: auth-tier.js verified the self-signed housekeeper cert
-// against the housekeeper's own pubkey. No mutable database role flag can grant
-// this authority. The lane is restricted to the exact `housekeeper` principal.
-// The system-self lane is part of the certificate-envelope authority itself.
-const SYSTEM_SELF_TIER = 'T1_SYSTEM_SELF';
+// `T1_SYSTEM_SELF` is the retained Genesis certificate. `T1` is its
+// key-continuity-preserving master-signed custody successor. Both tiers are
+// cryptographically verified, and neither alone grants system authority: the
+// principal must also be exactly `housekeeper`. No mutable role flag grants it.
+const HOUSEKEEPER_SYSTEM_TIERS = new Set(['T1', 'T1_SYSTEM_SELF']);
 
 // Injection patterns similar to cybersec-firewall but for data safety.
 // Keep these structural: Aimos stores academic/source evidence that may quote
@@ -284,31 +285,84 @@ export function buildWriteValidationDiagnostics({
  */
 export async function checkWritePermission(agentId, targetKey, opts = {}) {
   // ── R11b: first-class system-self write authority (BEFORE the session lookup) ──
-  // If the request authenticated at tier T1_SYSTEM_SELF and the acting identity
-  // is the exact housekeeper principal, it holds
+  // If the request authenticated under either verified housekeeper system tier
+  // and the acting identity is the exact housekeeper principal, it holds
   // intrinsic system-maintenance write clearance and is permitted WITHOUT an
   // agent_session row. The tier is taken from the VERIFIED envelope (opts.identityTier,
   // set by auth-gate). Prefer the verified cert agent id; fall back to the
   // passed agentId only if the caller did not thread a verified id.
   const identityTier = opts.identityTier || null;
   const verifiedAgentId = opts.verifiedAgentId || agentId;
-  if (identityTier === SYSTEM_SELF_TIER && verifiedAgentId === 'housekeeper') {
+  if (HOUSEKEEPER_SYSTEM_TIERS.has(String(identityTier || '').toUpperCase())
+      && verifiedAgentId === 'housekeeper') {
         // Never silent: record the intrinsic system-self write path in the ledger.
         logEvent(COMPANY, verifiedAgentId, 'system_self_write_authorized', targetKey, {
           stage: 'write_validator',
-          reason: 'verified_housekeeper_system_self',
+          reason: 'verified_housekeeper_system_identity',
           tier: identityTier,
           target_key: targetKey,
-          note: 'The cryptographically-proven system self (T1_SYSTEM_SELF + exact housekeeper principal) '
+          note: 'The cryptographically-proven system identity (T1 or T1_SYSTEM_SELF + exact housekeeper principal) '
               + 'holds intrinsic system-maintenance write authority and does not require an '
               + 'agent_session. No mutable role column participates in authorization.',
-          source_knowledge: 'write-validator.js R11b verified housekeeper system-self authority',
+          source_knowledge: 'write-validator.js R11b verified housekeeper system identity authority',
         }).catch((e) => console.warn('[WRITE-VALIDATOR] system-self ledger emit failed:', e && e.message));
         return { permitted: true, systemSelf: true };
   }
 
-  // Ordinary-agent authority comes only from the verified append-only
-  // capability ledger. A memory row is never an identity or clearance grant.
+  // Ordinary cert-enveloped memory writes are authorized by the exact same
+  // master-signed, exact-epoch grant consumed by the REST route, MCP route,
+  // and native persistence owner. Requiring a second actor-signed capability
+  // row here split authority by transport: REST could fail after its master
+  // grant had already passed while MCP/native persistence admitted that same
+  // grant. The validator independently re-reads the master-signed chain rather
+  // than trusting a boolean threaded by the route.
+  const executionContext = opts.executionContext || null;
+  if (executionContext) {
+    const actorAgentId = String(executionContext.actorAgentId || '').trim();
+    const actorValidFromIso = executionContext.actorValidFromIso || null;
+    const companyId = String(executionContext.companyId || '').trim();
+    const executionTier = String(executionContext.identityTier || '').trim().toUpperCase();
+    if (actorAgentId !== String(agentId || '')
+        || !actorValidFromIso
+        || !companyId
+        || !['T1', 'T2', 'T3'].includes(executionTier)) {
+      return { permitted: false, reason: 'Verified memory-write execution context is invalid' };
+    }
+    try {
+      const grantReader = typeof opts.getMemoryAuthority === 'function'
+        ? opts.getMemoryAuthority
+        : (scope) => recallAuthorizationService.getEffective(scope);
+      const grant = await grantReader({
+        companyId,
+        subjectAgentId: actorAgentId,
+        subjectValidFrom: actorValidFromIso,
+      });
+      if (!grant?.allowed || !grant.writeAllowed) {
+        return { permitted: false, reason: 'Master-signed memory_write authority is absent or revoked' };
+      }
+      const scope = targetKey.split(':')[0] || targetKey;
+      if (['system', 'admin'].includes(scope) && Number(grant.clearanceCeiling) < 12) {
+        return { permitted: false, reason: `Clearance 12 master authority required for scope ${scope}` };
+      }
+      return {
+        permitted: true,
+        capability: 'memory_write',
+        authority: 'master_signed_exact_epoch_memory_grant',
+        grantEventId: grant.eventId || null,
+        grantMutationHash: grant.mutationHash
+          ? Buffer.from(grant.mutationHash).toString('hex')
+          : null,
+      };
+    } catch (err) {
+      console.error(`[WRITE-VALIDATOR] Master grant check failed: ${err.message}`);
+      return { permitted: false, reason: `Master grant check error: ${err.message}` };
+    }
+  }
+
+  // Compatibility path for internal callers that have not yet threaded a
+  // verified execution context. It remains fail-closed and cannot override a
+  // supplied-but-invalid master context. Public REST/MCP/native save paths do
+  // not use this branch.
   try {
     const scope = targetKey.split(':')[0] || targetKey;
     const permissions = await getPermissions(agentId, COMPANY);

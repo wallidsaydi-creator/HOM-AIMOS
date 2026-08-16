@@ -33,7 +33,7 @@
 import { extractEntities, resolveAliases, attachEvidence } from './entity-extractor.js';
 import { extractRelationships, validateDAG } from './relationship-mapper.js';
 import { extractTemporalMarkers } from './temporal-marker.js';
-import { extractConcepts, linkToConcepts } from '../core/concept-graph.js';
+import { extractConcepts } from '../core/concept-graph.js';
 
 // ── CONCURRENCY LIMIT ───────────────────────────────────────────────────────
 // Each ingestion run fires up to 3 LLM calls (entity, relationship, temporal).
@@ -225,14 +225,10 @@ async function runIngestionInner(input) {
     errors.push(`extractConcepts: ${err.message}`);
   }
 
-  // Concept linking happens asynchronously after the return value is built.
-  // The caller (asmr-pipeline) may pass a memoryId via input for linking.
-  const memoryId = input.memoryId || input.id || null;
-  if (memoryId && concepts.length > 0) {
-    try {
-      await linkToConcepts(memoryId, concepts, input.companyId);
-    } catch { /* concept linking is best-effort */ }
-  }
+  // Persistent Concept/PPR rows are not a best-effort per-save side effect.
+  // The signed native builder derives one immutable, source-root-bound graph
+  // from committed entity anchors and semantic triples. Keeping construction
+  // out of this fire-and-forget lane prevents unsigned partial graphs.
 
   return {
     // Facet 1: Named entities (session-tagged)

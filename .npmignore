@@ -8,24 +8,61 @@ RELEASE-IMPROVEMENT-PLAN.md
 REMEDIATION-INDEX.md
 architecture-authority.json
 services/.cache/
+**/__pycache__/
+**/*.pyc
 state/
 eval/data/canonical/
 eval/data/private/
+eval/data/twin-prime-g1p-canonical/
+eval/data/twin-prime-g1p-canonical-v2/
 eval/data/*.json
 eval/data/*.csv
 eval/public-results/
 eval/results/
+eval/gandalf-rct/
+eval/mutmem-v2/
+eval/saber/
+eval/twin-prime/
+eval/run-twin-prime-g1p.mjs
+eval/twin-prime-g1p-profile.mjs
 eval/V2-HANDOFF.md
+
+# Internal graph-calibration ceremonies are machine-bound development evidence,
+# not runtime services or portable reproduction inputs.
+scripts/ceremony/run-hage-g2-fixed-corpus-proof.mjs
+scripts/ceremony/run-hindsight-tempr-g2-fixed-corpus-proof.mjs
+scripts/ceremony/run-hingemem-g2-fixed-corpus-proof.mjs
+scripts/ceremony/run-hingemem-g3-boundary-proof.mjs
+scripts/ceremony/run-hmem-dense-routing-proof.mjs
+scripts/ceremony/run-hmem-h2-governed-proof.mjs
+scripts/ceremony/run-mnemis-m1-grounded-system1-proof.mjs
+scripts/ceremony/run-mnemis-m2-additive-proof.mjs
+scripts/ceremony/run-reconstructed-graph-g1-proof.mjs
+scripts/ceremony/run-reconstructed-graph-g2-additive-proof.mjs
+
+# ECR-4 and the S6 development protocol bind private preregistration or live
+# custody artifacts. The released SABER/Canary runtime and portable tests ship;
+# these unfinished research-ceremony inputs do not.
+scripts/ceremony/*saber-ecr4*
+scripts/verification/*saber-ecr4*
+scripts/verification/*mutmem-v2-s6*
+scripts/verification/lib/s6-*
+tests/security/ecr4d-*
+tests/security/saber-ecr4*
+tests/security/mutmem-v2-s6-*
+tests/security/epistemic-edit-certificate-multiclass.test.mjs
+
+# One-time reconciliation of historical private database checksums is not part
+# of fresh Genesis and becomes invalid after immutable migration-note cleanup.
+scripts/ceremony/reconcile-migration-027-checksum.mjs
+scripts/ceremony/reconcile-migration-035-checksum.mjs
+tests/security/migration-checksum-reconciliation.test.mjs
+tests/security/migration-035-checksum-reconciliation.test.mjs
 
 # The public release carries only the canonical evidence verifier for the
 # latest published runs; harness-development contract tests are excluded.
-tests/benchmark/canonical-aggregate.test.mjs
-tests/benchmark/canonical-corpus.test.mjs
-tests/benchmark/canonical-single-query.test.mjs
-tests/benchmark/locomo-official-protocol.test.mjs
-tests/benchmark/poisonedrag-protocol.test.mjs
-tests/benchmark/replay-sessions.test.mjs
-tests/benchmark/run-isolated-resume.test.mjs
+tests/benchmark/*
+!tests/benchmark/publication-evidence.test.mjs
 artifacts/
 /release/
 db/backups/

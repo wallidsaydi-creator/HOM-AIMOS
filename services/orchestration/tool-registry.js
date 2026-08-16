@@ -66,6 +66,8 @@ import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { recallAuthorizationService } from '../security/recall-authorization.js';
 import { resolveNativeRecallAuthority } from '../retrieval/native-recall.js';
 import { executeNativeRecall } from '../retrieval/native-recall-pipeline.js';
+import { masterPubkeyCache } from '../security/master-pubkey-cache.js';
+import { authorizePurposeLocalFileRead } from '../security/purpose-authorization.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 const AIMOS_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -1643,6 +1645,32 @@ export async function executeTool(name, args, agentId, options = {}) {
     return blockedResult;
   }
 
+  // Direct native callers do not pass through agent-runner's tool-list
+  // filter. Local disk reads therefore need their own native-owner check.
+  // The designated operator keeps its signed system-config boundary. Any
+  // other identity must present a master-signed, exact-epoch purpose proof
+  // restricted to the requested file's owner-only root.
+  let purposeAuthorizationReceipt = null;
+  if (name === 'read_file' && !isOperatorAgentId(agentId)) {
+    const serialized = options.purposeAuthorization || null;
+    if (!serialized) throw new Error('master_signed_local_file_read_authorization_required');
+    if (!/^[0-9a-f]{64}$/.test(String(options.protocolConfirmationSha256 || ''))) {
+      throw new Error('purpose_authorization_protocol_commitment_required');
+    }
+    const masterPubkey = await masterPubkeyCache.get();
+    if (!masterPubkey) throw new Error('purpose_authorization_master_pubkey_unavailable');
+    purposeAuthorizationReceipt = authorizePurposeLocalFileRead({
+      serialized,
+      masterPubkeyB64u: masterPubkey,
+      executionContext: options.executionContext || options.credentialUseContext || null,
+      agentId,
+      tool: name,
+      filepath: args?.filepath,
+      clearanceLevel: agentClearance,
+      expectedProtocolConfirmationSha256: options.protocolConfirmationSha256 || null,
+    });
+  }
+
   const autonomous = options.autonomous === true;
   const approvalRequiredForAutonomy = autonomous && QUOTA_SPENDING_TOOLS.has(name);
   const approvalEvidence = options.approvalEvidence || null;
@@ -1681,7 +1709,11 @@ export async function executeTool(name, args, agentId, options = {}) {
   // ─── Wire #29: Intent Classifier — scope enforcement before execution ───────
   try {
     const intentClass = classifyIntent(options.userPrompt || '', [name]);
-    const verbPolicy = enforceVerbPolicy(intentClass.scope, 'POST');
+    // Tool dispatch is an internal function call, not an HTTP request. Map the
+    // declared tool direction to the equivalent policy verb so read-only tools
+    // do not get misclassified as writes merely because they are invoked.
+    const policyVerb = toolDirection === TOOL_DIRECTIONS.READ ? 'GET' : 'POST';
+    const verbPolicy = enforceVerbPolicy(intentClass.scope, policyVerb);
     if (!verbPolicy.allowed) {
       const blockedResult = {
         error: `Intent scope enforcement blocked tool '${name}': ${verbPolicy.reason}`,
@@ -1744,6 +1776,7 @@ export async function executeTool(name, args, agentId, options = {}) {
       runtimeAgentId: String(agentId || ''),
       executionContext,
       parentEventId: actionParentEventId,
+      purposeAuthorizationReceipt,
     });
     const canaryContext = {
       parentEventId: signedToolAction.receipt.event_id,

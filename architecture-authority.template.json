@@ -2,22 +2,22 @@
   "schema": "hom.architecture-authority/v1",
   "runtime_mode": "template",
   "version": "0.12",
-  "updated": "2026-07-31",
+  "updated": "2026-08-11",
   "owner": "hom-aimos",
   "canonical": true,
-  "purpose": "Portable public HOM-AIMOS authority. Paths are relative to the fork root and are resolved by the Genesis installer. Runtime state, credentials, identities, permissions, and memories are ledgered; no environment or private Oracle file hierarchy is authoritative.",
+  "purpose": "Portable public HOM-AIMOS authority. Paths are relative to the repository root and are resolved by the Genesis installer. Runtime state, credentials, identities, permissions, and memories are ledgered; no environment or private predecessor-system file hierarchy is authoritative.",
   "governance": {
     "backend_first_authority": true,
     "compatibility_aliases_authoritative": false,
     "environment_configuration_authoritative": false,
-    "oracle_runtime_authoritative": false,
+    "legacy_runtime_authoritative": false,
     "aladdin_retention": "No decay, deletion, suppression, or deactivation. Only the explicit whole-brain legal purge ceremony may erase canonical memory."
   },
   "genesis_corpus": {
     "manifest": "./Guide/GENESIS-MANIFEST.json",
     "schema": "hom.aimos.genesis-manifest/v1",
-    "version": 4,
-    "corpus_root": "0eb6f33985ba29eec3b86eb6a7b407581b2bbd058749e1a2c1efd4ba1198ab1a",
+    "version": 19,
+    "corpus_root": "dcbf73476b21690cecbda9d084e5784775f4e004af82f8877186e7f4df533bc7",
     "hash_algorithm": "sha256",
     "binding": "Every Guide genesis save signs this schema, version, corpus root, and its own file hash into provenance."
   },
@@ -63,7 +63,7 @@
       "Generate architecture-authority.json from this template",
       "Self-provision the housekeeper system identity",
       "Ingest the eight Guide files through the signed native save route",
-      "Start HOM-AIMOS on its configured non-Oracle port only after readiness proof"
+      "Start HOM-AIMOS on its configured AIMOS port only after readiness proof"
     ]
   },
   "memory_architecture": {
@@ -85,6 +85,11 @@
     "canonical_transport": "signed POST routes/aimos.js and signed MCP protocol translators",
     "canonical_execution": "services/retrieval/native-recall-pipeline.js",
     "authority_and_admission": "services/retrieval/native-recall.js",
+    "central_native_fusion": "services/retrieval/native-retrieval-fusion.js",
+    "bounded_graph_family_fusion": "services/retrieval/reconstructed-graph-additive/graph-family-bounded-fusion.js",
+    "native_magma_gear": "services/retrieval/magma-native-candidate.js",
+    "native_magma_reader": "services/retrieval/magma-native-reader.js",
+    "native_reconstructed_graph_subgear": "services/retrieval/reconstructed-graph-native-candidate.js",
     "master_signed_authorization": "services/security/recall-authorization.js",
     "multi_stage_retrieval": "services/retrieval/multi-stage-retrieval.js",
     "epistemic_trust": "services/retrieval/epistemic-trust-retrieval.js",
@@ -104,8 +109,8 @@
     "manifest": "./hom-architecture-manifest.json",
     "counting_policy": "top-level services/<group>/*.js excluding index.js barrels and hidden directories",
     "counted_service_groups": 17,
-    "counted_service_files": 275,
-    "census_sha256": "9ae9e86daec8b420da768ab523e13cbfe2072c812a8d34d564ea8c315ce10095"
+    "counted_service_files": 300,
+    "census_sha256": "96035ce470104abdda7fd41d027c5c6bc8d5a5bb14881d43fc29795ace38032e"
   },
   "mechanical_rules": {
     "native_only": true,
@@ -120,6 +125,6 @@
     "hom-architecture-manifest.json must equal the live sorted service census",
     "Guide changes require a new Genesis manifest root and append-only corpus upgrade ceremony",
     "ARCHITECTURE-MAP.md must mirror the implemented public runtime",
-    "Oracle ports 9000 and 9001 are reserved and never belong to HOM-AIMOS"
+    "Only the explicitly configured AIMOS port belongs to this runtime"
   ]
 }

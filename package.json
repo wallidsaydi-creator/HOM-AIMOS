@@ -12,6 +12,7 @@
     "test:source": "node scripts/test/run-source-tests.mjs",
     "test:benchmark:contracts": "node scripts/test/run-source-tests.mjs --benchmark-only",
     "test:security:isolated": "node scripts/test/run-isolated-security.mjs",
+    "verify:mutmem:v2-s5": "node scripts/verification/verify-mutmem-v2-s5-production-corpus.mjs --read-only",
     "test:release:artifact": "node scripts/test/verify-release-artifacts.mjs",
     "test:release:public-tree": "node scripts/test/verify-public-source-tree.mjs",
     "test:release:source": "npm run lint && npm run test:source && npm run test:benchmark:contracts && npm run test:architecture-authority && node scripts/test/gate-reserved-ports.mjs && npm run test:release:artifact && npm audit --omit=dev --audit-level=high",
@@ -41,7 +42,7 @@
     "@huggingface/transformers": "^4.2.0",
     "cors": "^2.8.5",
     "express": "^5.2.1",
-    "express-rate-limit": "^8.5.2",
+    "express-rate-limit": "^8.6.2",
     "node-cron": "^4.2.1",
     "pg": "^8.11.3",
     "yauzl": "^3.4.0"

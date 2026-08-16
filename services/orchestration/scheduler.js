@@ -574,6 +574,13 @@ async function readScheduleProjections(client) {
       ORDER BY created_at ASC`,
     [COMPANY],
   );
+
+  // No retained projection means there is nothing the autonomous housekeeper
+  // may activate. Avoid reading and verifying the unrelated universal event
+  // stream in that exact state; as soon as one schedule projection exists,
+  // every schedule event is still read and cryptographically verified below.
+  if (projectionResult.rows.length === 0) return [];
+
   const eventRows = await readVerifiedEventHistory(COMPANY, { client });
 
   const creationById = new Map();

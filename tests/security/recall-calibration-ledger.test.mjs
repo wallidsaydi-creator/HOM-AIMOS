@@ -92,6 +92,29 @@ test('signed calibration reconstruction applies each observation exactly once', 
   );
 });
 
+test('housekeeper custody rotation preserves one logical calibration stream across signer epochs', () => {
+  const { genesis, observation, update } = fixture();
+  const oldEpoch = '2026-07-10T16:42:21.000Z';
+  const newEpoch = '2026-08-11T11:21:00.000Z';
+  const snapshot = reconstructCalibrationSnapshot([
+    { ...genesis, ledger_seq: 49, signer_valid_from: oldEpoch },
+    {
+      id: '44444444-4444-4444-8444-444444444444',
+      operation: 'unrelated_signed_event',
+      ledger_seq: 20_340,
+      signer_valid_from: oldEpoch,
+      mutation_hash: hash('unrelated-old-epoch-event'),
+      metadata: {},
+    },
+    { ...observation, ledger_seq: 1, signer_valid_from: newEpoch },
+    { ...update, ledger_seq: 2, signer_valid_from: newEpoch },
+  ]);
+  assert.equal(snapshot.alpha, 0.872);
+  assert.ok(Math.abs(snapshot.beta - (-0.16)) < 1e-12);
+  assert.equal(snapshot.lastObservationSequence, 2);
+  assert.equal(snapshot.pendingObservationCount, 0);
+});
+
 test('one immutable calibration snapshot annotates every returned memory', () => {
   const { genesis, observation, update } = fixture();
   const snapshot = reconstructCalibrationSnapshot([genesis, observation, update]);

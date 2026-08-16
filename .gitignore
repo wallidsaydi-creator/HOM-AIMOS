@@ -39,6 +39,8 @@ architecture-authority.json
 *.tmp
 *.temp
 .cache/
+__pycache__/
+*.py[cod]
 
 # Sensitive files (auto-detected)
 .env
@@ -71,6 +73,9 @@ eval/data/*.json
 eval/data/*.csv
 eval/data/canonical/
 eval/data/private/
+eval/data/twin-prime-g1p-canonical/
+eval/data/twin-prime-g1p-canonical-v2/
+eval/gandalf-rct/data/
 eval/V2-HANDOFF.md
 
 # Scratch / ceremony test databases leave no repo artifacts, but their logs might:

@@ -13,7 +13,20 @@ paths = [
   '''(^|/)services/\.cache/''',
   '''(^|/)eval/data/[^/]+\.(?:json|csv)$''',
   '''(^|/)eval/data/canonical/''',
+  '''(^|/)eval/data/twin-prime-g1p-canonical/''',
+  '''(^|/)eval/data/twin-prime-g1p-canonical-v2/''',
   '''(^|/)eval/public-results/''',
   '''(^|/)eval/results/''',
   '''(^|/)db/backups/''',
+]
+
+[[allowlists]]
+description = "Synthetic MutMem conformance vectors: SHA-256 command keys, not credentials"
+paths = [
+  '''^verifiers/mutmem-conformance/v1/MM-CV-022-A\.json$''',
+  '''^verifiers/mutmem-conformance/v1/MM-CV-022-B\.json$''',
+  '''^verifiers/mutmem-conformance/v1/MM-CV-022-C\.json$''',
+  '''^verifiers/mutmem-conformance/v1/MM-CV-022\.json$''',
+  '''^verifiers/mutmem-conformance/v1/MM-CV-023\.json$''',
+  '''^verifiers/mutmem-conformance/v1/MM-CV-024\.json$''',
 ]

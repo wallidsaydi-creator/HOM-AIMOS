@@ -168,10 +168,29 @@ export const SYSTEM_CONFIG_DEFINITIONS = Object.freeze({
   RECALL_RELAX_COMPARISON_SUFFICIENCY: Object.freeze({ type: 'boolean', allowEmpty: false }),
   RECALL_CACHE_ENABLED: Object.freeze({ type: 'boolean', allowEmpty: false }),
   RECALL_EARLY_EXIT_ENABLED: Object.freeze({ type: 'boolean', allowEmpty: false }),
+  // Retained legacy switch. Runtime no longer consumes this key: QuIM is a
+  // native gear whose exact append-only index build is selected by the signed
+  // composite policy below, never by a boolean activation flag.
   RECALL_QUIM_ENABLED: Object.freeze({ type: 'boolean', allowEmpty: false }),
   RECALL_GOVERNANCE_ENABLED: Object.freeze({ type: 'boolean', allowEmpty: false }),
   RECALL_INSTRUMENTATION_ENABLED: Object.freeze({ type: 'boolean', allowEmpty: false }),
   RECALL_FRESHNESS_RANKING_ENABLED: Object.freeze({ type: 'boolean', allowEmpty: false }),
+  // Twin-prime retrieval is experimental mathematical policy. One composite,
+  // master-signed value prevents partial arm/coefficient updates and keeps the
+  // arm outside request, environment, and agent authority.
+  TWIN_PRIME_RETRIEVAL_POLICY: Object.freeze({ type: 'twin_prime_retrieval_policy', allowEmpty: false }),
+  // Retained historical Gate50 control. Runtime no longer consumes this key:
+  // MAGMA is a native retrieval gear and has no activation/execution mode.
+  MAGMA_RETRIEVAL_POLICY: Object.freeze({ type: 'magma_retrieval_policy', allowEmpty: false }),
+  // Optional master-signed bounds for the always-native MAGMA gear. Absence
+  // selects immutable code defaults; this key can tune bounded mathematics but
+  // cannot enable, disable, shadow, enforce, or own candidate disclosure.
+  MAGMA_RETRIEVAL_CALIBRATION: Object.freeze({ type: 'magma_retrieval_calibration', allowEmpty: false }),
+  // Native derived-index build selection. These values do not enable or
+  // disable a gear; they bind the reader to one exact signed build root and
+  // its immutable paper/native-adaptation parameters.
+  QUIM_RETRIEVAL_POLICY: Object.freeze({ type: 'quim_retrieval_policy', allowEmpty: false }),
+  CONCEPT_PPR_RETRIEVAL_POLICY: Object.freeze({ type: 'concept_ppr_retrieval_policy', allowEmpty: false }),
   AGENT_RUNNER_DEBUG_PROMPT: Object.freeze({ type: 'boolean', allowEmpty: false }),
   MODEL_PREFERENCE_CHAT: Object.freeze({ type: 'model_preference', allowEmpty: true }),
   MODEL_PREFERENCE_HEAVY: Object.freeze({ type: 'model_preference', allowEmpty: true }),
@@ -197,6 +216,319 @@ const MODEL_PROVIDER_IDS = new Set([
   'anthropic', 'ollama', 'lmstudio', 'gemini', 'perplexity', 'openai',
   'codex', 'openrouter', 'groq', 'deepseek', 'together', 'xai', 'venice'
 ]);
+
+export const TWIN_PRIME_POLICY_VERSION = 'hom-aimos/twin-prime-policy/v1';
+export const MAGMA_RETRIEVAL_POLICY_VERSION = 'hom-aimos/magma-retrieval-policy/v1';
+export const MAGMA_RETRIEVAL_CALIBRATION_VERSION = 'hom-aimos/magma-retrieval-calibration/v2';
+export const QUIM_RETRIEVAL_POLICY_VERSION = 'hom-aimos/quim-retrieval-policy/v1';
+export const CONCEPT_PPR_RETRIEVAL_POLICY_VERSION = 'hom-aimos/concept-ppr-retrieval-policy/v1';
+export const TWIN_PRIME_LAMBDA_GRID = Object.freeze([
+  '0', '1/64', '1/32', '1/16', '1/8', '1/4', '1/2', '1', '2', '4', '8', '16', '32', '64',
+]);
+export const TWIN_PRIME_GAMMA_GRID = Object.freeze([
+  '0', '1/128', '1/64', '1/32', '1/16', '1/8', '1/4', '1/2',
+]);
+
+const TWIN_PRIME_POLICY_KEYS = Object.freeze([
+  'version', 'arm', 'lambda_t', 'gamma', 'execution', 'cache', 'early_exit',
+]);
+const TWIN_PRIME_ARMS = new Set(['B0', 'B1', 'B2', 'T']);
+const TWIN_PRIME_EXECUTION_MODES = new Set(['enforce', 'shadow']);
+
+export function validateTwinPrimeRetrievalPolicy(value) {
+  if (typeof value !== 'string') return { ok: false, reason: 'value_must_be_string' };
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return { ok: false, reason: 'invalid_twin_prime_retrieval_policy' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, reason: 'invalid_twin_prime_retrieval_policy' };
+  }
+  const keys = Object.keys(parsed);
+  if (
+    keys.length !== TWIN_PRIME_POLICY_KEYS.length
+    || keys.some((key) => !TWIN_PRIME_POLICY_KEYS.includes(key))
+    || TWIN_PRIME_POLICY_KEYS.some((key) => !Object.hasOwn(parsed, key))
+  ) {
+    return { ok: false, reason: 'invalid_twin_prime_policy_keys' };
+  }
+  if (parsed.version !== TWIN_PRIME_POLICY_VERSION) {
+    return { ok: false, reason: 'invalid_twin_prime_policy_version' };
+  }
+  if (!TWIN_PRIME_ARMS.has(parsed.arm)) {
+    return { ok: false, reason: 'invalid_twin_prime_policy_arm' };
+  }
+  if (typeof parsed.lambda_t !== 'string' || !TWIN_PRIME_LAMBDA_GRID.includes(parsed.lambda_t)) {
+    return { ok: false, reason: 'invalid_twin_prime_policy_lambda' };
+  }
+  if (typeof parsed.gamma !== 'string' || !TWIN_PRIME_GAMMA_GRID.includes(parsed.gamma)) {
+    return { ok: false, reason: 'invalid_twin_prime_policy_gamma' };
+  }
+  if (!TWIN_PRIME_EXECUTION_MODES.has(parsed.execution)) {
+    return { ok: false, reason: 'invalid_twin_prime_policy_execution' };
+  }
+  if (parsed.cache !== 'off' || parsed.early_exit !== 'off') {
+    return { ok: false, reason: 'twin_prime_experimental_shortcuts_forbidden' };
+  }
+  if (['B0', 'B1'].includes(parsed.arm) && (parsed.lambda_t !== '0' || parsed.gamma !== '0')) {
+    return { ok: false, reason: 'twin_prime_baseline_coefficients_nonzero' };
+  }
+  if (parsed.arm === 'B2' && parsed.gamma !== '0') {
+    return { ok: false, reason: 'twin_prime_b2_gamma_nonzero' };
+  }
+
+  const canonical = {
+    version: TWIN_PRIME_POLICY_VERSION,
+    arm: parsed.arm,
+    lambda_t: parsed.lambda_t,
+    gamma: parsed.gamma,
+    execution: parsed.execution,
+    cache: 'off',
+    early_exit: 'off',
+  };
+  return { ok: true, value: JSON.stringify(canonical), policy: Object.freeze(canonical) };
+}
+
+const MAGMA_POLICY_KEYS = Object.freeze([
+  'version', 'execution', 'max_depth', 'max_nodes', 'result_limit',
+  'candidate_p95_ceiling_ms', 'proof_sha256', 'runner_sha256', 'cache', 'early_exit',
+]);
+const MAGMA_EXECUTION_MODES = new Set(['shadow', 'enforce']);
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+const QUIM_POLICY_KEYS = Object.freeze([
+  'version', 'build_id', 'corpus_root_sha256', 'index_root_sha256',
+  'prototype_count', 'top_questions', 'max_bucket_scan',
+]);
+
+export function validateQuimRetrievalPolicy(value) {
+  if (typeof value !== 'string') return { ok: false, reason: 'value_must_be_string' };
+  let parsed;
+  try { parsed = JSON.parse(value); } catch { return { ok: false, reason: 'invalid_quim_retrieval_policy' }; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, reason: 'invalid_quim_retrieval_policy' };
+  }
+  const keys = Object.keys(parsed);
+  if (
+    keys.length !== QUIM_POLICY_KEYS.length
+    || keys.some((key) => !QUIM_POLICY_KEYS.includes(key))
+    || QUIM_POLICY_KEYS.some((key) => !Object.hasOwn(parsed, key))
+  ) return { ok: false, reason: 'invalid_quim_policy_keys' };
+  if (parsed.version !== QUIM_RETRIEVAL_POLICY_VERSION) {
+    return { ok: false, reason: 'invalid_quim_policy_version' };
+  }
+  if (!UUID_RE.test(String(parsed.build_id || ''))) return { ok: false, reason: 'invalid_quim_build_id' };
+  if (!SHA256_HEX_RE.test(String(parsed.corpus_root_sha256 || ''))
+      || !SHA256_HEX_RE.test(String(parsed.index_root_sha256 || ''))) {
+    return { ok: false, reason: 'invalid_quim_build_root' };
+  }
+  if (!Number.isInteger(parsed.prototype_count) || parsed.prototype_count < 1 || parsed.prototype_count > 4096) {
+    return { ok: false, reason: 'invalid_quim_prototype_count' };
+  }
+  if (parsed.top_questions !== 3) return { ok: false, reason: 'quim_top_questions_must_equal_paper_contract' };
+  if (!Number.isInteger(parsed.max_bucket_scan) || parsed.max_bucket_scan < 3 || parsed.max_bucket_scan > 8192) {
+    return { ok: false, reason: 'invalid_quim_bucket_scan_bound' };
+  }
+  const canonical = {
+    version: QUIM_RETRIEVAL_POLICY_VERSION,
+    build_id: parsed.build_id,
+    corpus_root_sha256: parsed.corpus_root_sha256,
+    index_root_sha256: parsed.index_root_sha256,
+    prototype_count: parsed.prototype_count,
+    top_questions: 3,
+    max_bucket_scan: parsed.max_bucket_scan,
+  };
+  return { ok: true, value: JSON.stringify(canonical), policy: Object.freeze(canonical) };
+}
+
+const CONCEPT_PPR_POLICY_KEYS = Object.freeze([
+  'version', 'build_id', 'corpus_root_sha256', 'graph_root_sha256',
+  'damping', 'iterations', 'entity_seed_limit', 'passage_limit',
+  'synonym_threshold_q6', 'max_synonyms_per_node', 'max_ppr_nodes',
+  'max_ppr_edges',
+]);
+
+export function validateConceptPprRetrievalPolicy(value) {
+  if (typeof value !== 'string') return { ok: false, reason: 'value_must_be_string' };
+  let parsed;
+  try { parsed = JSON.parse(value); } catch { return { ok: false, reason: 'invalid_concept_ppr_retrieval_policy' }; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, reason: 'invalid_concept_ppr_retrieval_policy' };
+  }
+  const keys = Object.keys(parsed);
+  if (
+    keys.length !== CONCEPT_PPR_POLICY_KEYS.length
+    || keys.some((key) => !CONCEPT_PPR_POLICY_KEYS.includes(key))
+    || CONCEPT_PPR_POLICY_KEYS.some((key) => !Object.hasOwn(parsed, key))
+  ) return { ok: false, reason: 'invalid_concept_ppr_policy_keys' };
+  if (parsed.version !== CONCEPT_PPR_RETRIEVAL_POLICY_VERSION) {
+    return { ok: false, reason: 'invalid_concept_ppr_policy_version' };
+  }
+  if (!UUID_RE.test(String(parsed.build_id || ''))) return { ok: false, reason: 'invalid_concept_ppr_build_id' };
+  if (!SHA256_HEX_RE.test(String(parsed.corpus_root_sha256 || ''))
+      || !SHA256_HEX_RE.test(String(parsed.graph_root_sha256 || ''))) {
+    return { ok: false, reason: 'invalid_concept_ppr_build_root' };
+  }
+  if (parsed.damping !== '1/2') return { ok: false, reason: 'concept_ppr_damping_changed' };
+  if (!Number.isInteger(parsed.iterations) || parsed.iterations < 10 || parsed.iterations > 100) {
+    return { ok: false, reason: 'invalid_concept_ppr_iterations' };
+  }
+  if (!Number.isInteger(parsed.entity_seed_limit) || parsed.entity_seed_limit < 1 || parsed.entity_seed_limit > 32) {
+    return { ok: false, reason: 'invalid_concept_ppr_seed_limit' };
+  }
+  if (!Number.isInteger(parsed.passage_limit) || parsed.passage_limit < 1 || parsed.passage_limit > 200) {
+    return { ok: false, reason: 'invalid_concept_ppr_passage_limit' };
+  }
+  if (!Number.isInteger(parsed.synonym_threshold_q6) || parsed.synonym_threshold_q6 < 800000 || parsed.synonym_threshold_q6 > 999999) {
+    return { ok: false, reason: 'invalid_concept_ppr_synonym_threshold' };
+  }
+  if (!Number.isInteger(parsed.max_synonyms_per_node) || parsed.max_synonyms_per_node < 1 || parsed.max_synonyms_per_node > 32) {
+    return { ok: false, reason: 'invalid_concept_ppr_synonym_bound' };
+  }
+  if (!Number.isInteger(parsed.max_ppr_nodes) || parsed.max_ppr_nodes < 1 || parsed.max_ppr_nodes > 250000) {
+    return { ok: false, reason: 'invalid_concept_ppr_node_bound' };
+  }
+  if (!Number.isInteger(parsed.max_ppr_edges) || parsed.max_ppr_edges < 0 || parsed.max_ppr_edges > 2000000) {
+    return { ok: false, reason: 'invalid_concept_ppr_edge_bound' };
+  }
+  const canonical = {
+    version: CONCEPT_PPR_RETRIEVAL_POLICY_VERSION,
+    build_id: parsed.build_id,
+    corpus_root_sha256: parsed.corpus_root_sha256,
+    graph_root_sha256: parsed.graph_root_sha256,
+    damping: '1/2',
+    iterations: parsed.iterations,
+    entity_seed_limit: parsed.entity_seed_limit,
+    passage_limit: parsed.passage_limit,
+    synonym_threshold_q6: parsed.synonym_threshold_q6,
+    max_synonyms_per_node: parsed.max_synonyms_per_node,
+    max_ppr_nodes: parsed.max_ppr_nodes,
+    max_ppr_edges: parsed.max_ppr_edges,
+  };
+  return { ok: true, value: JSON.stringify(canonical), policy: Object.freeze(canonical) };
+}
+
+export function validateMagmaRetrievalPolicy(value) {
+  if (typeof value !== 'string') return { ok: false, reason: 'value_must_be_string' };
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return { ok: false, reason: 'invalid_magma_retrieval_policy' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, reason: 'invalid_magma_retrieval_policy' };
+  }
+  const keys = Object.keys(parsed);
+  if (
+    keys.length !== MAGMA_POLICY_KEYS.length
+    || keys.some((key) => !MAGMA_POLICY_KEYS.includes(key))
+    || MAGMA_POLICY_KEYS.some((key) => !Object.hasOwn(parsed, key))
+  ) {
+    return { ok: false, reason: 'invalid_magma_policy_keys' };
+  }
+  if (parsed.version !== MAGMA_RETRIEVAL_POLICY_VERSION) {
+    return { ok: false, reason: 'invalid_magma_policy_version' };
+  }
+  if (!MAGMA_EXECUTION_MODES.has(parsed.execution)) {
+    return { ok: false, reason: 'invalid_magma_policy_execution' };
+  }
+  if (parsed.max_depth !== 3 || parsed.max_nodes !== 200 || parsed.result_limit !== 20) {
+    return { ok: false, reason: 'magma_preregistered_bounds_changed' };
+  }
+  if (parsed.candidate_p95_ceiling_ms !== 250) {
+    return { ok: false, reason: 'magma_preregistered_latency_ceiling_changed' };
+  }
+  if (!SHA256_HEX_RE.test(String(parsed.proof_sha256 || ''))
+      || !SHA256_HEX_RE.test(String(parsed.runner_sha256 || ''))) {
+    return { ok: false, reason: 'magma_proof_identity_invalid' };
+  }
+  if (parsed.cache !== 'off' || parsed.early_exit !== 'off') {
+    return { ok: false, reason: 'magma_experimental_shortcuts_forbidden' };
+  }
+
+  const canonical = {
+    version: MAGMA_RETRIEVAL_POLICY_VERSION,
+    execution: parsed.execution,
+    max_depth: 3,
+    max_nodes: 200,
+    result_limit: 20,
+    candidate_p95_ceiling_ms: 250,
+    proof_sha256: parsed.proof_sha256,
+    runner_sha256: parsed.runner_sha256,
+    cache: 'off',
+    early_exit: 'off',
+  };
+  return { ok: true, value: JSON.stringify(canonical), policy: Object.freeze(canonical) };
+}
+
+const MAGMA_CALIBRATION_KEYS = Object.freeze([
+  'version', 'max_depth', 'max_nodes', 'result_limit', 'beam_width', 'rrf_k',
+  'candidate_p95_ceiling_ms', 'proof_sha256', 'runner_sha256',
+]);
+
+export function validateMagmaRetrievalCalibration(value) {
+  if (typeof value !== 'string') return { ok: false, reason: 'value_must_be_string' };
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return { ok: false, reason: 'invalid_magma_retrieval_calibration' };
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return { ok: false, reason: 'invalid_magma_retrieval_calibration' };
+  }
+  const keys = Object.keys(parsed);
+  if (
+    keys.length !== MAGMA_CALIBRATION_KEYS.length
+    || keys.some((key) => !MAGMA_CALIBRATION_KEYS.includes(key))
+    || MAGMA_CALIBRATION_KEYS.some((key) => !Object.hasOwn(parsed, key))
+  ) {
+    return { ok: false, reason: 'invalid_magma_calibration_keys' };
+  }
+  if (parsed.version !== MAGMA_RETRIEVAL_CALIBRATION_VERSION) {
+    return { ok: false, reason: 'invalid_magma_calibration_version' };
+  }
+  if (!Number.isInteger(parsed.max_depth) || parsed.max_depth < 1 || parsed.max_depth > 3) {
+    return { ok: false, reason: 'magma_calibration_depth_out_of_bounds' };
+  }
+  if (!Number.isInteger(parsed.max_nodes) || parsed.max_nodes < 50 || parsed.max_nodes > 200) {
+    return { ok: false, reason: 'magma_calibration_node_budget_out_of_bounds' };
+  }
+  if (!Number.isInteger(parsed.result_limit) || parsed.result_limit < 1 || parsed.result_limit > 50
+      || parsed.result_limit >= parsed.max_nodes) {
+    return { ok: false, reason: 'magma_calibration_result_budget_out_of_bounds' };
+  }
+  if (!Number.isInteger(parsed.beam_width) || parsed.beam_width < 1 || parsed.beam_width > 5) {
+    return { ok: false, reason: 'magma_calibration_beam_width_out_of_bounds' };
+  }
+  if (parsed.rrf_k !== 60) {
+    return { ok: false, reason: 'magma_calibration_rrf_k_changed' };
+  }
+  if (parsed.candidate_p95_ceiling_ms !== 250) {
+    return { ok: false, reason: 'magma_calibration_latency_ceiling_changed' };
+  }
+  if (!SHA256_HEX_RE.test(String(parsed.proof_sha256 || ''))
+      || !SHA256_HEX_RE.test(String(parsed.runner_sha256 || ''))) {
+    return { ok: false, reason: 'magma_calibration_proof_identity_invalid' };
+  }
+
+  const canonical = {
+    version: MAGMA_RETRIEVAL_CALIBRATION_VERSION,
+    max_depth: parsed.max_depth,
+    max_nodes: parsed.max_nodes,
+    result_limit: parsed.result_limit,
+    beam_width: parsed.beam_width,
+    rrf_k: 60,
+    candidate_p95_ceiling_ms: 250,
+    proof_sha256: parsed.proof_sha256,
+    runner_sha256: parsed.runner_sha256,
+  };
+  return { ok: true, value: JSON.stringify(canonical), calibration: Object.freeze(canonical) };
+}
 
 export function validateSystemConfigValue(configKey, value) {
   const definition = SYSTEM_CONFIG_DEFINITIONS[configKey];
@@ -347,6 +679,26 @@ export function validateSystemConfigValue(configKey, value) {
     } catch {
       return { ok: false, reason: 'invalid_json_object' };
     }
+  }
+
+  if (definition.type === 'twin_prime_retrieval_policy') {
+    return validateTwinPrimeRetrievalPolicy(normalized);
+  }
+
+  if (definition.type === 'magma_retrieval_policy') {
+    return validateMagmaRetrievalPolicy(normalized);
+  }
+
+  if (definition.type === 'magma_retrieval_calibration') {
+    return validateMagmaRetrievalCalibration(normalized);
+  }
+
+  if (definition.type === 'quim_retrieval_policy') {
+    return validateQuimRetrievalPolicy(normalized);
+  }
+
+  if (definition.type === 'concept_ppr_retrieval_policy') {
+    return validateConceptPprRetrievalPolicy(normalized);
   }
 
   if (definition.type === 'reasoning_effort') {

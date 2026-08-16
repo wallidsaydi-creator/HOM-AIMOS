@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { wall2_filter } from '../../services/write/quality-gate.js';
-import { findRecentCommittedDuplicate } from '../../services/write/persist-memory.js';
+import {
+  findExactGenesisManifestBinding,
+  findRecentCommittedDuplicate,
+} from '../../services/write/persist-memory.js';
 
 test('dedup compares the complete value rather than a shared prefix', () => {
   const sharedPrefix = `retained-session-prefix:${'x'.repeat(340)}`;
@@ -36,6 +39,8 @@ test('committed dedup has no process state and cannot be poisoned by rollback', 
         assert.equal(params[0], 'hom');
         assert.equal(params[1], value);
         assert.equal(params[2], null);
+        assert.equal(params[3], null);
+        assert.equal(params[4], null);
         return { rows: committedRow ? [committedRow] : [] };
       }
       throw new Error(`unexpected SQL: ${sql}`);
@@ -67,6 +72,50 @@ test('committed dedup is isolated to the exact native session scope', async () =
   await findRecentCommittedDuplicate(client, 'hom', value, { sessionId: 'prg_a_%\\b' });
   const lookup = observed.find(({ sql }) => sql.includes('FROM aimos_memories'));
   assert.equal(lookup.params[2], 'sess:prg\\_a\\_\\%\\\\b:%');
+  assert.equal(lookup.params[3], 'sess:prg_a_%\\b:');
+  assert.equal(lookup.params[4], 'sess:prg_a_%\\b:\uFFFF');
   assert.match(lookup.sql, /key LIKE \$3 ESCAPE/);
+  assert.match(lookup.sql, /key COLLATE "C" >= \$4::text COLLATE "C"/);
+  assert.match(lookup.sql, /key COLLATE "C" < \$5::text COLLATE "C"/);
   assert.match(observed[0].params[0], /aimos:dedup:v2:/);
+});
+
+test('Genesis corpus rebinding lookup binds every signed manifest field', async () => {
+  const body = {
+    genesis_manifest_schema: 'hom.aimos.genesis-manifest/v1',
+    genesis_manifest_version: 5,
+    genesis_corpus_root: 'a'.repeat(64),
+    genesis_file_path: 'Guide/AGENTS.md',
+    genesis_file_sha256: 'b'.repeat(64),
+    genesis_file_bytes: 2763,
+  };
+  let observed;
+  const client = {
+    async query(sql, params) {
+      observed = { sql, params };
+      return { rows: [{ id: '00000000-0000-4000-8000-000000000005' }] };
+    },
+  };
+
+  const row = await findExactGenesisManifestBinding(
+    client,
+    'hom',
+    'guide:housekeeper:AGENTS',
+    'retained guide bytes',
+    body,
+  );
+  assert.equal(row.id, '00000000-0000-4000-8000-000000000005');
+  assert.match(observed.sql, /JOIN aimos_memory_provenance/);
+  assert.match(observed.sql, /m\.source = 'guide:genesis-install'/);
+  assert.deepEqual(observed.params, [
+    'hom',
+    'guide:housekeeper:AGENTS',
+    'retained guide bytes',
+    body.genesis_manifest_schema,
+    '5',
+    body.genesis_corpus_root,
+    body.genesis_file_path,
+    body.genesis_file_sha256,
+    2763,
+  ]);
 });

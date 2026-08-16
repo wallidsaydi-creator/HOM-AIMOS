@@ -23,12 +23,12 @@ import {
   getHousekeeperCert,
   loadHousekeeperPrivkey,
 } from '../security/housekeeper-signer.js';
+import { eventGenesisHash, eventMutationHash } from '../security/protocol/mutmem-protocol.js';
+export { eventGenesisHash, eventMutationHash } from '../security/protocol/mutmem-protocol.js';
 
 export const AGENTPULSE_SOURCE = 'AgentPulse: A Continuous Multi-Signal Framework for Evaluating AI Agents in Deployment';
 export const EVENT_LEDGER_VERSION = 1;
 
-const EVENT_LINK_DOMAIN = Buffer.from('AIMOS-EVENT-LINK-v1\0', 'utf8');
-const EVENT_GENESIS_DOMAIN = Buffer.from('aimos-event-genesis/v1\0', 'utf8');
 const SECRET_KEY = /(?:password|passphrase|secret|token|authorization|api[_-]?key|private[_-]?key|credential)/i;
 const PASSIVE_OPS = new Set([
   'recall',
@@ -65,29 +65,6 @@ function sanitizeMetadata(value, key = '', depth = 0) {
   return String(value);
 }
 
-export function eventGenesisHash(companyId, signerAgentId, signerValidFrom) {
-  return sha256(Buffer.concat([
-    EVENT_GENESIS_DOMAIN,
-    Buffer.from(String(companyId), 'utf8'),
-    Buffer.from('\0', 'utf8'),
-    Buffer.from(String(signerAgentId), 'utf8'),
-    Buffer.from('\0', 'utf8'),
-    Buffer.from(new Date(signerValidFrom).toISOString(), 'utf8'),
-  ]));
-}
-
-export function eventMutationHash(prevHash, contentHash, nonce, signedTs) {
-  if (!Buffer.isBuffer(prevHash) || prevHash.length !== 32) throw new Error('event_prev_hash_invalid');
-  if (!Buffer.isBuffer(contentHash) || contentHash.length !== 32) throw new Error('event_content_hash_invalid');
-  return sha256(Buffer.concat([
-    EVENT_LINK_DOMAIN,
-    prevHash,
-    contentHash,
-    Buffer.from(String(nonce), 'utf8'),
-    Buffer.from(String(signedTs), 'utf8'),
-  ]));
-}
-
 function requestEnvelopeDigest(authority) {
   if (!authority) return null;
   const body = {
@@ -106,6 +83,41 @@ function requestEnvelopeDigest(authority) {
       : null,
   };
   return sha256(Buffer.from(canonicalJson(body), 'utf8')).toString('hex');
+}
+
+/**
+ * Optional fail-closed signer constraint for high-consequence evidence owners.
+ * Ordinary event callers retain the existing behavior. A ceremony that has
+ * already verified one exact housekeeper certificate can require logEvent()
+ * to use that same certificate epoch, fingerprint, and tier; an intervening
+ * identity rotation then aborts before an event is appended.
+ */
+export function assertEventSignerConstraint(actual = {}, expected = null) {
+  if (expected == null) return true;
+  if (!expected || typeof expected !== 'object' || Array.isArray(expected)) {
+    throw new Error('event_signer_constraint_invalid');
+  }
+  const normalizedActual = {
+    agent_id: String(actual.agent_id || ''),
+    valid_from: actual.valid_from ? new Date(actual.valid_from).toISOString() : null,
+    cert_fingerprint: String(actual.cert_fingerprint || ''),
+    identity_tier: String(actual.identity_tier || ''),
+  };
+  const normalizedExpected = {
+    agent_id: String(expected.agent_id || ''),
+    valid_from: expected.valid_from ? new Date(expected.valid_from).toISOString() : null,
+    cert_fingerprint: String(expected.cert_fingerprint || ''),
+    identity_tier: String(expected.identity_tier || ''),
+  };
+  if (!normalizedExpected.agent_id || !normalizedExpected.valid_from
+      || !/^[0-9a-f]{64}$/.test(normalizedExpected.cert_fingerprint)
+      || !normalizedExpected.identity_tier) {
+    throw new Error('event_signer_constraint_invalid');
+  }
+  if (canonicalJson(normalizedActual) !== canonicalJson(normalizedExpected)) {
+    throw new Error('event_signer_constraint_mismatch');
+  }
+  return true;
 }
 
 export function verifyEventProof(row, signerPubkey) {
@@ -270,9 +282,8 @@ export async function readVerifiedEventStream(companyId, {
       await conn.query('SELECT set_config($1,$2,true)', ['app.current_client_id', company]);
       await conn.query('SELECT set_config($1,$2,true)', ['app.current_agent_id', signer]);
     }
-    const [events, master] = await Promise.all([
-      conn.query(
-        `SELECT event.*, identity.pubkey, identity.cert,
+    const events = await conn.query(
+      `SELECT event.*, identity.pubkey, identity.cert,
                 revocation.ts_signed AS revocation_ts_signed
            FROM aimos_events event
            JOIN agent_identity identity
@@ -286,10 +297,11 @@ export async function readVerifiedEventStream(companyId, {
             AND event.signer_valid_from = $3
             AND event.ledger_version = 1
           ORDER BY event.ledger_seq`,
-        [company, signer, validFrom],
-      ),
-      conn.query('SELECT master_pubkey FROM aimos_master_identity WHERE id = 1'),
-    ]);
+      [company, signer, validFrom],
+    );
+    const master = await conn.query(
+      'SELECT master_pubkey FROM aimos_master_identity WHERE id = 1',
+    );
     if (events.rows.length) {
       verifyEventLedgerChain(events.rows, { masterPubkey: master.rows[0]?.master_pubkey || null });
     }
@@ -326,9 +338,8 @@ export async function readVerifiedEventHistory(companyId, {
       await conn.query('SELECT set_config($1,$2,true)', ['app.current_client_id', company]);
       await conn.query('SELECT set_config($1,$2,true)', ['app.current_agent_id', signer]);
     }
-    const [events, master] = await Promise.all([
-      conn.query(
-        `SELECT event.*, identity.pubkey, identity.cert,
+    const events = await conn.query(
+      `SELECT event.*, identity.pubkey, identity.cert,
                 revocation.ts_signed AS revocation_ts_signed
            FROM aimos_events event
            JOIN agent_identity identity
@@ -341,10 +352,11 @@ export async function readVerifiedEventHistory(companyId, {
             AND event.signer_agent_id = $2
             AND event.ledger_version = 1
           ORDER BY event.signer_valid_from, event.ledger_seq`,
-        [company, signer],
-      ),
-      conn.query('SELECT master_pubkey FROM aimos_master_identity WHERE id = 1'),
-    ]);
+      [company, signer],
+    );
+    const master = await conn.query(
+      'SELECT master_pubkey FROM aimos_master_identity WHERE id = 1',
+    );
 
     const rowsByEpoch = new Map();
     for (const row of events.rows) {
@@ -388,9 +400,8 @@ export async function readVerifiedEventById(eventId, companyId, { client = null 
       await conn.query('SELECT set_config($1,$2,true)', ['app.current_client_id', company]);
       await conn.query('SELECT set_config($1,$2,true)', ['app.current_agent_id', HOUSEKEEPER_SIGNER_CONSTANTS.HOUSEKEEPER_AGENT_ID]);
     }
-    const [eventResult, masterResult] = await Promise.all([
-      conn.query(
-        `SELECT event.*, identity.pubkey, identity.cert,
+    const eventResult = await conn.query(
+      `SELECT event.*, identity.pubkey, identity.cert,
                 revocation.ts_signed AS revocation_ts_signed,
                 predecessor.mutation_hash AS stored_predecessor_hash
            FROM aimos_events event
@@ -409,10 +420,11 @@ export async function readVerifiedEventById(eventId, companyId, { client = null 
           WHERE event.id = $1
             AND event.company_id = $2
             AND event.ledger_version = $3`,
-        [id, company, EVENT_LEDGER_VERSION],
-      ),
-      conn.query('SELECT master_pubkey FROM aimos_master_identity WHERE id = 1'),
-    ]);
+      [id, company, EVENT_LEDGER_VERSION],
+    );
+    const masterResult = await conn.query(
+      'SELECT master_pubkey FROM aimos_master_identity WHERE id = 1',
+    );
     const row = eventResult.rows[0];
     if (!row) throw new Error('event_receipt_not_found');
 
@@ -479,11 +491,21 @@ export async function logEvent(companyId, subjectAgentId, operation, key = null,
     console.warn(`[Event Ledger] WARNING: '${op}' on '${eventKey || 'n/a'}' has no reasoning. Every decision needs a WHY.`);
   }
 
-  const certString = await getHousekeeperCert();
+  const certString = await getHousekeeperCert(
+    typeof options.identityQueryFn === 'function'
+      ? { queryFn: options.identityQueryFn }
+      : {},
+  );
   const signerValidFrom = extractValidFromIso(certString);
   const signerAgentId = HOUSEKEEPER_SIGNER_CONSTANTS.HOUSEKEEPER_AGENT_ID;
   const identityTier = detectTierFromCert(certString);
   const certFingerprint = sha256(Buffer.from(certString, 'utf8')).toString('hex');
+  assertEventSignerConstraint({
+    agent_id: signerAgentId,
+    valid_from: signerValidFrom,
+    cert_fingerprint: certFingerprint,
+    identity_tier: identityTier,
+  }, options.signerConstraint || null);
   const privkey = loadHousekeeperPrivkey();
   const authority = options.authority || null;
   const authorityKind = authority
@@ -503,6 +525,25 @@ export async function logEvent(companyId, subjectAgentId, operation, key = null,
       'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
       [`${cid.length}:${cid}${signerAgentId.length}:${signerAgentId}${signerValidFrom}`],
     );
+
+    if (options.exclusiveOperationKey === true) {
+      if (eventKey === null) throw new Error('event_exclusive_key_required');
+      await client.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`event-operation-key:${cid.length}:${cid}:${op.length}:${op}:${eventKey.length}:${eventKey}`],
+      );
+      const existing = await client.query(
+        `SELECT 1
+           FROM aimos_events
+          WHERE company_id = $1
+            AND operation = $2
+            AND key = $3
+            AND ledger_version = 1
+          LIMIT 1`,
+        [cid, op, eventKey],
+      );
+      if (existing.rows[0]) throw new Error('event_operation_key_exists');
+    }
 
     if (parentEventId) {
       const parent = await client.query(

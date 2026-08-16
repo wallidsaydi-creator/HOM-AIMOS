@@ -24,9 +24,22 @@
 
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '../security/agent-identity.js';
+import {
+  buildTwinPrimeTemporalCoordinates,
+  computeB2Distance,
+  computeTwinPrimeDistance,
+  cosineDistance,
+  gaussianTwinIndicator,
+  parseNumericVector,
+  quantizeTime,
+  relativeGaussianCoordinate,
+  simHash31,
+  twinPrimeTemporalDistance,
+} from './twin-prime-arithmetic.js';
 
 export const EPISTEMIC_DECISION_VERSION = 'aimos-epistemic-retrieval-v2';
 export const EPISTEMIC_ABLATION_VERSION = 'aimos-epistemic-ablation-v1';
+export const TWIN_PRIME_SELECTION_VERSION = 'hom-aimos/twin-prime-selection/v1';
 
 const PRODUCTION_POLICY = Object.freeze({
   policyId: 'production',
@@ -317,6 +330,229 @@ function selectMmr(candidates, limit) {
   return selected;
 }
 
+function policyRational(value, name) {
+  const text = String(value);
+  if (/^\d+$/.test(text)) return Number(text);
+  const match = text.match(/^(\d+)\/(\d+)$/);
+  if (!match || Number(match[2]) === 0) throw new TypeError(`${name}_invalid`);
+  return Number(match[1]) / Number(match[2]);
+}
+
+function validOriginEvidence(memory) {
+  const proof = memory?.provenance_proof;
+  const milliseconds = new Date(proof?.memory_originated_at).getTime();
+  return Number(proof?.binding_schema_version) === 4
+    && proof?.historical_signature_status === 'original_save_verified'
+    && Number.isSafeInteger(milliseconds)
+    && milliseconds > 0
+    ? milliseconds
+    : null;
+}
+
+function isInsideTemporalConstraint(memoryTime, temporal) {
+  if (!temporal?.constrained) return true;
+  if (temporal.start != null && memoryTime < temporal.start) return false;
+  if (temporal.end != null && memoryTime >= temporal.end) return false;
+  return true;
+}
+
+function twinPrimeSelection(candidates, limit, context) {
+  const policy = context?.policy;
+  const policyMutationHash = String(context?.policyMutationHash || '').toLowerCase();
+  if (!policy || !/^[0-9a-f]{64}$/.test(policyMutationHash)) {
+    throw new TypeError('verified_twin_prime_policy_required');
+  }
+
+  const baseline = selectMmr(candidates.map((candidate) => ({ ...candidate })), limit);
+  const baselineIds = baseline.map((candidate) => String(candidate.memory?.id || candidate.memory?.memory_id || ''));
+  const preArmIds = candidates.map((candidate) => String(candidate.memory?.id || candidate.memory?.memory_id || ''));
+  const baseEvidence = {
+    version: TWIN_PRIME_SELECTION_VERSION,
+    policy: { ...policy },
+    policy_mutation_hash: policyMutationHash,
+    pre_arm_candidate_ids: preArmIds,
+    pre_arm_candidate_count: preArmIds.length,
+    baseline_selected_memory_ids: baselineIds,
+  };
+
+  if (context.eligible === false || policy.arm === 'B0') {
+    return {
+      returned: baseline,
+      evidenceById: new Map(),
+      decision: {
+        ...baseEvidence,
+        eligible: context.eligible !== false,
+        ineligible_reason: context.eligible === false ? String(context.ineligibleReason || 'native_lane_ineligible') : null,
+        computed_selected_memory_ids: baselineIds,
+        returned_selected_memory_ids: baselineIds,
+        feature_counts: { active_context_eligible: 0, temporal_eligible: 0, tau: 0 },
+        shadow_returned_baseline: false,
+      },
+    };
+  }
+
+  const featureById = context.featuresByMemoryId instanceof Map
+    ? context.featuresByMemoryId
+    : new Map(Object.entries(context.featuresByMemoryId || {}));
+  const rows = candidates.map((candidate) => {
+    const memoryId = String(candidate.memory?.id || candidate.memory?.memory_id || '');
+    const feature = featureById.get(memoryId) || {};
+    const originTime = validOriginEvidence(candidate.memory);
+    const activeContextEligible = candidate.evidenceHandling !== 'untrusted_reference_only';
+    return {
+      candidate,
+      memoryId,
+      embedding: feature.embedding,
+      originTime,
+      activeContextEligible,
+    };
+  });
+  const verifiedTimes = rows.filter((row) => row.activeContextEligible && row.originTime != null)
+    .map((row) => row.originTime);
+  if (!verifiedTimes.length) {
+    return {
+      returned: baseline,
+      evidenceById: new Map(rows.map((row) => [row.memoryId, {
+        active_context_eligible: row.activeContextEligible,
+        temporal_eligible: false,
+        ineligible_reason: row.activeContextEligible ? 'tp_g0_origin_evidence_missing' : 'untrusted_active_context',
+      }])),
+      decision: {
+        ...baseEvidence,
+        eligible: false,
+        ineligible_reason: 'verified_candidate_time_scope_empty',
+        computed_selected_memory_ids: baselineIds,
+        returned_selected_memory_ids: baselineIds,
+        feature_counts: { active_context_eligible: 0, temporal_eligible: 0, tau: 0 },
+        shadow_returned_baseline: false,
+      },
+    };
+  }
+
+  const requestTimeMs = Number(context.requestTimeMs);
+  if (!Number.isSafeInteger(requestTimeMs) || requestTimeMs <= 0) {
+    throw new TypeError('signed_request_time_required');
+  }
+  const scopeMin = Math.min(...verifiedTimes);
+  const scopeMax = Math.max(...verifiedTimes);
+  const scopeSpan = Math.max(1, scopeMax - scopeMin);
+  const temporal = buildTwinPrimeTemporalCoordinates({
+    temporalScope: context.temporalScope || {},
+    requestTimeMs,
+    scopeMin,
+    scopeMax,
+  });
+  const lambdaT = policyRational(policy.lambda_t, 'lambda_t');
+  const gamma = policyRational(policy.gamma, 'gamma');
+  const requiresEmbedding = policy.arm === 'B2' || policy.arm === 'T';
+  const queryEmbedding = requiresEmbedding ? parseNumericVector(context.queryEmbedding) : null;
+  const querySubject = policy.arm === 'T' ? simHash31(queryEmbedding).coordinate : null;
+  let tauCount = 0;
+  let activeContextCount = 0;
+  let temporalEligibleCount = 0;
+  const evidenceById = new Map();
+  const armCandidates = [];
+
+  for (const row of rows) {
+    let ineligibleReason = null;
+    if (!row.activeContextEligible) ineligibleReason = 'untrusted_active_context';
+    else if (row.originTime == null) ineligibleReason = 'tp_g0_origin_evidence_missing';
+    const temporalEligible = ineligibleReason == null && isInsideTemporalConstraint(row.originTime, temporal);
+    if (ineligibleReason == null && !temporalEligible) ineligibleReason = 'outside_signed_temporal_scope';
+    if (row.activeContextEligible) activeContextCount += 1;
+    if (temporalEligible) temporalEligibleCount += 1;
+
+    const evidence = {
+      active_context_eligible: row.activeContextEligible,
+      temporal_eligible: temporalEligible,
+      ineligible_reason: ineligibleReason,
+      memory_originated_at: row.originTime == null ? null : new Date(row.originTime).toISOString(),
+      semantic_distance: null,
+      temporal_distance: null,
+      b2_distance: null,
+      tau: 0,
+      arm_distance: null,
+      arm_relevance: null,
+      embedding_sha256: null,
+    };
+
+    if (ineligibleReason == null && requiresEmbedding) {
+      try {
+        const embedding = parseNumericVector(row.embedding);
+        evidence.embedding_sha256 = createHash('sha256')
+          .update(JSON.stringify(embedding), 'utf8')
+          .digest('hex');
+        evidence.semantic_distance = cosineDistance(queryEmbedding, embedding);
+        evidence.temporal_distance = twinPrimeTemporalDistance(row.originTime, temporal, scopeSpan);
+        evidence.b2_distance = computeB2Distance(evidence.semantic_distance, evidence.temporal_distance, lambdaT);
+        if (policy.arm === 'T') {
+          const memorySubject = simHash31(embedding).coordinate;
+          const memoryTime = quantizeTime(row.originTime, scopeMin, scopeMax);
+          const delta = relativeGaussianCoordinate(
+            querySubject,
+            memorySubject,
+            temporal.queryQuantized,
+            memoryTime,
+          );
+          evidence.tau = gaussianTwinIndicator(delta.real, delta.imaginary);
+          evidence.delta_real = delta.real;
+          evidence.delta_imaginary = delta.imaginary;
+          tauCount += evidence.tau;
+        }
+        evidence.arm_distance = policy.arm === 'T'
+          ? computeTwinPrimeDistance(evidence.b2_distance, gamma, evidence.tau)
+          : evidence.b2_distance;
+        // Positive monotone conversion keeps lower declared distance better,
+        // while preserving the already-computed epistemic trust multiplier.
+        evidence.arm_relevance = row.candidate.epistemicScore / (1 + evidence.arm_distance);
+      } catch {
+        ineligibleReason = 'candidate_embedding_invalid';
+        evidence.ineligible_reason = ineligibleReason;
+      }
+    }
+
+    if (ineligibleReason == null) {
+      const armCandidate = { ...row.candidate };
+      if (requiresEmbedding) armCandidate.effectiveRelevance = evidence.arm_relevance;
+      armCandidates.push(armCandidate);
+    }
+    evidenceById.set(row.memoryId, evidence);
+  }
+
+  const computed = selectMmr(armCandidates, Math.min(limit, armCandidates.length));
+  const computedIds = computed.map((candidate) => String(candidate.memory?.id || candidate.memory?.memory_id || ''));
+  const returned = policy.execution === 'shadow' ? baseline : computed;
+  const returnedIds = returned.map((candidate) => String(candidate.memory?.id || candidate.memory?.memory_id || ''));
+  return {
+    returned,
+    evidenceById,
+    decision: {
+      ...baseEvidence,
+      eligible: true,
+      ineligible_reason: null,
+      scope_time_min: new Date(scopeMin).toISOString(),
+      scope_time_max: new Date(scopeMax).toISOString(),
+      signed_request_time: new Date(requestTimeMs).toISOString(),
+      temporal_scope: {
+        kind: String(context.temporalScope?.kind || 'open'),
+        start_day: context.temporalScope?.start_day || null,
+        end_day_exclusive: context.temporalScope?.end_day_exclusive || null,
+      },
+      query_time_anchor: new Date(temporal.anchor).toISOString(),
+      query_time_coordinate: temporal.queryQuantized,
+      arm_relevance_formula: requiresEmbedding ? 'epistemic_score/(1+arm_distance)' : 'native_epistemic_relevance',
+      computed_selected_memory_ids: computedIds,
+      returned_selected_memory_ids: returnedIds,
+      feature_counts: {
+        active_context_eligible: activeContextCount,
+        temporal_eligible: temporalEligibleCount,
+        tau: tauCount,
+      },
+      shadow_returned_baseline: policy.execution === 'shadow',
+    },
+  };
+}
+
 function memoryWithDecision(candidate, selectedRank = null) {
   return {
     ...candidate.memory,
@@ -356,15 +592,22 @@ function calibrateWithPolicy({
   policy = PRODUCTION_POLICY,
   decisionVersion = EPISTEMIC_DECISION_VERSION,
   decisionExtras = null,
+  twinPrimeContext = null,
 } = {}) {
   const source = Array.isArray(memories) ? memories : [];
   const boundedLimit = Math.max(1, Math.min(200, Math.trunc(Number(limit) || 10)));
   const candidates = annotateCandidates(query, source, policy);
-  const selected = selectMmr(candidates, Math.min(boundedLimit, candidates.length));
+  const twinPrime = twinPrimeContext
+    ? twinPrimeSelection(candidates, Math.min(boundedLimit, candidates.length), twinPrimeContext)
+    : null;
+  const selected = twinPrime?.returned
+    || selectMmr(candidates, Math.min(boundedLimit, candidates.length));
   const selectedIds = new Set(selected.map((candidate) => String(candidate.memory?.id || candidate.memory?.memory_id || '')));
   const selectedMemories = selected.map((candidate, index) => memoryWithDecision(candidate, index + 1));
-  const decisions = candidates.map((candidate) => ({
-    memory_id: String(candidate.memory?.id || candidate.memory?.memory_id || ''),
+  const decisions = candidates.map((candidate) => {
+    const memoryId = String(candidate.memory?.id || candidate.memory?.memory_id || '');
+    return {
+    memory_id: memoryId,
     content_hash: candidate.contentHash,
     selected: selectedIds.has(String(candidate.memory?.id || candidate.memory?.memory_id || '')),
     epistemic_state: candidate.epistemicState,
@@ -379,7 +622,9 @@ function calibrateWithPolicy({
     stored_epistemic_label: candidate.storedEpistemicLabel,
     stored_epistemic_confidence_milli: candidate.storedEpistemicConfidenceMilli,
     stored_epistemic_event_id: candidate.storedEpistemicEventId,
-  }));
+    ...(twinPrime ? { twin_prime_features: twinPrime.evidenceById.get(memoryId) || null } : {}),
+  };
+  });
   const querySha256 = createHash('sha256').update(String(query), 'utf8').digest('hex');
   const decisionBody = {
     version: decisionVersion,
@@ -391,6 +636,7 @@ function calibrateWithPolicy({
       counts[decision.epistemic_state] = (counts[decision.epistemic_state] || 0) + 1;
       return counts;
     }, {}),
+    ...(twinPrime ? { twin_prime: twinPrime.decision } : {}),
     decisions,
   };
   const decisionSha256 = createHash('sha256')
@@ -412,12 +658,13 @@ function calibrateWithPolicy({
   };
 }
 
-export function calibrateEpistemicRecall({ query = '', memories = [], limit = 10 } = {}) {
+export function calibrateEpistemicRecall({ query = '', memories = [], limit = 10, twinPrimeContext = null } = {}) {
   return calibrateWithPolicy({
     query,
     memories,
     limit,
     policy: PRODUCTION_POLICY,
+    twinPrimeContext,
   });
 }
 
@@ -469,6 +716,7 @@ export default {
   EPISTEMIC_DECISION_VERSION,
   EPISTEMIC_ABLATION_VERSION,
   EPISTEMIC_ABLATION_POLICY_IDS,
+  TWIN_PRIME_SELECTION_VERSION,
   calibrateEpistemicRecall,
   evaluateEpistemicRecallAblation,
 };

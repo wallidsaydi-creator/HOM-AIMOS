@@ -12,12 +12,13 @@ import {
 } from '../../scripts/verify-genesis-manifest.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const EXPECTED_ROOT = '0eb6f33985ba29eec3b86eb6a7b407581b2bbd058749e1a2c1efd4ba1198ab1a';
+const EXPECTED_VERSION = 19;
+const EXPECTED_ROOT = 'dcbf73476b21690cecbda9d084e5784775f4e004af82f8877186e7f4df533bc7';
 
 test('shipped Guide bytes produce the published deterministic corpus root', () => {
   const verified = verifyGenesisManifest({ brainRoot: root });
   assert.equal(verified.ok, true);
-  assert.equal(verified.version, 4);
+  assert.equal(verified.version, EXPECTED_VERSION);
   assert.equal(verified.files.length, 8);
   assert.equal(verified.corpusRoot, EXPECTED_ROOT);
   assert.equal(
@@ -77,7 +78,7 @@ test('authority generation and Genesis ingestion bind the published root', () =>
     { cwd: root, encoding: 'utf8' }
   ));
   assert.equal(runtime.genesis_corpus.schema, 'hom.aimos.genesis-manifest/v1');
-  assert.equal(runtime.genesis_corpus.version, 4);
+  assert.equal(runtime.genesis_corpus.version, EXPECTED_VERSION);
   assert.equal(runtime.genesis_corpus.corpus_root, EXPECTED_ROOT);
   assert.equal(runtime.genesis_corpus.file_count, 8);
 

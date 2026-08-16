@@ -12,9 +12,11 @@ import {
 } from '../../services/security/agent-identity.js';
 import { contentHash } from '../../services/security/identity-chain.js';
 import {
-  retainedProvenanceMerkleRoot,
+  createMemoryProvenanceLedger,
+  verifyMemoryOriginBindingV4,
   verifyRetainedMutationNode,
 } from '../../services/security/memory-provenance.js';
+import { retainedProvenanceMerkleRoot } from '../../services/security/protocol/mutmem-protocol.js';
 import {
   lineageMutationHash,
   verifyHousekeeperSupersessionLineage,
@@ -87,7 +89,7 @@ test('D2 supersession lineage verifies exact signed edge and fails on tampering'
     device_fp: 'device-lineage',
     valid_from: validFrom,
     valid_until: validUntil,
-    issuer: masterFingerprint,
+    issuer: 'aimos-master',
     issued_at: validFrom,
   });
   const childId = randomUUID();
@@ -147,6 +149,24 @@ test('D2 supersession lineage verifies exact signed edge and fails on tampering'
   };
 
   assert.equal(verifyHousekeeperSupersessionLineage(row).valid, true);
+  const unknownIssuerCert = issueCert(master.privkey, {
+    v: 1,
+    agent_id: 'housekeeper',
+    pubkey: signer.pubkey,
+    device_fp: 'device-lineage',
+    valid_from: validFrom,
+    valid_until: validUntil,
+    issuer: 'unexpected-root',
+    issued_at: validFrom,
+  });
+  assert.equal(
+    verifyHousekeeperSupersessionLineage({
+      ...row,
+      signer_cert: unknownIssuerCert,
+      attesting_cert_fingerprint: createHash('sha256').update(unknownIssuerCert).digest('hex'),
+    }).valid,
+    false,
+  );
   assert.equal(
     verifyHousekeeperSupersessionLineage({ ...row, supersession_metadata: { relation: 'tampered' } }).valid,
     false,
@@ -169,4 +189,114 @@ test('retained ceremony is explicit, append-only, and uses native D2 lineage', (
   assert.match(persistence, /lineage_mutation_hash/);
   assert.match(migration, /ON DELETE RESTRICT/);
   assert.match(migration, /REVOKE UPDATE, DELETE, TRUNCATE/);
+});
+
+test('schema-v4 native BIND persists the exact signed memory-origin timestamp', async () => {
+  const memoryId = randomUUID();
+  const originatedAt = new Date('2026-08-03T12:34:56.789Z');
+  const body = {
+    event_type: 'BIND',
+    binding_schema_version: 4,
+    memory_id: memoryId,
+    memory_originated_at_unix_ms: originatedAt.getTime(),
+  };
+  const inserts = [];
+  const client = {
+    async query(sql, params = []) {
+      if (/information_schema\.columns/.test(sql)) return { rows: [{ exists: 1 }] };
+      if (/SELECT candidate\.mutation_hash/.test(sql)) return { rows: [] };
+      if (/INSERT INTO aimos_memory_provenance/.test(sql)) {
+        inserts.push({ sql, params });
+        return { rows: [] };
+      }
+      return { rows: [] };
+    },
+  };
+  const ledger = createMemoryProvenanceLedger({
+    pool: { connect: async () => client },
+    query: client.query.bind(client),
+  });
+  const result = await ledger.commitProvenance({
+    memoryId,
+    body,
+    agentId: 'housekeeper',
+    validFromIso: '2026-08-03T00:00:00.000Z',
+    certString: 'certificate',
+    signedTs: 1_785_725_696,
+    nonce: 'origin-time-test',
+    sigBytes: Buffer.alloc(64, 7),
+    identityTier: 'T1_SYSTEM_SELF',
+    eventType: 'BIND',
+    bodyJson: body,
+    liveContentHash: Buffer.alloc(32, 3),
+    memoryOriginatedAt: originatedAt,
+    bindingSchemaVersion: 4,
+    client,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(inserts.length, 1);
+  assert.match(inserts[0].sql, /memory_originated_at/);
+  assert.equal(inserts[0].params[16], originatedAt);
+
+  const mismatch = await ledger.commitProvenance({
+    memoryId: randomUUID(),
+    body: { ...body, memory_originated_at_unix_ms: originatedAt.getTime() + 1 },
+    agentId: 'housekeeper',
+    validFromIso: '2026-08-03T00:00:00.000Z',
+    certString: 'certificate',
+    signedTs: 1_785_725_696,
+    nonce: 'origin-time-mismatch-test',
+    sigBytes: Buffer.alloc(64, 7),
+    identityTier: 'T1_SYSTEM_SELF',
+    eventType: 'BIND',
+    bodyJson: body,
+    liveContentHash: Buffer.alloc(32, 3),
+    memoryOriginatedAt: originatedAt,
+    bindingSchemaVersion: 4,
+    client,
+  });
+  assert.deepEqual(mismatch, { ok: false, reason: 'memory_origin_time_binding_invalid' });
+});
+
+test('schema-v4 origin verifier rejects body, provenance, and live-row time drift', () => {
+  const originatedAt = '2026-08-03T12:34:56.789Z';
+  const body = {
+    event_type: 'BIND',
+    binding_schema_version: 4,
+    memory_originated_at_unix_ms: new Date(originatedAt).getTime(),
+  };
+  const exact = {
+    bindingSchemaVersion: 4,
+    eventType: 'BIND',
+    body,
+    memoryOriginatedAt: originatedAt,
+    liveCreatedAt: originatedAt,
+  };
+
+  assert.deepEqual(verifyMemoryOriginBindingV4(exact), {
+    valid: true,
+    reason: null,
+    unixMs: body.memory_originated_at_unix_ms,
+  });
+  assert.equal(verifyMemoryOriginBindingV4({
+    ...exact,
+    body: { ...body, memory_originated_at_unix_ms: body.memory_originated_at_unix_ms + 1 },
+  }).valid, false);
+  assert.equal(verifyMemoryOriginBindingV4({
+    ...exact,
+    memoryOriginatedAt: new Date(body.memory_originated_at_unix_ms + 1).toISOString(),
+  }).valid, false);
+  assert.equal(verifyMemoryOriginBindingV4({
+    ...exact,
+    liveCreatedAt: new Date(body.memory_originated_at_unix_ms + 1).toISOString(),
+  }).valid, false);
+  assert.equal(verifyMemoryOriginBindingV4({
+    ...exact,
+    body: { ...body, memory_originated_at_unix_ms: String(body.memory_originated_at_unix_ms) },
+  }).valid, false);
+  assert.deepEqual(verifyMemoryOriginBindingV4({ bindingSchemaVersion: 3 }), {
+    valid: true,
+    reason: null,
+  });
 });

@@ -78,6 +78,17 @@ function makeCaches({ revoked = false } = {}) {
   };
 }
 
+function makeCapturingCaches() {
+  const events = [];
+  return {
+    caches: {
+      ...makeCaches(),
+      logEvent: async (...args) => { events.push(args); return null; },
+    },
+    events,
+  };
+}
+
 function envelopeHeaders(sig, nonce, ts, sigForm, claims = {}) {
   const h = {
     'aimos-agent-cert': CERT,
@@ -163,6 +174,26 @@ async function main() {
     assert.ok(badRes.error, 'cross-path replay has an error reason');
     diskArtifact('gate3b', { okTier: okRes.tier, badTier: badRes.tier, badError: badRes.error });
     assert.ok(String(badRes.error).length > 0, 'non-empty error reason');
+  });
+
+  await run('auth-tier admitted signature-form observation carries explicit reasoning', async () => {
+    const capture = makeCapturingCaches();
+    const at = createAuthTier(capture.caches);
+    const nonce = 'nonce-sig-form-reasoning';
+    const ts = Math.floor(Date.now() / 1000);
+    const body = { hello: 'reasoned-observation' };
+    const sig = signPayloadWithContext(agent.privkey, body, 'GET', '/status', nonce, ts);
+    const result = await at.deriveTier({
+      headers: envelopeHeaders(sig, nonce, ts, 3),
+      body,
+      method: 'GET',
+      originalUrl: '/status',
+    });
+    assert.notStrictEqual(result.tier, 'T0', 'signed request authenticates');
+    const observation = capture.events.find((entry) => entry[2] === 'sig_form_used');
+    assert.ok(observation, 'signature-form observation was appended');
+    assert.ok(String(observation[4]?.reasoning || '').trim(), 'observation has an explicit WHY');
+    assert.equal(observation[4].sig_form, 3, 'observed verified form is exact');
   });
 
   await run('form-4 binds chain and device claims; tampering or unsigned elevation fails closed', async () => {

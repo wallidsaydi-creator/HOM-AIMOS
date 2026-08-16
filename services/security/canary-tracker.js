@@ -22,7 +22,7 @@ import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { logEvent } from '../observe/event-ledger.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
-const CANARY_REGEX = /SECRET-[A-F0-9]{8}/g;
+const CANARY_REGEX = /\bSECRET-[A-F0-9]{8}(?![A-Za-z0-9_])/g;
 const STAGES = ['EXPOSED', 'PERSISTED', 'RELAYED', 'EXECUTED'];
 
 /**

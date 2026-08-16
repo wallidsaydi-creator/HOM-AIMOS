@@ -31,7 +31,7 @@ import { canonicalJson } from '../security/agent-identity.js';
 import { logEvent } from '../observe/event-ledger.js';
 import {
   normalizeSessionId,
-  sessionKeyLikePattern,
+  sessionKeyQueryScope,
   sessionKeyPrefix,
 } from '../shared/session-scope.js';
 
@@ -242,6 +242,55 @@ function existingTurnMatches(parsed, {
     && canonicalJson(parsed.record.image_context ?? []) === canonicalJson(imageContext);
 }
 
+function retainedTurnsEquivalent(left, right) {
+  return existingTurnMatches(left, {
+    role: right.record.role,
+    content: right.record.content,
+    idHash: right.turnIdHash,
+    sourceRef: right.record.source_ref ?? null,
+    speaker: right.record.speaker ?? null,
+    imageContext: right.record.image_context ?? [],
+  });
+}
+
+/**
+ * A transport timeout can leave an already-committed turn behind before the
+ * client receives its response. Exact retries must reuse that evidence. If a
+ * historical implementation admitted more than one semantically identical
+ * copy, retain and verify every copy, but bind session chronology to the first
+ * committed copy of each turn id. Any payload disagreement remains a fork.
+ */
+function canonicalizeRetainedTurns(rows, sessionId) {
+  const parsed = rows.map((row) => parseTurnRow(row, sessionId));
+  const byTurnId = new Map();
+  for (const turn of parsed) {
+    const group = byTurnId.get(turn.turnIdHash) || [];
+    group.push(turn);
+    byTurnId.set(turn.turnIdHash, group);
+  }
+
+  const canonical = [];
+  const duplicates = [];
+  for (const group of byTurnId.values()) {
+    const ordered = [...group].sort((left, right) => {
+      const timeDelta = new Date(left.row.created_at).getTime() - new Date(right.row.created_at).getTime();
+      return timeDelta || String(left.row.id).localeCompare(String(right.row.id));
+    });
+    const first = ordered[0];
+    if (ordered.some((candidate) => !retainedTurnsEquivalent(candidate, first))) {
+      throw new Error('session_turn_idempotency_fork');
+    }
+    canonical.push(first);
+    duplicates.push(...ordered.slice(1));
+  }
+  canonical.sort((left, right) => left.sequence - right.sequence
+    || String(left.row.id).localeCompare(String(right.row.id)));
+  for (let index = 0; index < canonical.length; index += 1) {
+    if (canonical[index].sequence !== index + 1) throw new Error('session_turn_sequence_gap');
+  }
+  return { canonical, duplicates, parsed };
+}
+
 function buildExchangeSpecs(turns, sessionId) {
   const exchanges = [];
   for (let index = 0; index < turns.length; index += 2) {
@@ -354,8 +403,8 @@ export function createSessionMemoryOwner(deps = {}) {
       throw new Error('session_turn_clearance_invalid');
     }
     const prefix = sessionKeyPrefix(sessionId);
-    const turnPattern = sessionKeyLikePattern(sessionId, 'turn:');
-    const finalPattern = sessionKeyLikePattern(sessionId, 'final:');
+    const turnScope = sessionKeyQueryScope(sessionId, 'turn:');
+    const finalScope = sessionKeyQueryScope(sessionId, 'final:');
 
     return withTransactionFn(async (client) => {
       await client.query(
@@ -369,34 +418,44 @@ export function createSessionMemoryOwner(deps = {}) {
           WHERE company_id = $1
             AND memory_type IN ('conversation_feed', 'quarantine')
             AND key LIKE $2 ESCAPE '\\'
-            AND right(key, 65) = $3
-          ORDER BY key
-          LIMIT 2`,
-        [companyId, turnPattern, `:${idHash}`],
+            AND key COLLATE "C" >= $3::text COLLATE "C"
+            AND key COLLATE "C" < $4::text COLLATE "C"
+            AND right(key, 65) = $5
+          ORDER BY created_at ASC, id ASC
+          LIMIT 256`,
+        [
+          companyId,
+          turnScope.pattern,
+          turnScope.lowerBound,
+          turnScope.upperBound,
+          `:${idHash}`,
+        ],
       );
-      if (existing.rows.length > 1) throw new Error('session_turn_idempotency_fork');
       if (existing.rows[0]) {
-        const parsed = parseTurnRow(existing.rows[0], sessionId);
-        if (!existingTurnMatches(parsed, {
-          role,
-          content,
-          idHash,
-          sourceRef,
-          speaker,
-          imageContext,
-        })) {
+        if (existing.rows.length === 256) throw new Error('session_turn_idempotency_scan_exhausted');
+        const parsedRows = existing.rows.map((row) => parseTurnRow(row, sessionId));
+        if (parsedRows.some((parsed) => !existingTurnMatches(parsed, {
+          role, content, idHash, sourceRef, speaker, imageContext,
+        }))) {
           throw new Error('session_turn_idempotency_conflict');
         }
+        const parsed = [...parsedRows].sort((left, right) => {
+          const timeDelta = new Date(left.row.created_at).getTime() - new Date(right.row.created_at).getTime();
+          return timeDelta || String(left.row.id).localeCompare(String(right.row.id));
+        })[0];
+        const retainedIds = parsedRows.map((entry) => String(entry.row.id));
         const evidence = await verifyEvidenceFn({
-          memoryIds: [String(existing.rows[0].id)],
+          memoryIds: retainedIds,
           client,
         });
-        ensureEvidenceVerified(evidence, [String(existing.rows[0].id)]);
-        const proof = evidence.proofs.get(String(existing.rows[0].id));
-        const receipt = await logEventFn(companyId, agentId, 'session_turn_idempotent_replay', existing.rows[0].key, {
+        ensureEvidenceVerified(evidence, retainedIds);
+        const proof = evidence.proofs.get(String(parsed.row.id));
+        const receipt = await logEventFn(companyId, agentId, 'session_turn_idempotent_replay', parsed.row.key, {
           session_id: sessionId,
           turn_sequence: parsed.sequence,
-          memory_id: existing.rows[0].id,
+          memory_id: parsed.row.id,
+          retained_retry_copy_count: parsedRows.length - 1,
+          retained_retry_copy_memory_ids: retainedIds.filter((id) => id !== String(parsed.row.id)),
           canonical_memory_changed: false,
           reasoning: 'The native session owner observed an exact retry and reused the retained signed turn instead of creating a new memory version.',
           source_knowledge: 'session-memory-owner.js — deterministic turn idempotency',
@@ -404,11 +463,11 @@ export function createSessionMemoryOwner(deps = {}) {
         return {
           success: true,
           idempotent: true,
-          memory_id: existing.rows[0].id,
-          key: existing.rows[0].key,
+          memory_id: parsed.row.id,
+          key: parsed.row.key,
           session_id: sessionId,
           sequence: parsed.sequence,
-          quarantined: existing.rows[0].memory_type === 'quarantine',
+          quarantined: parsed.row.memory_type === 'quarantine',
           live_content_hash: proof.live_content_hash,
           save_mutation_hash: proof.save_mutation_hash,
           binding_mutation_hash: proof.binding_mutation_hash,
@@ -422,9 +481,11 @@ export function createSessionMemoryOwner(deps = {}) {
           WHERE company_id = $1
             AND memory_type = 'session_manifest'
             AND key LIKE $2 ESCAPE '\\'
+            AND key COLLATE "C" >= $3::text COLLATE "C"
+            AND key COLLATE "C" < $4::text COLLATE "C"
           ORDER BY key
           LIMIT 1`,
-        [companyId, finalPattern],
+        [companyId, finalScope.pattern, finalScope.lowerBound, finalScope.upperBound],
       );
       if (finalized.rows[0]) throw new Error('session_already_finalized');
 
@@ -434,9 +495,11 @@ export function createSessionMemoryOwner(deps = {}) {
           WHERE company_id = $1
             AND memory_type IN ('conversation_feed', 'quarantine')
             AND key LIKE $2 ESCAPE '\\'
+            AND key COLLATE "C" >= $3::text COLLATE "C"
+            AND key COLLATE "C" < $4::text COLLATE "C"
           ORDER BY key DESC
           LIMIT 1`,
-        [companyId, turnPattern],
+        [companyId, turnScope.pattern, turnScope.lowerBound, turnScope.upperBound],
       );
       const sequence = latest.rows[0]
         ? parseTurnKey(latest.rows[0].key, prefix).sequence + 1
@@ -514,9 +577,9 @@ export function createSessionMemoryOwner(deps = {}) {
     if (!companyId) throw new Error('session_company_required');
     if (!agentId) throw new Error('session_agent_required');
     const prefix = sessionKeyPrefix(sessionId);
-    const turnPattern = sessionKeyLikePattern(sessionId, 'turn:');
-    const exchangePattern = sessionKeyLikePattern(sessionId, 'exchange:');
-    const finalPattern = sessionKeyLikePattern(sessionId, 'final:');
+    const turnScope = sessionKeyQueryScope(sessionId, 'turn:');
+    const exchangeScope = sessionKeyQueryScope(sessionId, 'exchange:');
+    const finalScope = sessionKeyQueryScope(sessionId, 'final:');
     const expectedTurnCount = normalizeExpectedTurnCount(
       input.expected_turn_count ?? input.expectedTurnCount,
     );
@@ -539,14 +602,14 @@ export function createSessionMemoryOwner(deps = {}) {
           WHERE company_id = $1
             AND memory_type IN ('conversation_feed', 'quarantine')
             AND key LIKE $2 ESCAPE '\\'
+            AND key COLLATE "C" >= $3::text COLLATE "C"
+            AND key COLLATE "C" < $4::text COLLATE "C"
           ORDER BY key`,
-        [companyId, turnPattern],
+        [companyId, turnScope.pattern, turnScope.lowerBound, turnScope.upperBound],
       );
       if (!turnsResult.rows.length) throw new Error('session_has_no_turns');
-      const turns = turnsResult.rows.map((row) => parseTurnRow(row, sessionId));
-      for (let index = 0; index < turns.length; index += 1) {
-        if (turns[index].sequence !== index + 1) throw new Error('session_turn_sequence_gap');
-      }
+      const canonicalized = canonicalizeRetainedTurns(turnsResult.rows, sessionId);
+      const turns = canonicalized.canonical;
       const turnIdHashesSha256 = orderedTurnIdHashesSha256(turns);
       if (expectedTurnCount != null && expectedTurnCount !== turns.length) {
         throw new Error('session_finalization_expected_turn_count_mismatch');
@@ -555,9 +618,9 @@ export function createSessionMemoryOwner(deps = {}) {
         && expectedTurnIdHashesSha256 !== turnIdHashesSha256) {
         throw new Error('session_finalization_expected_turn_id_hashes_mismatch');
       }
-      const memoryIds = turns.map((turn) => String(turn.row.id));
-      const evidence = await verifyEvidenceFn({ memoryIds, client });
-      ensureEvidenceVerified(evidence, memoryIds);
+      const retainedMemoryIds = canonicalized.parsed.map((turn) => String(turn.row.id));
+      const evidence = await verifyEvidenceFn({ memoryIds: retainedMemoryIds, client });
+      ensureEvidenceVerified(evidence, retainedMemoryIds);
       const leaves = turns.map((turn) => {
         const proof = evidence.proofs.get(String(turn.row.id));
         return {
@@ -582,9 +645,11 @@ export function createSessionMemoryOwner(deps = {}) {
           WHERE company_id = $1
             AND memory_type = 'session_manifest'
             AND key LIKE $2 ESCAPE '\\'
+            AND key COLLATE "C" >= $3::text COLLATE "C"
+            AND key COLLATE "C" < $4::text COLLATE "C"
           ORDER BY key
           LIMIT 2`,
-        [companyId, finalPattern],
+        [companyId, finalScope.pattern, finalScope.lowerBound, finalScope.upperBound],
       );
       if (existing.rows.length > 1) throw new Error('session_finalization_fork');
       const existingExchanges = await client.query(
@@ -593,8 +658,15 @@ export function createSessionMemoryOwner(deps = {}) {
           WHERE company_id = $1
             AND memory_type = 'session_exchange'
             AND key LIKE $2 ESCAPE '\\'
+            AND key COLLATE "C" >= $3::text COLLATE "C"
+            AND key COLLATE "C" < $4::text COLLATE "C"
           ORDER BY key`,
-        [companyId, exchangePattern],
+        [
+          companyId,
+          exchangeScope.pattern,
+          exchangeScope.lowerBound,
+          exchangeScope.upperBound,
+        ],
       );
       const existingExchangeByKey = new Map(existingExchanges.rows.map((row) => [row.key, row]));
       const expectedExchangeKeys = new Set(exchangeSpecs.map((spec) => spec.key));
@@ -718,6 +790,10 @@ export function createSessionMemoryOwner(deps = {}) {
         exchange_merkle_root: exchangeRoot,
         turns: leaves,
         exchanges: exchangeLeaves,
+        ...(canonicalized.duplicates.length ? {
+          retained_retry_copy_count: canonicalized.duplicates.length,
+          retained_retry_copy_memory_ids: canonicalized.duplicates.map((turn) => String(turn.row.id)),
+        } : {}),
       };
       const saved = await persistMemoryFn({
         company_id: companyId,
@@ -752,6 +828,8 @@ export function createSessionMemoryOwner(deps = {}) {
         save_mutation_hash: ledgerHash(saved, 'ledger_commit'),
         binding_mutation_hash: ledgerHash(saved, 'binding_commit'),
         raw_turns_retained: true,
+        retained_retry_copy_count: canonicalized.duplicates.length,
+        retained_retry_copy_memory_ids: canonicalized.duplicates.map((turn) => String(turn.row.id)),
         summary_replaced_raw_turns: false,
         reasoning: 'The housekeeper finalized the session only after every retained raw turn passed native provenance verification.',
         source_knowledge: 'Generative Agents source pointers + TiMem L2 closure + Chronos raw/event separation',
@@ -783,7 +861,7 @@ export function createSessionMemoryOwner(deps = {}) {
     const sessionId = normalizeSessionId(input.session_id ?? input.sessionId);
     const companyId = String(context.companyId || input.company_id || 'hom').trim();
     const agentId = String(context.agentId || input.agent_id || 'housekeeper').trim();
-    const turnPattern = sessionKeyLikePattern(sessionId, 'turn:');
+    const turnScope = sessionKeyQueryScope(sessionId, 'turn:');
     return withTransactionFn(async (client) => {
       const result = await client.query(
         `SELECT id::text, key, value, agent_id, source, created_at, content_hash, memory_type
@@ -791,15 +869,17 @@ export function createSessionMemoryOwner(deps = {}) {
           WHERE company_id = $1
             AND memory_type IN ('conversation_feed', 'quarantine')
             AND key LIKE $2 ESCAPE '\\'
+            AND key COLLATE "C" >= $3::text COLLATE "C"
+            AND key COLLATE "C" < $4::text COLLATE "C"
           ORDER BY key`,
-        [companyId, turnPattern],
+        [companyId, turnScope.pattern, turnScope.lowerBound, turnScope.upperBound],
       );
       if (!result.rows.length) return [];
-      const turns = result.rows.map((row) => parseTurnRow(row, sessionId));
-      const memoryIds = turns.map((turn) => String(turn.row.id));
+      const canonicalized = canonicalizeRetainedTurns(result.rows, sessionId);
+      const memoryIds = canonicalized.parsed.map((turn) => String(turn.row.id));
       const evidence = await verifyEvidenceFn({ memoryIds, client });
       ensureEvidenceVerified(evidence, memoryIds);
-      return turns.map((turn) => ({
+      return canonicalized.canonical.map((turn) => ({
         memory_id: String(turn.row.id),
         sequence: turn.sequence,
         role: turn.record.role,

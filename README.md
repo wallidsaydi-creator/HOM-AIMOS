@@ -1,51 +1,18 @@
-# HOM-AIMOS — Cryptographically Auditable Persistent Memory
+# HOM-AIMOS — Agent Security on Auditable Persistent Memory
 
-HOM-AIMOS is a local-first persistent-memory backend for agents. It combines
-signed identity, append-only provenance, hybrid retrieval, temporal reasoning,
-and a housekeeper identity that owns autonomous maintenance without depending
-on an enrolled user agent.
+HOM-AIMOS is a local-first agent-security system built on a complete persistent
+retrieval-memory engine. The memory substrate is the enforcement surface:
+signed identity, immutable history, native hybrid and graph retrieval,
+retention-preserving poison classification, explicit Canary traversal
+controls, cryptographically authorized adaptation, and SABER-inspired signed
+operational red-team evidence all participate in the same save and recall lifecycle. A housekeeper
+identity owns autonomous maintenance without borrowing an enrolled user agent.
 
-## Security is the architecture
-
-Persistent memory is an agent control surface: compromise what an agent is
-allowed to retain, adapt, or disclose and every downstream decision can be
-influenced. HOM-AIMOS therefore implements security inside the save, recall,
-mutation, credential, tool-action, and autonomous-maintenance paths rather than
-placing a security wrapper around storage.
-
-| Boundary | Implemented capability |
-|---|---|
-| Identity and authority | Certificate-bound Ed25519 identities; method-, path-, body-, and nonce-bound request signatures; exact signer-epoch authorization; replay and revocation checks; macOS Keychain custody |
-| Memory integrity | Immutable canonical versions, append-only provenance, and signed reversible epistemic labels bound to retained content hashes |
-| Authorized adaptation | Housekeeper-authorized, no-fork cognitive-weight transitions verified by the restricted database writer and an independent portable verifier |
-| Recall disclosure | Provenance and authorization admission, epistemic trust selection, bounded evidence, and RFC 6962-style domain-separated Merkle receipts |
-| Operational evidence | Append-only request, authorization, credential-use, tool-action, event, and cognitive-transition ledgers |
-| Runtime defense | Context-aware security decisions, canary write gates, post-run scheming assessment, and a cyber-security firewall on the declared agent execution path |
-| Defensive self-assessment | A diagnostic-only harness with OWASP-LLM-mapped campaigns, benign calibration, canary checks, and SABER-style posture scoring |
-
-Potentially poisoned content is retained rather than silently deleted. Signed
-epistemic state remains revisable and auditable, and recall consumes it as
-trust evidence. In the promoted PoisonedRAG N=100 run, no poison passage entered
-the attacked top-5 disclosures (0/100); when the signed-label retrieval policy
-was bypassed on the same target set, poison was retrieved for 94/100 targets.
-The complete results, denominators, uncertainty, and protocol boundaries are
-reported in [Measured](#measured) and the self-hashed publication aggregate.
-
-**Scope:** this release is a persistent-memory system with an implemented
-security architecture. It is not a formally certified security product and
-has not received an independent penetration test. Its cryptographic evidence
-supports integrity, authorization, traceability, and historical continuity;
-it does not establish that remembered content is true.
-
-See [SECURITY.md](SECURITY.md), [THREAT-MODEL.md](THREAT-MODEL.md), and the
-[cognitive-weight chain specification](docs/security/cognitive-weight-chain-SPEC.md)
-for the enforced boundaries and verification model.
-
-## What HOM-AIMOS is
+## The retrieval-memory substrate
 
 HOM-AIMOS is a complete persistent-memory backend, not a provenance layer
 attached to a vector store. Its source-derived architecture binds a
-275-service census and declares six critical pipelines containing 146 service
+300-service census and declares six critical pipelines containing 156 service
 connections. Save and recall each expose eight principal native execution
 boundaries.
 
@@ -70,10 +37,32 @@ boundaries.
 | 2 | Embedding and candidate opening | `services/core/embeddings.js` |
 | 3 | Similarity statistics | `services/retrieval/similarity-stats.js` |
 | 4 | Trust scoring | `services/learning/trust-score.js` |
-| 5 | Concept-graph retrieval | `services/core/concept-graph.js` |
+| 5 | Permanent dense, sparse, temporal, entity, QuIM, QMD, HyDE, and concept gears plus one bounded MAGMA/Reconstructed-Graph family channel with central deterministic RRF | `services/retrieval/native-recall-pipeline.js`, `services/retrieval/native-retrieval-fusion.js`, `services/retrieval/reconstructed-graph-native-candidate.js` |
 | 6 | Verified epistemic projection and selection | `services/retrieval/epistemic-trust-retrieval.js` |
 | 7 | Pre-disclosure calibration | `services/retrieval/recall-calibrator.js` |
 | 8 | Bounded evidence and signed receipt | `services/retrieval/native-recall.js` |
+
+### Native retrieval gearbox
+
+Recall is a cooperative gearbox, not a competition in which one retriever
+replaces the memory system. The native fusion owner combines vector, BM25,
+lexical, temporal, QuIM, QMD, HyDE, entity, Concept/PPR, and one bounded graph
+family channel. Every outer channel has one vote in deterministic reciprocal
+rank fusion; a graph subgear cannot multiply its voting mass or remove the
+admitted baseline.
+
+MAGMA is permanently compiled into the graph-family channel. It has no runtime
+activation mode. Its principal-scoped reader opens a bounded topology, its
+four-view kernel contributes rank evidence and provenance-re-admitted
+discoveries, and the ordinary epistemic, Canary, retention, and signed-recall
+owners still decide disclosure. Optional signed configuration may tighten
+bounded calibration, but cannot enable, disable, or promote MAGMA above the
+other gears.
+
+Reconstructed Graph G2 is a second bounded subgear in that same family channel.
+Additional graph candidates are evaluated one at a time as marginal additions
+to the complete gearbox; they are not advertised as active merely because a
+service or isolated test exists.
 
 ### Cognitive mutation — retained, bounded, reversible
 
@@ -111,18 +100,18 @@ proof-root contracts. The normative byte layout and invariants are published
 in [`docs/security/cognitive-weight-chain-SPEC.md`](docs/security/cognitive-weight-chain-SPEC.md).
 
 The save manifest declares 13 critical service connections; recall declares
-68 spanning exact-identifier, semantic, temporal, graph, procedural, and
-lineage paths. The service census contains retrieval 55, orchestration 43,
-security 36, temporal 25, learning 23, observe 22, core 15, write 13, context
+78 spanning exact-identifier, semantic, temporal, graph, procedural, and
+lineage paths. The service census contains retrieval 68, orchestration 43,
+security 48, temporal 25, learning 23, observe 22, core 15, write 13, context
 9, integrations 9, governance 7, dream 5, ingestion 4, shared 4, answering 2,
 runtime 2, and caching 1.
 
 `services/pipeline-manifest.js` is the source of truth for the six critical
-connection maps. Its validator dynamically imports all 146 declarations and
+connection maps. Its validator dynamically imports all 156 declarations and
 checks their named exports; architecture tests and the release-source gate fail
 when the declared topology and public documentation diverge.
 
-## What is built on top
+## Security is the architecture
 
 The save and recall paths are a working memory system on their own. The
 cryptographic layer enters at explicit boundaries:
@@ -138,6 +127,32 @@ cryptographic layer enters at explicit boundaries:
   and no-fork predecessor.
 - Ed25519 verification runs in the database mutation boundary and in an
   independent portable verifier.
+
+Security is not a filter placed after retrieval. It is composed into identity,
+save, recall, mutation, tools, graph selection, and evidence output:
+
+- **Signed authority:** protected requests bind the certificate identity,
+  method, path, body, nonce, and timestamp. Runtime policy comes from verified,
+  append-only configuration—not request fields or environment variables.
+- **Retention-preserving poison evidence:** potentially poisoned content is
+  retained and receives a signed, reversible epistemic label. Recall consumes
+  that label before active-context disclosure.
+- **Canary traversal controls:** explicit generated markers are inspected at
+  `PERSISTED`, `RELAYED`, `EXECUTED`, and `EXPOSED` boundaries. Marked memory is
+  retained under quarantine; marked relay, tool input, or tool output is kept
+  out of the downstream execution context. Canary detects its explicit marker
+  family, not arbitrary unmarked poisoning.
+- **Governed graph retrieval:** MAGMA and the source-bound Reconstructed Graph
+  G2 adaptation are bounded native subgears inside one structural family channel,
+  fused with dense, sparse, temporal, entity, QuIM, QMD, HyDE, and concept
+  evidence. Neither has an activation mode or can replace the admitted
+  baseline. The caller's
+  verified identity/grant scopes its reads; provenance, epistemic, Canary,
+  Aladdin-retention, and signed-recall owners retain final disclosure authority.
+- **Signed self-red-teaming:** the SABER-inspired operational harness commits a
+  fixed manifest, one native signed decision per case, and signed terminal or
+  failed campaign evidence. Validation and reports reconstruct from verified
+  event IDs; callers cannot submit their own security aggregate.
 
 Canonical memory is never selectively removed, decayed, expired, suppressed,
 or deactivated. The sole erasure path is an offline, master-signed,
@@ -156,11 +171,18 @@ all-or-nothing whole-brain purge that emits a signed terminal receipt.
 | Cognitive tamper cases detected | 4/4 |
 | SQL/portable cognitive verifier parity | 9/9 records |
 | Signed cognitive-transition latency, median | 4.865 ms |
+| MAGMA permanent native-gear proof | 20/20 signed recalls; 8/20 graph-discovery observations; candidate p95 218.941 ms under its fixed 250 ms gate; 1/20 individual calls exceeded 250 ms |
+| Reconstructed Graph G2 additive proof | 840/840 exact fixed-corpus rows; multi-hop nDCG@20 +0.012325; evidence recall@20 +0.021237 |
+| Reconstructed Graph G2 canonical live proof | 20/20 signed recalls; incremental p95 27.023 ms under its unchanged 50 ms gate; canonical roots unchanged |
+| SABER-inspired live operational campaign | 27/27 attacks blocked or retained-quarantined; 0/28 benign false positives; 0 indeterminate |
 
-These are distinct protocols and are not averaged. Every figure regenerates
-from the sanitized, self-hashed aggregate in
+These are distinct protocols and are not averaged. The utility, poisoning, and
+mutation figures regenerate from the sanitized, self-hashed aggregate in
 [`eval/publication/verified-benchmark-results.json`](eval/publication/verified-benchmark-results.json),
-which binds the promoted run artifacts by SHA-256.
+which binds the promoted publication runs by SHA-256. MAGMA and the operational
+red-team campaign are later signed live conformance gates with separate
+hash-addressed artifacts; they are not silently folded into the paper's
+benchmark aggregate.
 
 The central security distinction is **integrity, not omniscience**. AIMOS can
 prove that an authorized identity asserted a specific memory at a particular
@@ -179,7 +201,7 @@ epistemic ablation, blinded system-author agreement, and 39/39 verified signed
 scratch-brain purge evidence. Older batch-save runs are non-canonical and are
 not release claims.
 
-The architecture manifest mechanically binds the current 275-service census.
+The architecture manifest mechanically binds the current 300-service census.
 That number is an inventory fact, not a performance claim.
 
 ## Security and retention invariants
@@ -198,10 +220,18 @@ That number is an inventory fact, not a performance claim.
 - Retained reference memories carry a separate, signed, reversible epistemic
   label. Poison suspicion changes evidence handling without rewriting or
   deleting the underlying observation; later evidence may refute the label.
+- Explicit Canary markers are tracked across persistence, relay, tool-input,
+  and tool-output boundaries without being represented as a universal poison
+  detector.
+- SABER-inspired campaign evidence is diagnostic and evaluation-only. It has
+  no runtime save, recall, ranking, quarantine, or disclosure authority and is
+  not a DARPA certification claim.
 - Native implementation only: no placeholder services, fake controls, runtime
   wrappers, or bypass hooks.
 
-See [SECURITY.md](SECURITY.md) and [THREAT-MODEL.md](THREAT-MODEL.md) before
+See [the agent-security architecture](docs/security/agent-security-architecture.md),
+[the SABER operational evidence](docs/security/saber-operational-evidence.md),
+[SECURITY.md](SECURITY.md), and [THREAT-MODEL.md](THREAT-MODEL.md) before
 deploying or integrating AIMOS.
 
 ## Platform and prerequisites
@@ -267,8 +297,8 @@ Verify the live service:
 curl --fail http://127.0.0.1:9100/healthz
 ```
 
-AIMOS owns port 9100. Ports 9000 and 9001 are reserved for the separate Oracle
-system and are rejected by this fork.
+AIMOS owns port 9100. Other runtimes are outside this repository's supported
+deployment boundary.
 
 The complete enrollment, signed save/recall proof, upgrade, and purge ceremonies
 are documented in [DEPLOYMENT.md](DEPLOYMENT.md).
@@ -276,6 +306,39 @@ are documented in [DEPLOYMENT.md](DEPLOYMENT.md).
 Release packages include SHA-256 checksums, a CycloneDX SBOM, and GitHub keyless
 build provenance. GPG is not required. See [RELEASE.md](RELEASE.md) for online
 and offline verification boundaries.
+
+## Reproducibility has two layers
+
+The **source-install layer** starts from a clean checkout. `install-macos.sh`
+checks the supported toolchain, and Genesis creates the database, applies the
+migrations, provisions the restricted runtime role and autonomous housekeeper,
+generates machine-local authority, and ingests the manifest-bound Guide corpus
+through the real signed save path. This proves that the released source can
+construct the declared architecture without a pre-existing brain.
+
+The **operator-ceremony layer** proves live security behavior without sharing
+private keys. An operator may enroll a new master and audit agent, append a
+master-signed read/write grant, exercise signed save and recall, and run the
+disposable security ceremony:
+
+```sh
+node scripts/identity/enroll-master.js
+node scripts/identity/enroll-agent.js <audit-agent-id> --validity-days=30
+node scripts/identity/authorize-recall.js <audit-agent-id> \
+  --clearance=10 \
+  --data-class=confidential \
+  --reason="Local reproducibility ceremony" \
+  --write
+npm run test:security:isolated
+```
+
+Reproduction creates new signer epochs, nonces, event identifiers, and artifact
+hashes; it verifies the protocol and invariants rather than attempting to copy
+the original operator's signatures. Source-only and isolated tests remain
+separate from deliberately authorized live ceremonies. Exact signed-envelope
+examples and the whole-brain purge boundary are in
+[DEPLOYMENT.md](DEPLOYMENT.md) and
+[Guide/connect-to-aimos-cert-envelope.md](Guide/connect-to-aimos-cert-envelope.md).
 
 ## Architecture and agent guidance
 

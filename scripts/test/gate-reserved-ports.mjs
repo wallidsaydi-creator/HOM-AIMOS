@@ -2,7 +2,7 @@
 
 // AIMOS Reserved-Port Source Gate
 //
-// Scans the codebase for live references to Oracle ports 9000/9001 and reports
+// Scans the codebase for live references to reserved legacy ports 9000/9001 and reports
 // every outbound default, callback URL, advertisement, or fetch target that
 // contains them. Exits 0 if the only remaining references are rejection
 // constants, comments, or tests; exits 1 if any live transport literal reaches
@@ -35,7 +35,7 @@ const SCANNED_EXTENSION = /\.(?:js|mjs|cjs|py|sh|sql|md|json|ya?ml)$/i;
 
 function isExactReservedPortGuard(rel, line) {
   if (rel === 'services/core/runtime-config.js') {
-    return /^export const ORACLE_RESERVED_PORTS = Object\.freeze\(\[9000, 9001\]\);$/.test(line.trim());
+    return /^export const RESERVED_LEGACY_PORTS = Object\.freeze\(\[9000, 9001\]\);$/.test(line.trim());
   }
   if (rel === 'scripts/benchmark/run-isolated.mjs') {
     return /^if \(\[9000, 9001, 9100\]\.includes\(args\.port\)\) throw new Error\(`port \$\{args\.port\} is reserved by a live HOM service`\);$/.test(line.trim());

@@ -22,7 +22,7 @@
  * - This is a native retrieval service, not an app/runtime wrapper and not a
  *   replacement recall route.
  * - It does not import experiments, mutate canonical memory, alter DB state,
- *   sign requests, call HTTP, bypass auth, or rewrite the 16/17-stage recall
+ *   sign requests, call HTTP, bypass auth, or rewrite the 21-stage native recall
  *   ranking math.
  * - Canonical memory remains full fidelity and permanent. Only the active
  *   response payload is shaped.
@@ -6241,6 +6241,11 @@ function compactOriginalRecallMeta(meta = {}) {
     'score_components',
     'rank_observability',
     'epistemic_retrieval',
+    'graph_family_retrieval',
+    'magma_retrieval',
+    'magma_security_closure',
+    'reconstructed_graph_retrieval',
+    'reconstructed_graph_security_closure',
     'doctor_sidecar',
     'native_paper_recall',
     'pheromone_reinforcement',

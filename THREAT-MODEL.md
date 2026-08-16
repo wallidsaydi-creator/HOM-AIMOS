@@ -62,6 +62,27 @@ descriptive security material from executable attack intent. Explicit attacks
 are blocked at prompt and tool boundaries; unsafe saves remain retained in
 active quarantine with signed disposition evidence.
 
+### 4a. Explicit Canary traversal
+
+**Threat:** marked evidence crosses from storage into model context, tool
+arguments, or tool output despite a declared boundary.
+**Mitigation:** native Canary checks append signed stage evidence at
+`PERSISTED`, `RELAYED`, `EXECUTED`, and `EXPOSED`. Marked memories remain
+retained under quarantine semantics; marked relay/tool material is withheld
+from the downstream execution context.
+**Boundary:** Canary recognizes AIMOS's explicit generated marker family. It is
+not evidence that arbitrary unmarked poisoning is detected.
+
+### 4b. Security-score fabrication
+
+**Threat:** a caller submits a favorable campaign aggregate, counts errors as
+blocks, omits failed cases, or hides benign false positives.
+**Mitigation:** the SABER-inspired operational route commits a fixed manifest,
+one signed native decision per case, and a signed terminal or failed event.
+Validation, score, and report operations accept verified terminal event IDs and
+reconstruct intended-N, valid-N, bypass, indeterminate, and benign-control
+counts from ledger evidence. The harness has no runtime defense authority.
+
 ### 5. Canonical brain contamination
 **Threat:** benchmark data or test artifacts pollute the production memory corpus.
 **Mitigation:** the isolated benchmark runner operates on a disposable scratch

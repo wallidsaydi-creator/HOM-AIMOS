@@ -39,7 +39,7 @@ test('production write boundary awaits native scan and signed disposition receip
   assert.doesNotMatch(source, /governorConfigLedger|ENFORCE_CANARY_WRITE|canary_write_rejected/);
 });
 
-test('REST and MCP saves both compose Canary disposition into native security quarantine', async () => {
+test('REST, streamable MCP, and legacy MCP saves compose Canary disposition into native security quarantine', async () => {
   const [rest, mcp] = await Promise.all([
     readFile(new URL('../../routes/aimos.js', import.meta.url), 'utf8'),
     readFile(new URL('../../routes/aimos-mcp-streamable.js', import.meta.url), 'utf8'),
@@ -48,5 +48,20 @@ test('REST and MCP saves both compose Canary disposition into native security qu
     assert.match(source, /await evaluateCanaryWrite\(/);
     assert.match(source, /canaryDecision\.quarantine/);
     assert.match(source, /security_disposition:/);
+  }
+  const legacyMcp = rest.slice(rest.indexOf("router.post('/mcp/tools/call'"));
+  assert.match(legacyMcp, /await evaluateCanaryWrite\(/);
+  assert.match(legacyMcp, /transport: 'legacy_mcp'/);
+  assert.match(legacyMcp, /security_disposition:/);
+});
+
+test('transport save scans are parented to their signed request-admission events', async () => {
+  const [rest, mcp] = await Promise.all([
+    readFile(new URL('../../routes/aimos.js', import.meta.url), 'utf8'),
+    readFile(new URL('../../routes/aimos-mcp-streamable.js', import.meta.url), 'utf8'),
+  ]);
+  for (const source of [rest, mcp]) {
+    assert.match(source, /runId: .*requestReceiptId \|\| ''/);
+    assert.match(source, /parentEventId: .*requestAdmissionEventId \|\| null/);
   }
 });

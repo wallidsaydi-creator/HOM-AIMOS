@@ -1,6 +1,6 @@
 {
   "schema": "hom.aimos.genesis-manifest/v1",
-  "version": 4,
+  "version": 19,
   "hash_algorithm": "sha256",
   "merkle_contract": {
     "sort": "path_ascending_utf16",
@@ -25,28 +25,28 @@
     },
     {
       "path": "Guide/aimos-guide-tier1-boot.md",
-      "sha256": "626380ae876303614534307b571c6afeba4bab4c4309e9c17f606e6593272ecd",
-      "bytes": 4723
+      "sha256": "8b74962ad0aa66183c8e48a746521112f6ed92a3900170f4527aece932396d64",
+      "bytes": 4764
     },
     {
       "path": "Guide/aimos-guide-tier2-recall.md",
-      "sha256": "48f0f478b29f254d08428fda3c18c06e5afca782a67ee635764e6e22485e8fe4",
-      "bytes": 10092
+      "sha256": "ad670484604397a2515d0069986acde9ad725b0f45aeffbfa1a71066cdaf24c0",
+      "bytes": 10203
     },
     {
       "path": "Guide/aimos-guide-tier3-save.md",
-      "sha256": "011feac599e969f019a481311467a7e05f77af1af5fa7e1a204e6e0af14c528c",
-      "bytes": 7307
+      "sha256": "42dc998347ce7748a8d858b936d0e7d3def2eb333cbdf81e92e39b48edd63708",
+      "bytes": 7345
     },
     {
       "path": "Guide/aimos-guide-tier4-debug.md",
-      "sha256": "0205674ebe01d771e1f36ae7f59c83a5d2671bf58b5dcc86ef075c2d21294288",
+      "sha256": "97e4bf1068cc8ab954343c2968d0f72cfad5ab2d5de335bc54ff3665db023c58",
       "bytes": 7374
     },
     {
       "path": "Guide/aimos-llm-guide.md",
-      "sha256": "27d17f2c08c4aab4d80cf6dc70e3a0c989cb0e1e8c08cf61c43a699e1e10ea43",
-      "bytes": 47414
+      "sha256": "33f3ba9d70aa51be9b91f7a8e86b0ac570774591e75916ad237dddbb79781e89",
+      "bytes": 48493
     },
     {
       "path": "Guide/connect-to-aimos-cert-envelope.md",
@@ -59,5 +59,5 @@
       "bytes": 3706
     }
   ],
-  "corpus_root": "0eb6f33985ba29eec3b86eb6a7b407581b2bbd058749e1a2c1efd4ba1198ab1a"
+  "corpus_root": "dcbf73476b21690cecbda9d084e5784775f4e004af82f8877186e7f4df533bc7"
 }

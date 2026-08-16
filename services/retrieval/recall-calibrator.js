@@ -44,7 +44,7 @@ import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { canonicalJson } from '../security/agent-identity.js';
 import {
   logEvent,
-  readVerifiedEventStream,
+  readVerifiedEventHistory,
 } from '../observe/event-ledger.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
@@ -94,7 +94,9 @@ function calibrationStep(state, observations) {
 }
 
 function calibrationRows(rows) {
-  return rows.filter((row) => [GENESIS_OPERATION, OBSERVATION_OPERATION, UPDATE_OPERATION].includes(row.operation));
+  return rows
+    .filter((row) => [GENESIS_OPERATION, OBSERVATION_OPERATION, UPDATE_OPERATION].includes(row.operation))
+    .map((row, index) => ({ ...row, calibration_seq: index + 1 }));
 }
 
 function metadataOf(row) {
@@ -111,6 +113,7 @@ export function reconstructCalibrationSnapshot(rows = []) {
 
   for (const row of relevant) {
     const metadata = metadataOf(row);
+    const calibrationSequence = Number(row.calibration_seq);
     if (metadata?.schema !== SCHEMA || metadata?.formula_version !== FORMULA_VERSION) {
       throw new Error('calibration_event_schema_invalid');
     }
@@ -145,7 +148,11 @@ export function reconstructCalibrationSnapshot(rows = []) {
         clamp01(observation.observed_usefulness);
         observations.push({
           ...observation,
-          event_sequence: Number(row.ledger_seq),
+          event_sequence: calibrationSequence,
+          ledger_sequence: Number(row.ledger_seq),
+          signer_valid_from: row.signer_valid_from
+            ? new Date(row.signer_valid_from).toISOString()
+            : null,
           event_id: row.id,
           event_mutation_hash: Buffer.from(row.mutation_hash).toString('hex'),
         });
@@ -204,7 +211,12 @@ export function reconstructCalibrationSnapshot(rows = []) {
 }
 
 async function readVerifiedStream(companyId, client) {
-  return readVerifiedEventStream(companyId, { client });
+  // Housekeeper custody promotion starts a new independently verified signer
+  // epoch. Calibration is one logical append-only stream across those epochs,
+  // so reading only the current epoch would make the retained Genesis event
+  // disappear. The history owner verifies every complete epoch before these
+  // rows are assigned a stable calibration-stream sequence.
+  return readVerifiedEventHistory(companyId, { client });
 }
 
 async function loadSnapshotWithClient(companyId, client) {
@@ -358,13 +370,14 @@ export async function runCalibrationUpdate(companyId = COMPANY) {
     );
     const { rows, snapshot } = await loadSnapshotWithClient(company, client);
     const pendingRows = calibrationRows(rows).filter(
-      (row) => row.operation === OBSERVATION_OPERATION && Number(row.ledger_seq) > snapshot.lastObservationSequence,
+      (row) => row.operation === OBSERVATION_OPERATION
+        && Number(row.calibration_seq) > snapshot.lastObservationSequence,
     );
     const pending = pendingRows.flatMap((row) => metadataOf(row).observations || []);
     if (!pending.length) return { updated: false, snapshot, receipt: null };
     const next = calibrationStep(snapshot, pending);
-    const lastObservationSequence = Math.max(...pendingRows.map((row) => Number(row.ledger_seq)));
-    const sequences = pendingRows.map((row) => Number(row.ledger_seq));
+    const lastObservationSequence = Math.max(...pendingRows.map((row) => Number(row.calibration_seq)));
+    const sequences = pendingRows.map((row) => Number(row.calibration_seq));
     const receipt = await logEvent(company, 'recall-calibrator', UPDATE_OPERATION, FORMULA_VERSION, {
       schema: SCHEMA,
       formula_version: FORMULA_VERSION,

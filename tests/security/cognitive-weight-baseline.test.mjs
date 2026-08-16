@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-import { cognitiveBaselineHash } from '../../services/security/housekeeper-signer.js';
+import { cognitiveBaselineHash } from '../../services/security/protocol/mutmem-protocol.js';
 import { verifyPortableCognitiveState } from '../../services/security/cognitive-weight-verifier.js';
 
 const base = {

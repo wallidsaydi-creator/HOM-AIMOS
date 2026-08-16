@@ -217,6 +217,20 @@ export function buildLocomoArtifacts(sourceRows, sourceSha256) {
   assertNoForbiddenKeys(sessionsArtifact);
   return {
     sessions: sessionsArtifact,
+    queryInputs: {
+      schema: 'hom.canonical-benchmark-query-inputs/v1',
+      benchmark: 'locomo',
+      source_dataset_sha256: sourceSha256,
+      question_count: questions.length,
+      questions: questions.map((question) => ({
+        question_id: question.question_id,
+        benchmark: question.benchmark,
+        scope_id: question.scope_id,
+        source_filter: question.source_filter,
+        question: question.question,
+        category: question.category,
+      })),
+    },
     questions: {
       schema: 'hom.canonical-benchmark-questions/v1',
       benchmark: 'locomo',
@@ -227,12 +241,15 @@ export function buildLocomoArtifacts(sourceRows, sourceSha256) {
   };
 }
 
-export function buildLongMemEvalArtifacts(sourceRows, sourceSha256) {
+export function buildLongMemEvalArtifacts(sourceRows, sourceSha256, { dropEmptyTurns = false } = {}) {
   if (!Array.isArray(sourceRows) || sourceRows.length !== 500) throw new Error('longmemeval_source_shape_invalid');
   const scopes = [];
   const questions = [];
   let sessionCount = 0;
   let turnCount = 0;
+  const droppedEmptyTurns = [];
+  const disambiguatedSourceSessions = [];
+  let duplicateSourceSessionGroups = 0;
 
   for (const sample of sourceRows) {
     const questionId = String(sample.question_id || '').trim();
@@ -243,28 +260,65 @@ export function buildLongMemEvalArtifacts(sourceRows, sourceSha256) {
     }
     const scopeId = `longmemeval:${questionId}`;
     const sourceFilter = `benchmark:longmemeval:${questionId}`;
+    const sourceSessionIdCounts = new Map();
+    for (const rawSourceSessionId of sample.haystack_session_ids) {
+      const sourceSessionId = String(rawSourceSessionId || '').trim();
+      if (!sourceSessionId) throw new Error(`longmemeval_source_session_id_missing:${questionId}`);
+      sourceSessionIdCounts.set(sourceSessionId, (sourceSessionIdCounts.get(sourceSessionId) || 0) + 1);
+    }
+    duplicateSourceSessionGroups += [...sourceSessionIdCounts.values()]
+      .filter((count) => count > 1).length;
+    const sourceSessionIdOccurrences = new Map();
     const sessions = sample.haystack_sessions.map((sourceTurns, sessionIndex) => {
       const sourceSessionId = String(sample.haystack_session_ids[sessionIndex] || '').trim();
       const rawDate = String(sample.haystack_dates[sessionIndex] || '').trim();
       const baseIso = parseLongMemEvalDate(rawDate);
-      const sessionId = canonicalSessionId('lme', questionId, sourceSessionId);
-      const turns = sourceTurns.map((turn, turnIndex) => {
+      const sourceSessionIdOccurrence = (sourceSessionIdOccurrences.get(sourceSessionId) || 0) + 1;
+      sourceSessionIdOccurrences.set(sourceSessionId, sourceSessionIdOccurrence);
+      const sourceSessionIdCount = sourceSessionIdCounts.get(sourceSessionId);
+      const duplicatedSourceSessionId = sourceSessionIdCount > 1;
+      const canonicalSourceSessionIdentity = duplicatedSourceSessionId
+        ? `${sourceSessionId}:source-position:${String(sessionIndex + 1).padStart(6, '0')}`
+        : sourceSessionId;
+      const sessionId = canonicalSessionId('lme', questionId, canonicalSourceSessionIdentity);
+      if (duplicatedSourceSessionId) {
+        disambiguatedSourceSessions.push({
+          source_question_id_sha256: sha256(questionId),
+          source_session_id_sha256: sha256(sourceSessionId),
+          source_session_index: sessionIndex,
+          source_session_occurrence: sourceSessionIdOccurrence,
+          source_session_occurrence_count: sourceSessionIdCount,
+          source_date_sha256: sha256(rawDate),
+          canonical_session_id_sha256: sha256(sessionId),
+        });
+      }
+      const turns = sourceTurns.flatMap((turn, turnIndex) => {
         const role = String(turn.role || '').trim().toLowerCase();
         if (!['user', 'assistant'].includes(role)) {
           throw new Error(`longmemeval_turn_role_invalid:${questionId}:${sourceSessionId}:${turnIndex + 1}`);
         }
         const content = String(turn.content ?? '');
         if (!content.trim()) {
+          if (dropEmptyTurns) {
+            droppedEmptyTurns.push({
+              source_question_id_sha256: sha256(questionId),
+              source_session_id_sha256: sha256(sourceSessionId),
+              source_turn_index: turnIndex,
+              role,
+            });
+            return [];
+          }
           throw new Error(`longmemeval_turn_content_missing:${questionId}:${sourceSessionId}:${turnIndex + 1}`);
         }
-        return {
-          turn_id: `${questionId}:${sourceSessionId}:${turnIndex + 1}`,
+        return [{
+          turn_id: `${questionId}:${canonicalSourceSessionIdentity}:${turnIndex + 1}`,
           role,
           content,
           observed_at: observedAt(baseIso, turnIndex),
-          source_ref: `${questionId}:${sourceSessionId}:${turnIndex + 1}`,
-        };
+          source_ref: `${questionId}:${canonicalSourceSessionIdentity}:${turnIndex + 1}`,
+        }];
       });
+      if (!turns.length) throw new Error(`longmemeval_session_empty_after_normalization:${questionId}:${sourceSessionId}`);
       sessionCount += 1;
       turnCount += turns.length;
       return {
@@ -297,11 +351,46 @@ export function buildLongMemEvalArtifacts(sourceRows, sourceSha256) {
     scope_count: scopes.length,
     session_count: sessionCount,
     turn_count: turnCount,
+    ...(droppedEmptyTurns.length ? {
+      normalization: {
+        policy: 'drop_zero_information_empty_turns/v1',
+        dropped_turn_count: droppedEmptyTurns.length,
+        dropped_turns: droppedEmptyTurns,
+        ...(disambiguatedSourceSessions.length ? {
+          identity_policy: 'disambiguate_reused_source_session_ids_by_source_position/v1',
+          duplicate_source_session_group_count: duplicateSourceSessionGroups,
+          disambiguated_session_count: disambiguatedSourceSessions.length,
+          disambiguated_sessions: disambiguatedSourceSessions,
+        } : {}),
+      },
+    } : disambiguatedSourceSessions.length ? {
+      normalization: {
+        identity_policy: 'disambiguate_reused_source_session_ids_by_source_position/v1',
+        duplicate_source_session_group_count: duplicateSourceSessionGroups,
+        disambiguated_session_count: disambiguatedSourceSessions.length,
+        disambiguated_sessions: disambiguatedSourceSessions,
+      },
+    } : {}),
     scopes,
   };
   assertNoForbiddenKeys(sessionsArtifact);
   return {
     sessions: sessionsArtifact,
+    queryInputs: {
+      schema: 'hom.canonical-benchmark-query-inputs/v1',
+      benchmark: 'longmemeval',
+      source_dataset_sha256: sourceSha256,
+      question_count: questions.length,
+      questions: questions.map((question) => ({
+        question_id: question.question_id,
+        benchmark: question.benchmark,
+        scope_id: question.scope_id,
+        source_filter: question.source_filter,
+        question: question.question,
+        category: question.category,
+        ...(question.question_date ? { question_date: question.question_date } : {}),
+      })),
+    },
     questions: {
       schema: 'hom.canonical-benchmark-questions/v1',
       benchmark: 'longmemeval',
@@ -317,12 +406,16 @@ function parseArgs(argv) {
     locomo: path.join(DEFAULT_DATA_DIR, 'official-locomo10.json'),
     longmemeval: path.join(DEFAULT_DATA_DIR, 'official-longmemeval-oracle.json'),
     outputDir: DEFAULT_OUTPUT_DIR,
+    includeDiagnosticInputs: false,
+    dropEmptyTurns: false,
   };
   for (let index = 2; index < argv.length; index += 1) {
     const value = argv[index + 1];
     if (argv[index] === '--locomo' && value) { args.locomo = path.resolve(value); index += 1; }
     else if (argv[index] === '--longmemeval' && value) { args.longmemeval = path.resolve(value); index += 1; }
     else if (argv[index] === '--output-dir' && value) { args.outputDir = path.resolve(value); index += 1; }
+    else if (argv[index] === '--include-diagnostic-inputs') args.includeDiagnosticInputs = true;
+    else if (argv[index] === '--drop-empty-turns') args.dropEmptyTurns = true;
     else throw new Error(`unknown_argument:${argv[index]}`);
   }
   return args;
@@ -347,7 +440,13 @@ function writeArtifact(outputDir, name, value) {
   return { file: name, sha256: digest, bytes: Buffer.byteLength(text) };
 }
 
-export function prepareCanonicalCorpus({ locomoFile, longMemEvalFile, outputDir }) {
+export function prepareCanonicalCorpus({
+  locomoFile,
+  longMemEvalFile,
+  outputDir,
+  includeDiagnosticInputs = false,
+  dropEmptyTurns = false,
+}) {
   for (const file of [locomoFile, longMemEvalFile]) {
     if (!fs.existsSync(file) || fs.lstatSync(file).isSymbolicLink()) {
       throw new Error(`source_dataset_invalid:${file}`);
@@ -363,12 +462,20 @@ export function prepareCanonicalCorpus({ locomoFile, longMemEvalFile, outputDir 
   const locomoSha = sha256(locomoBytes);
   const longMemEvalSha = sha256(longMemEvalBytes);
   const locomo = buildLocomoArtifacts(JSON.parse(locomoBytes), locomoSha);
-  const longmemeval = buildLongMemEvalArtifacts(JSON.parse(longMemEvalBytes), longMemEvalSha);
+  const longmemeval = buildLongMemEvalArtifacts(
+    JSON.parse(longMemEvalBytes),
+    longMemEvalSha,
+    { dropEmptyTurns },
+  );
   const outputs = [
     writeArtifact(outputDir, 'locomo-sessions.json', locomo.sessions),
     writeArtifact(outputDir, 'locomo-questions.json', locomo.questions),
     writeArtifact(outputDir, 'longmemeval-sessions.json', longmemeval.sessions),
     writeArtifact(outputDir, 'longmemeval-questions.json', longmemeval.questions),
+    ...(includeDiagnosticInputs ? [
+      writeArtifact(outputDir, 'locomo-query-inputs.json', locomo.queryInputs),
+      writeArtifact(outputDir, 'longmemeval-query-inputs.json', longmemeval.queryInputs),
+    ] : []),
   ];
   const manifest = {
     schema: 'hom.canonical-benchmark-corpus-manifest/v1',
@@ -380,6 +487,7 @@ export function prepareCanonicalCorpus({ locomoFile, longMemEvalFile, outputDir 
     answer_key_boundary: {
       replay_inputs: outputs.filter((entry) => entry.file.endsWith('-sessions.json')).map((entry) => entry.file),
       scorer_inputs: outputs.filter((entry) => entry.file.endsWith('-questions.json')).map((entry) => entry.file),
+      diagnostic_inputs: outputs.filter((entry) => entry.file.endsWith('-query-inputs.json')).map((entry) => entry.file),
       forbidden_session_keys: [...FORBIDDEN_SESSION_KEYS].sort(),
       verified: true,
     },
@@ -394,6 +502,8 @@ async function main() {
     locomoFile: args.locomo,
     longMemEvalFile: args.longmemeval,
     outputDir: args.outputDir,
+    includeDiagnosticInputs: args.includeDiagnosticInputs,
+    dropEmptyTurns: args.dropEmptyTurns,
   });
   console.log(JSON.stringify(result, null, 2));
 }

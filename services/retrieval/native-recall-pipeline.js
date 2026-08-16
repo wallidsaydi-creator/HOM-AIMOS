@@ -16,7 +16,7 @@ import {
   getVerifiedCalibrationSnapshot,
 } from './recall-calibrator.js';
 import { rankByTrust } from '../learning/trust-score.js';
-import { hybridRetrieve } from '../core/concept-graph.js';
+import { conceptPprLookup } from './concept-ppr-native.js';
 import {
   SALIENCE_FREQUENCY_ALADDIN_CONTRACT,
   applySalienceFrequencyAnnotations,
@@ -34,6 +34,7 @@ import { checkContextSufficiency } from '../context/mvs-detector.js';
 import { semanticCache } from '../caching/semantic-cache.js';
 import { shouldEarlyExit, generateEarlyExitMetadata } from './adaptive-early-exit.js';
 import { quimLookup } from './quim-index.js';
+import { extractQueryEntityAnchors as extractEntities } from './query-entity-anchors.js';
 import {
   admitNativeRecallCandidates,
   finalizeNativeRecall,
@@ -53,6 +54,178 @@ import { IDENTIFIER_RECALL_STATUS, lookupIdentifierCandidates } from './identifi
 import { RECALL_SPEED_CONFIG as SPEED_CONFIG } from './recall-runtime-config.js';
 import { sessionKeyLikePattern } from '../shared/session-scope.js';
 import { calibrateEpistemicRecall } from './epistemic-trust-retrieval.js';
+import {
+  MAGMA_NATIVE_CALIBRATION_DEFAULTS,
+  composeMagmaNativeCandidate,
+} from './magma-native-candidate.js';
+import {
+  RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT,
+  composeReconstructedGraphNativeCandidate,
+  composeNativeGraphFamilyChannel,
+} from './reconstructed-graph-native-candidate.js';
+import { fuseNativeRetrievalGears } from './native-retrieval-fusion.js';
+import { systemConfigStore } from '../security/system-config-store.js';
+import {
+  validateMagmaRetrievalCalibration,
+  validateTwinPrimeRetrievalPolicy,
+} from '../security/system-config-ledger.js';
+import { detectCanaries, scanRelayedMemory } from '../security/canary-tracker.js';
+
+export function partitionGraphCanaryDisclosure(memories = []) {
+  const admitted = [];
+  const withheld = [];
+  const tokens = new Set();
+
+  for (const memory of Array.isArray(memories) ? memories : []) {
+    const found = detectCanaries({
+      key: memory?.key ?? null,
+      value: memory?.value ?? null,
+    });
+    if (found.length === 0) {
+      admitted.push(memory);
+      continue;
+    }
+    for (const token of found) tokens.add(token);
+    withheld.push(memory);
+  }
+
+  return Object.freeze({
+    admitted: Object.freeze([...admitted]),
+    withheld: Object.freeze([...withheld]),
+    canary_tokens: Object.freeze([...tokens].sort()),
+  });
+}
+
+export const NATIVE_GEARBOX_EVALUATION_EVIDENCE_SCHEMA =
+  'hom-aimos/native-gearbox-evaluation-evidence/v1';
+
+function snapshotNativeGearboxMemory(memory = {}) {
+  return Object.freeze({
+    ...memory,
+    embedding: Array.isArray(memory?.embedding)
+      ? Object.freeze([...memory.embedding])
+      : memory?.embedding ?? null,
+    graph_links: Object.freeze((Array.isArray(memory?.graph_links) ? memory.graph_links : [])
+      .map((link) => Object.freeze({ ...link }))),
+    provenance_proof: memory?.provenance_proof
+      ? Object.freeze({ ...memory.provenance_proof })
+      : null,
+    canary_admitted: true,
+  });
+}
+
+async function closeNativeRecallSecurityBoundary({
+  boundaryId,
+  boundaryOperation = 'recall_security_closure',
+  sourceAgentId,
+  memories,
+  companyId,
+  subjectAgentId,
+  recallAuthority,
+  epistemicReceipt,
+  epistemicDecisionHash,
+  graphDecision = null,
+}) {
+  if (!['identifier_exact', 'concept_gaama', 'magma', 'reconstructed_graph'].includes(boundaryId)) {
+    throw new Error('recall_security_closure:unsupported_boundary');
+  }
+  const candidates = Array.isArray(memories) ? memories : [];
+  const relay = await scanRelayedMemory(
+    candidates.map((memory) => ({
+      memory_id: memory?.id || memory?.memory_id || null,
+      key: memory?.key || null,
+      value: memory?.value || null,
+    })),
+    recallAuthority.requestReceiptId || epistemicDecisionHash,
+    {
+      sourceAgentId,
+      targetAgentId: subjectAgentId,
+      parentEventId: epistemicReceipt?.event_id || null,
+      authority: recallAuthority.requestAuthority || null,
+    },
+  );
+  const partition = partitionGraphCanaryDisclosure(candidates);
+  const graphSelectedIds = new Set((graphDecision?.selected_memory_ids || []).map((id) => String(id)));
+  const graphAnnotatedCount = candidates.filter((memory) => graphSelectedIds.size > 0
+    ? graphSelectedIds.has(String(memory?.id || memory?.memory_id || ''))
+    : boundaryId === 'magma'
+      ? Number.isFinite(Number(memory?.magma_score))
+        || memory?.native_fusion_gears?.includes('magma')
+      : boundaryId === 'concept_gaama'
+        && (memory?.source === 'concept_graph_ppr' || Number.isFinite(Number(memory?.ppr_score)))
+  ).length;
+  const receipt = await logEvent(
+    companyId,
+    subjectAgentId,
+    boundaryOperation,
+    epistemicDecisionHash,
+    {
+      boundary_id: boundaryId,
+      graph_id: boundaryOperation === 'graph_security_closure' ? boundaryId : null,
+      graph_decision_sha256: graphDecision?.decision_sha256 || null,
+      graph_edge_commitment_sha256: graphDecision?.edge_commitment_sha256 || null,
+      graph_selected_memory_ids: graphDecision?.selected_memory_ids
+        || graphDecision?.traversal_selected_memory_ids
+        || null,
+      candidate_count: candidates.length,
+      graph_annotated_count: graphAnnotatedCount,
+      canary_marker_count: partition.canary_tokens.length,
+      withheld_from_disclosure_count: partition.withheld.length,
+      disclosed_count: partition.admitted.length,
+      canary_stage: 'RELAYED',
+      canary_detection_event_ids: relay.events.map((event) => event.receipt?.event_id).filter(Boolean),
+      aladdin: {
+        canonical_memory_changed: false,
+        retention_changed: false,
+        deletion_performed: false,
+        suppression_performed: false,
+        disposition: partition.withheld.length > 0
+          ? 'retained_quarantine_withheld_from_response_only'
+          : 'retained_clean_disclosure',
+      },
+      saber: {
+        runtime_authority: false,
+        evaluation_status: 'separate_isolated_campaign_required',
+      },
+      reasoning: `${boundaryId} candidates passed signed epistemic selection, explicit Canary relay inspection, and Aladdin full-retention closure before disclosure.`,
+      source_knowledge: 'HOM-AIMOS native recall security closure: Canary traversal, SABER evaluation separation, and Aladdin retention',
+    },
+    epistemicReceipt?.event_id || null,
+    { authority: recallAuthority.requestAuthority || null, returnReceipt: true },
+  );
+
+  return Object.freeze({
+    memories: partition.admitted,
+    decision: Object.freeze({
+      boundary_id: boundaryId,
+      graph_id: boundaryOperation === 'graph_security_closure' ? boundaryId : null,
+      graph_decision_sha256: graphDecision?.decision_sha256 || null,
+      graph_edge_commitment_sha256: graphDecision?.edge_commitment_sha256 || null,
+      candidate_count: candidates.length,
+      graph_annotated_count: graphAnnotatedCount,
+      canary_marker_count: partition.canary_tokens.length,
+      withheld_from_disclosure_count: partition.withheld.length,
+      disclosed_count: partition.admitted.length,
+      canonical_memory_changed: false,
+      retention_changed: false,
+      saber_runtime_authority: false,
+      receipt: Object.freeze({
+        event_id: receipt.event_id,
+        ledger_seq: receipt.ledger_seq,
+        content_hash: receipt.content_hash,
+        mutation_hash: receipt.mutation_hash,
+      }),
+    }),
+  });
+}
+
+async function closeGraphSecurityBoundary(options) {
+  return closeNativeRecallSecurityBoundary({
+    ...options,
+    boundaryId: options.graphId,
+    boundaryOperation: 'graph_security_closure',
+  });
+}
 
 function parseAimosRuntimeFlag(value) {
   if (value == null) return null;
@@ -567,6 +740,14 @@ async function selectAndLedgerEpistemicRecall({
   limit,
   companyId,
   subjectAgentId,
+  twinPrimePolicy = null,
+  twinPrimePolicyMutationHash = null,
+  twinPrimeEligibilityReason = null,
+  queryEmbedding = null,
+  temporalScope = null,
+  signedRequestTimeMs = null,
+  parentEventId = null,
+  requestAuthority = null,
 }) {
   const memoryIds = [...new Set((Array.isArray(memories) ? memories : [])
     .map((memory) => String(memory?.id || memory?.memory_id || ''))
@@ -577,6 +758,7 @@ async function selectAndLedgerEpistemicRecall({
                 current_epistemic_label,
                 current_epistemic_confidence_milli,
                 current_epistemic_event_id::text
+                ${twinPrimePolicy ? ', embedding::text AS embedding' : ''}
            FROM public.aimos_memories
           WHERE company_id = $1
             AND id = ANY($2::uuid[])`,
@@ -600,6 +782,21 @@ async function selectAndLedgerEpistemicRecall({
     query: queryText,
     memories: memoriesWithEpistemicProjection,
     limit,
+    ...(twinPrimePolicy ? {
+      twinPrimeContext: {
+        policy: twinPrimePolicy,
+        policyMutationHash: twinPrimePolicyMutationHash,
+        eligible: twinPrimeEligibilityReason == null,
+        ineligibleReason: twinPrimeEligibilityReason,
+        queryEmbedding,
+        temporalScope,
+        requestTimeMs: signedRequestTimeMs,
+        featuresByMemoryId: new Map(projections.rows.map((row) => [
+          String(row.memory_id),
+          { embedding: row.embedding },
+        ])),
+      },
+    } : {}),
   });
   const receipt = await logEvent(
     companyId,
@@ -610,8 +807,8 @@ async function selectAndLedgerEpistemicRecall({
       reasoning: 'Pre-disclosure epistemic calibration separates authenticated provenance from factual support and prevents redundant query-lure clusters from monopolizing the active evidence set.',
       ...calibrated.decision,
     },
-    null,
-    { returnReceipt: true },
+    parentEventId,
+    { authority: requestAuthority, returnReceipt: true },
   );
   return {
     memories: calibrated.memories,
@@ -623,6 +820,140 @@ async function selectAndLedgerEpistemicRecall({
       mutation_hash: receipt.mutation_hash,
     },
   };
+}
+
+function verifiedTwinPrimePolicy() {
+  const entry = systemConfigStore.readVerifiedConfig('TWIN_PRIME_RETRIEVAL_POLICY');
+  if (!entry) return null;
+  const validated = validateTwinPrimeRetrievalPolicy(entry.value);
+  if (!validated.ok) return null;
+  return Object.freeze({
+    policy: validated.policy,
+    mutationHash: entry.mutation_hash,
+  });
+}
+
+function verifiedMagmaCalibration() {
+  const entry = systemConfigStore.readVerifiedConfig('MAGMA_RETRIEVAL_CALIBRATION');
+  if (!entry) {
+    return Object.freeze({
+      calibration: MAGMA_NATIVE_CALIBRATION_DEFAULTS,
+      mutationHash: null,
+      source: 'immutable_code_default',
+      rejectedSignedCalibrationReason: null,
+    });
+  }
+  const validated = validateMagmaRetrievalCalibration(entry.value);
+  if (!validated.ok) {
+    return Object.freeze({
+      calibration: MAGMA_NATIVE_CALIBRATION_DEFAULTS,
+      mutationHash: null,
+      source: 'immutable_code_default_after_rejected_signed_calibration',
+      rejectedSignedCalibrationReason: validated.reason,
+    });
+  }
+  return Object.freeze({
+    calibration: validated.calibration,
+    mutationHash: entry.mutation_hash,
+    source: 'master_signed_system_config',
+    rejectedSignedCalibrationReason: null,
+  });
+}
+
+const NATIVE_FUSION_SEMANTIC_SHARE = 0.2;
+
+function magmaGearMetadata({ calibrationState, gear, runtimeMs, fusion, failure = null } = {}) {
+  const calibration = calibrationState.calibration;
+  return Object.freeze({
+    architecture_role: 'permanent_native_retrieval_gear',
+    runtime_mode: null,
+    activation_authority: false,
+    candidate_set_authority: false,
+    calibration_source: calibrationState.source,
+    calibration_mutation_hash: calibrationState.mutationHash,
+    rejected_signed_calibration_reason: calibrationState.rejectedSignedCalibrationReason,
+    bounds: Object.freeze({
+      max_depth: calibration.max_depth,
+      max_nodes: calibration.max_nodes,
+      result_limit: calibration.result_limit,
+      beam_width: calibration.beam_width,
+      rrf_k: calibration.rrf_k,
+    }),
+    proof_sha256: calibration.proof_sha256 || null,
+    runner_sha256: calibration.runner_sha256 || null,
+    runtime_ms: runtimeMs,
+    runtime_breakdown_ms: gear?.runtime_breakdown_ms || null,
+    candidate_p95_ceiling_ms: calibration.candidate_p95_ceiling_ms,
+    within_single_call_ceiling: runtimeMs == null ? null : runtimeMs <= calibration.candidate_p95_ceiling_ms,
+    operational_status: failure ? 'degraded' : gear ? 'complete' : 'empty_candidate_set',
+    failure_code: failure,
+    decision: gear?.decision || null,
+    central_fusion_decision: fusion?.decision || null,
+  });
+}
+
+function reconstructedGraphGearMetadata({
+  gear,
+  eligibleCandidateCount = 0,
+  canaryWithheldCount = 0,
+  failure = null,
+} = {}) {
+  return Object.freeze({
+    architecture_role: RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT.architecture_role,
+    runtime_mode: null,
+    activation_authority: false,
+    candidate_set_authority: false,
+    disclosure_authority: false,
+    fixed_corpus_proof_file_sha256:
+      RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT.fixed_corpus_proof_file_sha256,
+    fixed_corpus_summary_sha256:
+      RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT.fixed_corpus_summary_sha256,
+    bounds: Object.freeze({
+      maximum_workspace_states:
+        RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT.maximum_workspace_states,
+      maximum_emitted_ranks:
+        RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT.maximum_emitted_ranks,
+      native_workspace_states:
+        RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT.native_workspace_states,
+      native_emitted_ranks:
+        RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT.native_emitted_ranks,
+      graph_family_outer_channels:
+        RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT.graph_family_outer_channels,
+    }),
+    eligible_candidate_count: eligibleCandidateCount,
+    canary_withheld_before_graph_construction: canaryWithheldCount,
+    runtime_breakdown_ms: gear?.runtime_breakdown_ms || null,
+    operational_status: failure
+      ? 'degraded'
+      : gear
+        ? 'complete'
+        : 'no_canary_admitted_candidates',
+    failure_code: failure,
+    decision: gear?.decision || null,
+  });
+}
+
+function graphFamilyMetadata({ family, runtimeMs = null } = {}) {
+  return Object.freeze({
+    architecture_role: 'single_permanent_native_graph_family_channel',
+    runtime_mode: null,
+    activation_authority: false,
+    candidate_set_authority: false,
+    disclosure_authority: false,
+    outer_channel_id: 'magma',
+    outer_channel_count: family?.decision?.outer_channel_count || 0,
+    subgear_count: family?.decision?.subgear_count || 0,
+    runtime_ms: runtimeMs,
+    decision: family?.decision || null,
+  });
+}
+
+export function epistemicReceiptDecisionHash(decision) {
+  const decisionSha256 = String(decision?.decision_sha256 || '').trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(decisionSha256)) {
+    throw new Error('native_recall_epistemic_decision_hash_invalid');
+  }
+  return decisionSha256;
 }
 
 function projectMemoryForRecallRerank(memory = {}, calibration = {}, options = {}) {
@@ -884,47 +1215,6 @@ function getMaxDataClassForClearance(clearanceLevel) {
   return ['public'];
 }
 
-// ─── HIPPORAG: Lightweight entity extraction (no NLP dependency) ──────────────
-// Extracts proper nouns, dates, monetary amounts, agent names, and known patterns.
-function extractEntities(text) {
-  const entities = [];
-  const seen = new Set();
-  const add = (name, type) => {
-    const n = name.trim().toLowerCase();
-    if (n.length < 2 || n.length > 80 || seen.has(`${type}:${n}`)) return;
-    seen.add(`${type}:${n}`);
-    entities.push({ name: n, type });
-  };
-
-  const s = String(text || '');
-
-  // Proper nouns: sequences of capitalized words (2+ chars)
-  for (const m of s.matchAll(/\b([A-Z][a-z]{1,20}(?:\s+[A-Z][a-z]{1,20}){0,3})\b/g)) {
-    const phrase = m[1];
-    // Skip common English words that start sentences
-    if (/^(The|This|That|These|Those|When|What|Where|Which|Here|There|After|Before|During|About|Also|Just|Some|Each|Every|Most|Many|For)$/.test(phrase.split(/\s+/)[0])) continue;
-    add(phrase, 'proper_noun');
-  }
-
-  // Dates: ISO, relative, named months
-  for (const m of s.matchAll(/\b(\d{4}-\d{2}-\d{2})\b/g)) add(m[1], 'date');
-  for (const m of s.matchAll(/\b((?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2}(?:,?\s*\d{4})?)\b/gi)) add(m[1], 'date');
-
-  // Monetary amounts
-  for (const m of s.matchAll(/\$[\d,]+(?:\.\d{2})?/g)) add(m[0], 'amount');
-  for (const m of s.matchAll(/€[\d,]+(?:\.\d{2})?/g)) add(m[0], 'amount');
-
-  // URLs
-  for (const m of s.matchAll(/(https?:\/\/[^\s"'<>]+)/g)) add(m[1].slice(0, 80), 'url');
-
-  // Ticker-like symbols
-  for (const m of s.matchAll(/\b([A-Z]{2,5})\b/g)) {
-    if (/^(THE|AND|FOR|BUT|NOT|ALL|ARE|WAS|HAS|HAD|GET|SET|PUT|RUN|API|SQL|URL|CSS|DNS|SSH|LLM|NLP|RAG|AAR)$/.test(m[1])) continue;
-    add(m[1], 'symbol');
-  }
-
-  return entities.slice(0, 20); // cap to prevent bloat
-}
 let freshnessSchemaReady = false;
 let freshnessSchemaPromise = null;
 const REQUIRED_FRESHNESS_COLUMNS = [
@@ -1139,6 +1429,7 @@ export async function executeNativeRecall(req, recallAuthority) {
     supported: true,
     temporal: null,
   };
+  let nativeGearboxEvaluationEvidence = null;
 
   // ─── Recall Pipeline Tracer — per-stage timing (P0 #7) ─────────────────────
   const _inst = SPEED_CONFIG.instrumentation.enabled;
@@ -1230,6 +1521,18 @@ export async function executeNativeRecall(req, recallAuthority) {
       requestedLimit: maxRows,
     });
     const routeQueryUnderstanding = buildRecallQueryUnderstanding(searchQuery, effectiveRecallRuntimeBudget);
+    const twinPrimeConfig = verifiedTwinPrimePolicy();
+    const magmaCalibrationState = verifiedMagmaCalibration();
+    const signedRequestSeconds = Number(recallAuthority.requestAuthority?.signedTs);
+    const twinPrimeSignedRequestTimeMs = Number.isSafeInteger(signedRequestSeconds)
+      ? signedRequestSeconds * 1000
+      : null;
+    const twinPrimeTemporalScope = twinPrimeConfig && twinPrimeSignedRequestTimeMs
+      ? buildRecallQueryUnderstanding(searchQuery, {
+          ...effectiveRecallRuntimeBudget,
+          reference_time: new Date(twinPrimeSignedRequestTimeMs),
+        }).temporal_scope
+      : null;
     const recallBreadthPolicy = buildRecallRouteBreadthPolicy({
       queryUnderstanding: routeQueryUnderstanding,
       maxRows,
@@ -1239,6 +1542,10 @@ export async function executeNativeRecall(req, recallAuthority) {
     });
     const earlyExitFlag = earlyExitFlagState({ body: recallAuthority.command });
     recallBreadthPolicy.early_exit_flag = earlyExitFlag;
+    if (twinPrimeConfig) {
+      recallBreadthPolicy.early_exit_suppressed = 'signed_twin_prime_policy_requires_full_native_path';
+      recallBreadthPolicy.semantic_cache_suppressed = 'signed_twin_prime_policy_requires_policy-bound_selection';
+    }
     const effectiveMaxRows = recallBreadthPolicy.response_limit;
     const candidateOpeningLimit = recallBreadthPolicy.candidate_opening_limit;
     debugRecallPoint('policy_ready', {
@@ -1251,6 +1558,9 @@ export async function executeNativeRecall(req, recallAuthority) {
       temporal_limit: recallBreadthPolicy.temporal_limit,
       value_rescue_limit: recallBreadthPolicy.value_rescue_limit,
       graph_hops: recallBreadthPolicy.graph_hops,
+      twin_prime_policy: twinPrimeConfig?.policy?.arm || null,
+      magma_architecture_role: 'permanent_native_retrieval_gear',
+      magma_calibration_source: magmaCalibrationState.source,
     });
 
     debugRecallPoint('identifier_lookup_start');
@@ -1267,6 +1577,11 @@ export async function executeNativeRecall(req, recallAuthority) {
       status: identifierLookup.status,
       memories: identifierLookup.memories?.length || 0,
     });
+    // An explicit memory_id is a non-substitutable identifier authority, not a
+    // semantic-ranking request. MAGMA may observe the signed policy boundary,
+    // but it must not replace or omit the identified row. The row still passes
+    // native admission, epistemic selection, Canary inspection, Aladdin
+    // retention closure, and final signed-receipt construction below.
     if (identifierLookup.status === IDENTIFIER_RECALL_STATUS.EXACT_MATCH) {
       const identifierAdmission = await admitNativeRecallCandidates(identifierLookup.memories, recallAuthority);
       applyCalibrationSnapshot(identifierAdmission.memories, calibrationSnapshot);
@@ -1279,15 +1594,32 @@ export async function executeNativeRecall(req, recallAuthority) {
         limit: effectiveMaxRows,
         companyId: company,
         subjectAgentId: agent,
+        twinPrimePolicy: twinPrimeConfig?.policy,
+        twinPrimePolicyMutationHash: twinPrimeConfig?.mutationHash,
+        twinPrimeEligibilityReason: twinPrimeConfig ? 'identifier_exact_lane' : null,
+        temporalScope: twinPrimeTemporalScope,
+        signedRequestTimeMs: twinPrimeSignedRequestTimeMs,
+        parentEventId: recallAuthority.requestAuthority?.requestAdmissionEventId || null,
+        requestAuthority: recallAuthority.requestAuthority || null,
       });
       await logEvent(company, agent, 'recall', searchQuery, {
         reasoning: `Exact identifier recall for '${searchQuery}' returned ${identifierLookup.memories.length} memory record(s).`,
         source_knowledge: 'identifier-recall.js — Generative Retrieval identifier ambiguity guard',
       });
+      const identifierSecurity = await closeNativeRecallSecurityBoundary({
+        boundaryId: 'identifier_exact',
+        sourceAgentId: 'identifier-recall',
+        memories: identifierEpistemic.memories,
+        companyId: company,
+        subjectAgentId: agent,
+        recallAuthority,
+        epistemicReceipt: identifierEpistemic.receipt,
+        epistemicDecisionHash: identifierEpistemic.decision.decision_sha256,
+      });
       const identifierBody = {
           success: true,
-          memories: identifierEpistemic.memories,
-          count: identifierEpistemic.memories.length,
+          memories: identifierSecurity.memories,
+          count: identifierSecurity.memories.length,
           cache_hit: false,
           identifier_recall: identifierLookup.diagnostics,
           recall_meta: {
@@ -1300,7 +1632,16 @@ export async function executeNativeRecall(req, recallAuthority) {
               candidate_count: identifierEpistemic.decision.candidate_count,
               states: identifierEpistemic.decision.states,
               abstention_required: identifierEpistemic.decision.abstention_required,
+              ...(identifierEpistemic.decision.twin_prime ? { twin_prime: identifierEpistemic.decision.twin_prime } : {}),
               decision_receipt: identifierEpistemic.receipt,
+            },
+            recall_security_closure: identifierSecurity.decision,
+            magma_retrieval: {
+              ...magmaGearMetadata({ calibrationState: magmaCalibrationState, runtimeMs: 0 }),
+              applicability: 'not_applicable_explicit_identifier',
+              authority_ruling: 'exact_identifier_non_substitutable',
+              substitution_authorized: false,
+              graph_traversal_executed: false,
             },
             early_exit: false,
             early_exit_flag: earlyExitFlag,
@@ -1320,6 +1661,7 @@ export async function executeNativeRecall(req, recallAuthority) {
       calibratedIdentifierBody.recall_receipt = await finalizeNativeRecall({
         memories: calibratedIdentifierBody.memories,
         authority: recallAuthority,
+        epistemicDecisionHash: epistemicReceiptDecisionHash(identifierEpistemic.decision),
       });
       return { status: 200, body: calibratedIdentifierBody };
     }
@@ -1349,6 +1691,13 @@ export async function executeNativeRecall(req, recallAuthority) {
           limit: effectiveMaxRows,
           companyId: company,
           subjectAgentId: agent,
+          twinPrimePolicy: twinPrimeConfig?.policy,
+          twinPrimePolicyMutationHash: twinPrimeConfig?.mutationHash,
+          twinPrimeEligibilityReason: twinPrimeConfig ? 'post_compaction_handoff_lane' : null,
+          temporalScope: twinPrimeTemporalScope,
+          signedRequestTimeMs: twinPrimeSignedRequestTimeMs,
+          parentEventId: recallAuthority.requestAuthority?.requestAdmissionEventId || null,
+          requestAuthority: recallAuthority.requestAuthority || null,
         });
         await logEvent(company, agent, 'recall', searchQuery, {
           lane: 'post_compaction_delivery',
@@ -1403,6 +1752,7 @@ export async function executeNativeRecall(req, recallAuthority) {
                 candidate_count: handoffEpistemic.decision.candidate_count,
                 states: handoffEpistemic.decision.states,
                 abstention_required: handoffEpistemic.decision.abstention_required,
+                ...(handoffEpistemic.decision.twin_prime ? { twin_prime: handoffEpistemic.decision.twin_prime } : {}),
                 decision_receipt: handoffEpistemic.receipt,
               },
             },
@@ -1417,6 +1767,7 @@ export async function executeNativeRecall(req, recallAuthority) {
         calibratedHandoffBody.recall_receipt = await finalizeNativeRecall({
           memories: calibratedHandoffBody.memories,
           authority: recallAuthority,
+          epistemicDecisionHash: epistemicReceiptDecisionHash(handoffEpistemic.decision),
         });
         return { status: 200, body: calibratedHandoffBody };
       }
@@ -1437,7 +1788,10 @@ export async function executeNativeRecall(req, recallAuthority) {
     const hasRecallFilter = Boolean(typeFilter || srcFilter || session_id);
     const semanticCacheRequest = parseAimosRuntimeFlag(recallAuthority.command.cache ?? recallAuthority.command.semantic_cache ?? recallAuthority.command.semanticCache);
     const requestDisablesSemanticCache = semanticCacheRequest === false;
-    const allowSemanticCache = !requestDisablesSemanticCache && !hasRecallFilter && !explicitFullDetailRecall;
+    const allowSemanticCache = !twinPrimeConfig
+      && !requestDisablesSemanticCache
+      && !hasRecallFilter
+      && !explicitFullDetailRecall;
     if (SPEED_CONFIG.cache.enabled && allowSemanticCache) {
       const cacheContext = {
         companyId: company,
@@ -1455,9 +1809,17 @@ export async function executeNativeRecall(req, recallAuthority) {
           limit: effectiveMaxRows,
           companyId: company,
           subjectAgentId: agent,
+          twinPrimePolicy: twinPrimeConfig?.policy,
+          twinPrimePolicyMutationHash: twinPrimeConfig?.mutationHash,
+          twinPrimeEligibilityReason: twinPrimeConfig ? 'semantic_cache_policy_identity_unbound' : null,
+          queryEmbedding,
+          temporalScope: twinPrimeTemporalScope,
+          signedRequestTimeMs: twinPrimeSignedRequestTimeMs,
+          parentEventId: recallAuthority.requestAuthority?.requestAdmissionEventId || null,
+          requestAuthority: recallAuthority.requestAuthority || null,
         });
         await logEvent(company, agent, 'cache_hit', searchQuery, {
-          reasoning: `Cache hit for query '${searchQuery.slice(0,50)}...' — skipping full 16-stage pipeline per semantic similarity threshold ${SPEED_CONFIG.cache.similarityThreshold}`,
+          reasoning: `Cache hit for query '${searchQuery.slice(0,50)}...' — skipping full 21-stage native recall per semantic similarity threshold ${SPEED_CONFIG.cache.similarityThreshold}`,
           source_knowledge: 'Cache-Augmented Generation (Gao et al., 2024) — Speed.md Appendix A'
         });
         const calibratedCachedBody = calibrateRecallRouteBody({
@@ -1473,6 +1835,7 @@ export async function executeNativeRecall(req, recallAuthority) {
                   candidate_count: cachedEpistemic.decision.candidate_count,
                   states: cachedEpistemic.decision.states,
                   abstention_required: cachedEpistemic.decision.abstention_required,
+                  ...(cachedEpistemic.decision.twin_prime ? { twin_prime: cachedEpistemic.decision.twin_prime } : {}),
                   decision_receipt: cachedEpistemic.receipt,
                 },
               },
@@ -1485,6 +1848,7 @@ export async function executeNativeRecall(req, recallAuthority) {
         calibratedCachedBody.recall_receipt = await finalizeNativeRecall({
           memories: calibratedCachedBody.memories,
           authority: recallAuthority,
+          epistemicDecisionHash: epistemicReceiptDecisionHash(cachedEpistemic.decision),
         });
         return { status: 200, body: calibratedCachedBody };
       }
@@ -1625,7 +1989,7 @@ export async function executeNativeRecall(req, recallAuthority) {
        )
        SELECT id, key, value, scope, memory_type, clearance_level, created_at, credit_score, memory_tier, decay_weight, data_class, source,
               access_count, last_accessed_at, last_verified_at, verified_by, verification_basis, freshness_state,
-              retrieval_weight,
+              embedding::text AS embedding, retrieval_weight,
               raw_distance,
               COALESCE(ts_rank(search_vector, to_tsquery('english', $${lexicalTsParamIdx})), 0) as bm25_rank,
               COALESCE(similarity(key, $${trgmParamIdx}), 0) as key_similarity,
@@ -1663,15 +2027,13 @@ export async function executeNativeRecall(req, recallAuthority) {
     const memories = [];
     const seenIds = new Set();
 
-    // ─── QuIM-RAG: Inverted Question Matching (Complementary retrieval) ──────
-    // Source: QuIM-RAG (2026) — Inverted Question Matching for Enhanced QA
-    // Retrieves chunks by matching query to pre-generated hypothetical questions
-    // Default OFF — enable via AIMOS_QUIM_ENABLED=true
-    if (SPEED_CONFIG.quim.enabled) {
-      markStage('quim_lookup');
-      try {
-        const quimResults = await quimLookup(searchQuery, company, Math.min(candidateOpeningLimit, 10));
-        if (quimResults.length > 0) {
+    // ─── QuIM-RAG: permanent signed inverted-question gear ──────────────────
+    // The exact immutable index build is selected by QUIM_RETRIEVAL_POLICY.
+    // There is no boolean, ENV, shadow, or enforcement mode.
+    markStage('quim_lookup');
+    try {
+      const quimResults = await quimLookup(searchQuery, company, Math.min(candidateOpeningLimit, 10));
+      if (quimResults.length > 0) {
           // Merge QuIM results with existing memories (deduplicate by ID)
           for (const qr of quimResults) {
             if (!seenIds.has(qr.id)) {
@@ -1715,11 +2077,10 @@ export async function executeNativeRecall(req, recallAuthority) {
               }
             }
           }
-        }
-      } catch (_quimErr) {
-        console.warn('[recall] quim_lookup error (non-fatal):', _quimErr.message);
-        if (_inst) skipStage('quim_lookup', 'error');
       }
+    } catch (_quimErr) {
+      console.warn('[recall] quim_lookup error (non-fatal):', _quimErr.message);
+      if (_inst) skipStage('quim_lookup', 'error');
     }
     debugRecallPoint('quim_done', { memories: memories.length, seen_ids: seenIds.size });
 
@@ -1809,9 +2170,13 @@ export async function executeNativeRecall(req, recallAuthority) {
         verified_by: row.verified_by || null,
         verification_basis: row.verification_basis || null,
         freshness_state: row.freshness_state || null,
+        embedding: row.embedding || null,
         retrieval_weight: Math.max(0.1, Math.min(3, Number(row.retrieval_weight || 1))),
         quality: Math.log(Math.max(0.1, Math.min(3, Number(row.retrieval_weight || 1)))),
         raw_distance: Number(row.raw_distance),
+        bm25_rank: Number(row.bm25_rank || 0),
+        key_similarity: Number(row.key_similarity || 0),
+        hybrid_distance: Number(row.distance),
         graph_links: []
       };
       memories.push(mem);
@@ -2389,6 +2754,145 @@ export async function executeNativeRecall(req, recallAuthority) {
     const mainAdmission = await admitNativeRecallCandidates(memories, recallAuthority);
     memories.length = 0;
     memories.push(...mainAdmission.memories);
+    const magmaBaselineCandidateIds = Object.freeze(memories.map((memory) => String(memory.id)));
+    let magmaCandidate = null;
+    let magmaCandidateRuntimeMs = null;
+    let magmaCandidateFailure = null;
+    let reconstructedGraphCandidate = null;
+    let reconstructedGraphCandidateFailure = null;
+    let reconstructedGraphEligibleCandidateCount = 0;
+    let reconstructedGraphCanaryWithheldCount = 0;
+    let graphFamilyCandidate = null;
+    let graphFamilyRuntimeMs = null;
+    let nativeRetrievalFusion = null;
+    const temporalFusionIntent = isChronological || [
+      'temporal_delta', 'temporal_order', 'timeline', 'session_recall', 'session_count',
+    ].includes(routeQueryUnderstanding.intent);
+
+    // MAGMA is a permanent native retrieval gear. It receives only admitted
+    // candidates, contributes a bounded rank channel plus admitted graph
+    // discoveries, and never owns the candidate set or disclosure. A graph
+    // read failure is explicit degraded operation; it is not an off mode.
+    markStage('magma_native_gear');
+    if (memories.length > 0) {
+      try {
+        const magmaStartedAt = performance.now();
+        magmaCandidate = await composeMagmaNativeCandidate({
+          recallAuthority,
+          admittedMemories: memories,
+          queryEmbedding,
+          queryText: searchQuery,
+          limit: magmaCalibrationState.calibration.result_limit,
+          maxDepth: magmaCalibrationState.calibration.max_depth,
+          maxNodes: magmaCalibrationState.calibration.max_nodes,
+          beamWidth: magmaCalibrationState.calibration.beam_width,
+        });
+        magmaCandidateRuntimeMs = Number((performance.now() - magmaStartedAt).toFixed(3));
+      } catch (error) {
+        magmaCandidateFailure = String(error?.message || 'magma_native_gear_failure').slice(0, 240);
+        await logEvent(company, agent, 'native_retrieval_gear_failure', searchQuery, {
+          gear: 'magma',
+          calibration_mutation_hash: magmaCalibrationState.mutationHash,
+          error_code: magmaCandidateFailure,
+          candidate_set_changed: false,
+          canonical_memory_changed: false,
+          disclosure_changed: false,
+        }, null, { authority: recallAuthority.requestAuthority || null });
+      }
+    }
+
+    graphFamilyCandidate = composeNativeGraphFamilyChannel({
+      magmaGear: magmaCandidate,
+      limit: 50,
+    });
+    const graphFamilyBaselineFusion = fuseNativeRetrievalGears({
+      admittedMemories: memories,
+      magmaGear: graphFamilyCandidate,
+      temporalBias: temporalFusionIntent,
+      rrfK: magmaCalibrationState.calibration.rrf_k,
+    });
+
+    // Reconstructed Graph G2 is a permanent non-owning subgear inside the
+    // single graph-family channel. Its bounded transient workspace is built
+    // from the already admitted baseline-fusion population after a Canary
+    // preconstruction partition. Marked evidence remains retained in the
+    // native population and is withheld only from graph construction and the
+    // later response boundary; no candidate is deleted or suppressed.
+    markStage('reconstructed_graph_native_subgear');
+    const reconstructedGraphCanaryPartition = partitionGraphCanaryDisclosure(
+      graphFamilyBaselineFusion.memories,
+    );
+    reconstructedGraphEligibleCandidateCount = reconstructedGraphCanaryPartition.admitted.length;
+    reconstructedGraphCanaryWithheldCount = reconstructedGraphCanaryPartition.withheld.length;
+    if (reconstructedGraphEligibleCandidateCount > 0) {
+      try {
+        reconstructedGraphCandidate = composeReconstructedGraphNativeCandidate({
+          admittedMemories: reconstructedGraphCanaryPartition.admitted
+            .map((memory) => ({ ...memory, canary_admitted: true })),
+          queryText: searchQuery,
+        });
+      } catch (error) {
+        reconstructedGraphCandidateFailure = String(
+          error?.message || 'reconstructed_graph_native_gear_failure',
+        ).slice(0, 240);
+        await logEvent(company, agent, 'native_retrieval_gear_failure', searchQuery, {
+          gear: 'reconstructed_graph',
+          fixed_corpus_proof_file_sha256:
+            RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT.fixed_corpus_proof_file_sha256,
+          error_code: reconstructedGraphCandidateFailure,
+          candidate_set_changed: false,
+          canonical_memory_changed: false,
+          disclosure_changed: false,
+        }, null, { authority: recallAuthority.requestAuthority || null });
+      }
+    }
+
+    const graphFamilyStartedAt = performance.now();
+    graphFamilyCandidate = composeNativeGraphFamilyChannel({
+      magmaGear: magmaCandidate,
+      reconstructedGraphGear: reconstructedGraphCandidate,
+      limit: 50,
+    });
+    graphFamilyRuntimeMs = Number((performance.now() - graphFamilyStartedAt).toFixed(3));
+    nativeRetrievalFusion = fuseNativeRetrievalGears({
+      admittedMemories: memories,
+      magmaGear: graphFamilyCandidate,
+      temporalBias: temporalFusionIntent,
+      rrfK: magmaCalibrationState.calibration.rrf_k,
+    });
+    memories.length = 0;
+    memories.push(...nativeRetrievalFusion.memories.map((memory) => ({ ...memory })));
+
+    // Internal-only evidence for source-bound marginal-gear experiments. The
+    // route and MCP owners serialize result.body only, so this bundle never
+    // crosses a transport boundary. It captures the exact post-PPR admitted
+    // population and all incumbent gear outputs before confidence or
+    // epistemic selection, allowing a candidate graph subgear to be evaluated
+    // without changing canonical recall behavior.
+    const evaluationCanaryPartition = partitionGraphCanaryDisclosure(memories);
+    nativeGearboxEvaluationEvidence = Object.freeze({
+      schema: NATIVE_GEARBOX_EVALUATION_EVIDENCE_SCHEMA,
+      query_text: searchQuery,
+      query_embedding: Object.freeze(Array.from(queryEmbedding, Number)),
+      admitted_memories: Object.freeze(
+        evaluationCanaryPartition.admitted.map(snapshotNativeGearboxMemory),
+      ),
+      canary_withheld_memory_ids: Object.freeze(
+        evaluationCanaryPartition.withheld
+          .map((memory) => String(memory?.id || memory?.memory_id || '').toLowerCase())
+          .filter(Boolean)
+          .sort(),
+      ),
+      temporal_bias: temporalFusionIntent,
+      rrf_k: magmaCalibrationState.calibration.rrf_k,
+      magma_gear: magmaCandidate,
+      reconstructed_graph_gear: reconstructedGraphCandidate,
+      graph_family_gear: graphFamilyCandidate,
+      baseline_fusion: nativeRetrievalFusion,
+      transport_exposed: false,
+      canonical_memory_mutated: false,
+      retention_changed: false,
+    });
     topRerank = memories[0]?.rerank_score || 0;
     avgRerank = memories.length
       ? memories.reduce((sum, memory) => sum + Number(memory.rerank_score || 0), 0) / memories.length
@@ -2443,10 +2947,18 @@ export async function executeNativeRecall(req, recallAuthority) {
     }
     if (earlyExitFlag.enabled
       && memories.length > 0
+      && !twinPrimeConfig
       && !explicitFullDetailRecall
       && recallBreadthPolicy.profile !== 'exact_detail') {
       applyCalibrationSnapshot(memories, calibrationSnapshot);
-      const earlyTopScores = memories.slice(0, 5).map(m => m.rerank_score || 0);
+      const earlyTopScores = memories.slice(0, 5).map((memory) => {
+        const lexical = Number(memory.rerank_score || 0);
+        const fusion = Number.isFinite(Number(memory.native_fusion_score))
+          ? Number(memory.native_fusion_score)
+          : lexical;
+        return (lexical * (1 - NATIVE_FUSION_SEMANTIC_SHARE))
+          + (fusion * NATIVE_FUSION_SEMANTIC_SHARE);
+      });
       const earlyMvs = await checkContextSufficiency(session_id || agent || company).catch(() => ({ mvs: 0.5 }));
       if (shouldEarlyExit(earlyTopScores, earlyMvs.mvs, { user_trust_level: 'standard' })) {
         const earlyMeta = generateEarlyExitMetadata({
@@ -2508,17 +3020,77 @@ export async function executeNativeRecall(req, recallAuthority) {
           limit: effectiveMaxRows,
           companyId: company,
           subjectAgentId: agent,
+          twinPrimePolicy: twinPrimeConfig?.policy,
+          twinPrimePolicyMutationHash: twinPrimeConfig?.mutationHash,
+          twinPrimeEligibilityReason: twinPrimeConfig ? 'adaptive_early_exit_policy_identity_unbound' : null,
+          queryEmbedding,
+          temporalScope: twinPrimeTemporalScope,
+          signedRequestTimeMs: twinPrimeSignedRequestTimeMs,
+          parentEventId: recallAuthority.requestAuthority?.requestAdmissionEventId || null,
+          requestAuthority: recallAuthority.requestAuthority || null,
         });
-        const earlyDisclosureMemories = earlyEpistemic.memories;
+        const earlyMagmaSecurity = magmaCandidate
+          ? await closeGraphSecurityBoundary({
+              graphId: 'magma',
+              sourceAgentId: 'magma',
+              memories: earlyEpistemic.memories,
+              companyId: company,
+              subjectAgentId: agent,
+              recallAuthority,
+              epistemicReceipt: earlyEpistemic.receipt,
+              epistemicDecisionHash: earlyEpistemic.decision.decision_sha256,
+              graphDecision: magmaCandidate.decision,
+            })
+          : Object.freeze({ memories: earlyEpistemic.memories, decision: null });
+        const earlyReconstructedGraphSecurity = reconstructedGraphCandidate
+          ? await closeGraphSecurityBoundary({
+              graphId: 'reconstructed_graph',
+              sourceAgentId: 'reconstructed-graph',
+              memories: earlyMagmaSecurity.memories,
+              companyId: company,
+              subjectAgentId: agent,
+              recallAuthority,
+              epistemicReceipt: earlyEpistemic.receipt,
+              epistemicDecisionHash: earlyEpistemic.decision.decision_sha256,
+              graphDecision: reconstructedGraphCandidate.decision,
+            })
+          : Object.freeze({ memories: earlyMagmaSecurity.memories, decision: null });
+        const earlyDisclosureMemories = earlyReconstructedGraphSecurity.memories;
         earlyRecallMeta.epistemic_retrieval = {
           version: earlyEpistemic.decision.version,
           decision_sha256: earlyEpistemic.decision.decision_sha256,
           candidate_count: earlyEpistemic.decision.candidate_count,
           states: earlyEpistemic.decision.states,
           abstention_required: earlyEpistemic.decision.abstention_required,
+          ...(earlyEpistemic.decision.twin_prime ? { twin_prime: earlyEpistemic.decision.twin_prime } : {}),
           decision_receipt: earlyEpistemic.receipt,
         };
         earlyRecallMeta.total_results = earlyDisclosureMemories.length;
+        earlyRecallMeta.native_retrieval_fusion = nativeRetrievalFusion.decision;
+        earlyRecallMeta.magma_retrieval = magmaGearMetadata({
+          calibrationState: magmaCalibrationState,
+          gear: magmaCandidate,
+          runtimeMs: magmaCandidateRuntimeMs,
+          fusion: nativeRetrievalFusion,
+          failure: magmaCandidateFailure,
+        });
+        earlyRecallMeta.graph_family_retrieval = graphFamilyMetadata({
+          family: graphFamilyCandidate,
+          runtimeMs: graphFamilyRuntimeMs,
+        });
+        earlyRecallMeta.reconstructed_graph_retrieval = reconstructedGraphGearMetadata({
+          gear: reconstructedGraphCandidate,
+          eligibleCandidateCount: reconstructedGraphEligibleCandidateCount,
+          canaryWithheldCount: reconstructedGraphCanaryWithheldCount,
+          failure: reconstructedGraphCandidateFailure,
+        });
+        if (earlyMagmaSecurity.decision) {
+          earlyRecallMeta.magma_security_closure = earlyMagmaSecurity.decision;
+        }
+        if (earlyReconstructedGraphSecurity.decision) {
+          earlyRecallMeta.reconstructed_graph_security_closure =
+            earlyReconstructedGraphSecurity.decision;
+        }
         earlyRecallMeta.response_limit_enforcement = {
           requested_limit: effectiveMaxRows,
           candidate_count: memories.length,
@@ -2542,6 +3114,7 @@ export async function executeNativeRecall(req, recallAuthority) {
         earlyResponse.recall_receipt = await finalizeNativeRecall({
           memories: earlyResponse.memories,
           authority: recallAuthority,
+          epistemicDecisionHash: epistemicReceiptDecisionHash(earlyEpistemic.decision),
         });
         return { status: 200, body: earlyResponse };
       }
@@ -2630,7 +3203,7 @@ export async function executeNativeRecall(req, recallAuthority) {
     try {
       if (searchQuery && searchQuery.trim()) {
         const pprResults = hops > 0
-          ? await hybridRetrieve(searchQuery, company, Math.min(candidateOpeningLimit, 10))
+          ? await conceptPprLookup(searchQuery, company, Math.min(candidateOpeningLimit, 10))
           : [];
         const pprOnlyIds = []; // IDs discovered ONLY by PPR (not in vector/BM25 results)
 
@@ -2708,6 +3281,20 @@ export async function executeNativeRecall(req, recallAuthority) {
     const postGraphAdmission = await admitNativeRecallCandidates(memories, recallAuthority);
     memories.length = 0;
     memories.push(...postGraphAdmission.memories);
+
+    // Recompose the central gearbox after concept-PPR has contributed its own
+    // admitted channel. The graph family is not rerun: the same bounded MAGMA
+    // and G2 evidence is fused with the enlarged admitted set, keeping one
+    // execution per subgear and exactly one outer graph-family channel while
+    // preserving candidate monotonicity.
+    nativeRetrievalFusion = fuseNativeRetrievalGears({
+      admittedMemories: memories,
+      magmaGear: graphFamilyCandidate,
+      temporalBias: temporalFusionIntent,
+      rrfK: magmaCalibrationState.calibration.rrf_k,
+    });
+    memories.length = 0;
+    memories.push(...nativeRetrievalFusion.memories.map((memory) => ({ ...memory })));
 
     // ─── WIRE: recall-calibrator — one signed Sortify Belief snapshot ────────
     markStage('recall_calibration');
@@ -2823,6 +3410,15 @@ export async function executeNativeRecall(req, recallAuthority) {
       const retrievalWeight = Math.max(0.1, Math.min(3, Number(mem.retrieval_weight || 1)));
       const qualityLog = Math.log(retrievalWeight);
       const outcomeSignal = (Math.tanh(qualityLog) + 1) / 2;
+      const nativeFusionSignal = Number.isFinite(Number(mem.native_fusion_score))
+        ? Number(mem.native_fusion_score)
+        : semanticSignal;
+      // Native adaptation: retain the existing 45% semantic allocation, but
+      // assign a bounded 20% of that allocation to the central multi-gear RRF.
+      // Thus all retrieval gears together contribute at most 9 percentage
+      // points and no single gear can dominate the final confidence score.
+      const retrievalSignal = (semanticSignal * (1 - NATIVE_FUSION_SEMANTIC_SHARE))
+        + (nativeFusionSignal * NATIVE_FUSION_SEMANTIC_SHARE);
       mem.retrieval_weight = retrievalWeight;
       mem.quality = Number(qualityLog.toFixed(6));
 
@@ -2830,7 +3426,10 @@ export async function executeNativeRecall(req, recallAuthority) {
       // Age is deliberately absent. Outcome quality is the signed,
       // evidence-driven reference-point signal; type authority is structural.
       const components = {
-        semantic: Number(semanticSignal.toFixed(3)),
+        semantic: Number(retrievalSignal.toFixed(3)),
+        semantic_pre_fusion: Number(semanticSignal.toFixed(3)),
+        native_retrieval_fusion: Number(nativeFusionSignal.toFixed(3)),
+        native_fusion_semantic_share: NATIVE_FUSION_SEMANTIC_SHARE,
         keyword: Number(rerank.toFixed(3)),
         outcome_quality: Number(outcomeSignal.toFixed(3)),
         quality_log: mem.quality,
@@ -2844,7 +3443,7 @@ export async function executeNativeRecall(req, recallAuthority) {
 
       const confidence = Math.max(
         0,
-        Math.min(1, (semanticSignal * 0.45) + (creditNorm * 0.25) + (rerank * 0.10) + (outcomeSignal * 0.08) + (typeAuthority * 0.12))
+        Math.min(1, (retrievalSignal * 0.45) + (creditNorm * 0.25) + (rerank * 0.10) + (outcomeSignal * 0.08) + (typeAuthority * 0.12))
       );
       mem.recall_confidence = Number(confidence.toFixed(3));
       mem.confidence = { percent: Number((confidence * 100).toFixed(1)), components };
@@ -2896,8 +3495,53 @@ export async function executeNativeRecall(req, recallAuthority) {
       limit: effectiveMaxRows,
       companyId: company,
       subjectAgentId: agent,
+      twinPrimePolicy: twinPrimeConfig?.policy,
+      twinPrimePolicyMutationHash: twinPrimeConfig?.mutationHash,
+      queryEmbedding,
+      temporalScope: twinPrimeTemporalScope,
+      signedRequestTimeMs: twinPrimeSignedRequestTimeMs,
+      parentEventId: recallAuthority.requestAuthority?.requestAdmissionEventId || null,
+      requestAuthority: recallAuthority.requestAuthority || null,
     });
-    const disclosureMemories = epistemicRecall.memories;
+    const conceptGraphSecurity = hops > 0
+      ? await closeGraphSecurityBoundary({
+          graphId: 'concept_gaama',
+          sourceAgentId: 'concept-graph',
+          memories: epistemicRecall.memories,
+          companyId: company,
+          subjectAgentId: agent,
+          recallAuthority,
+          epistemicReceipt: epistemicRecall.receipt,
+          epistemicDecisionHash: epistemicRecall.decision.decision_sha256,
+        })
+      : Object.freeze({ memories: epistemicRecall.memories, decision: null });
+    const magmaGraphSecurity = magmaCandidate
+      ? await closeGraphSecurityBoundary({
+          graphId: 'magma',
+          sourceAgentId: 'magma',
+          memories: conceptGraphSecurity.memories,
+          companyId: company,
+          subjectAgentId: agent,
+          recallAuthority,
+          epistemicReceipt: epistemicRecall.receipt,
+          epistemicDecisionHash: epistemicRecall.decision.decision_sha256,
+          graphDecision: magmaCandidate.decision,
+        })
+      : Object.freeze({ memories: conceptGraphSecurity.memories, decision: null });
+    const reconstructedGraphSecurity = reconstructedGraphCandidate
+      ? await closeGraphSecurityBoundary({
+          graphId: 'reconstructed_graph',
+          sourceAgentId: 'reconstructed-graph',
+          memories: magmaGraphSecurity.memories,
+          companyId: company,
+          subjectAgentId: agent,
+          recallAuthority,
+          epistemicReceipt: epistemicRecall.receipt,
+          epistemicDecisionHash: epistemicRecall.decision.decision_sha256,
+          graphDecision: reconstructedGraphCandidate.decision,
+        })
+      : Object.freeze({ memories: magmaGraphSecurity.memories, decision: null });
+    const disclosureMemories = reconstructedGraphSecurity.memories;
     // The working set must contain only the post-epistemic disclosure set.
     workingMemory = disclosureMemories
       .map((memory) => `[${memory.memory_type}] ${memory.value}`.slice(0, 300))
@@ -2990,8 +3634,35 @@ export async function executeNativeRecall(req, recallAuthority) {
           abstention_required: epistemicRecall.decision.abstention_required,
           canonical_memory_mutated: false,
           persistent_reweight_applied: false,
+          ...(epistemicRecall.decision.twin_prime ? { twin_prime: epistemicRecall.decision.twin_prime } : {}),
           decision_receipt: epistemicRecall.receipt,
         },
+        ...(conceptGraphSecurity.decision ? { graph_security_closure: conceptGraphSecurity.decision } : {}),
+        ...(magmaGraphSecurity.decision ? { magma_security_closure: magmaGraphSecurity.decision } : {}),
+        ...(reconstructedGraphSecurity.decision
+          ? { reconstructed_graph_security_closure: reconstructedGraphSecurity.decision }
+          : {}),
+        native_retrieval_fusion: nativeRetrievalFusion.decision,
+        graph_family_retrieval: graphFamilyMetadata({
+          family: graphFamilyCandidate,
+          runtimeMs: graphFamilyRuntimeMs,
+        }),
+        magma_retrieval: {
+          ...magmaGearMetadata({
+            calibrationState: magmaCalibrationState,
+            gear: magmaCandidate,
+            runtimeMs: magmaCandidateRuntimeMs,
+            fusion: nativeRetrievalFusion,
+            failure: magmaCandidateFailure,
+          }),
+          baseline_candidate_memory_ids: magmaBaselineCandidateIds,
+        },
+        reconstructed_graph_retrieval: reconstructedGraphGearMetadata({
+          gear: reconstructedGraphCandidate,
+          eligibleCandidateCount: reconstructedGraphEligibleCandidateCount,
+          canaryWithheldCount: reconstructedGraphCanaryWithheldCount,
+          failure: reconstructedGraphCandidateFailure,
+        }),
         ...(doctorSidecarTrace ? {
           doctor_sidecar: {
             requested: true,
@@ -3074,8 +3745,35 @@ export async function executeNativeRecall(req, recallAuthority) {
           abstention_required: epistemicRecall.decision.abstention_required,
           canonical_memory_mutated: false,
           persistent_reweight_applied: false,
+          ...(epistemicRecall.decision.twin_prime ? { twin_prime: epistemicRecall.decision.twin_prime } : {}),
           decision_receipt: epistemicRecall.receipt,
         },
+        ...(conceptGraphSecurity.decision ? { graph_security_closure: conceptGraphSecurity.decision } : {}),
+        ...(magmaGraphSecurity.decision ? { magma_security_closure: magmaGraphSecurity.decision } : {}),
+        ...(reconstructedGraphSecurity.decision
+          ? { reconstructed_graph_security_closure: reconstructedGraphSecurity.decision }
+          : {}),
+        native_retrieval_fusion: nativeRetrievalFusion.decision,
+        graph_family_retrieval: graphFamilyMetadata({
+          family: graphFamilyCandidate,
+          runtimeMs: graphFamilyRuntimeMs,
+        }),
+        magma_retrieval: {
+          ...magmaGearMetadata({
+            calibrationState: magmaCalibrationState,
+            gear: magmaCandidate,
+            runtimeMs: magmaCandidateRuntimeMs,
+            fusion: nativeRetrievalFusion,
+            failure: magmaCandidateFailure,
+          }),
+          baseline_candidate_memory_ids: magmaBaselineCandidateIds,
+        },
+        reconstructed_graph_retrieval: reconstructedGraphGearMetadata({
+          gear: reconstructedGraphCandidate,
+          eligibleCandidateCount: reconstructedGraphEligibleCandidateCount,
+          canaryWithheldCount: reconstructedGraphCanaryWithheldCount,
+          failure: reconstructedGraphCandidateFailure,
+        }),
         ...(doctorSidecarTrace ? { doctor_sidecar: doctorSidecarTrace } : {}),
         synthesis,
         evaluation: buildRecallEvaluation({
@@ -3129,8 +3827,13 @@ export async function executeNativeRecall(req, recallAuthority) {
     calibratedRecallResponse.recall_receipt = await finalizeNativeRecall({
       memories: calibratedRecallResponse.memories,
       authority: recallAuthority,
+      epistemicDecisionHash: epistemicReceiptDecisionHash(epistemicRecall.decision),
     });
-    return { status: 200, body: calibratedRecallResponse };
+    return {
+      status: 200,
+      body: calibratedRecallResponse,
+      nativeGearboxEvaluationEvidence,
+    };
   } catch (error) {
     if (error?.rejected || /recall_(?:evidence|authority)|portable_binding|topology/.test(String(error?.message || ''))) {
       throw error;

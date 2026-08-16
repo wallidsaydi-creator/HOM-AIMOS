@@ -17,9 +17,9 @@ import { signAsHousekeeper } from '../../services/security/housekeeper-signer.js
 import {
   memoryProvenanceLedger,
   orderProvenanceRowsByTopology,
-  retainedProvenanceMerkleRoot,
   verifyRecallEvidenceRow,
 } from '../../services/security/memory-provenance.js';
+import { retainedProvenanceMerkleRoot } from '../../services/security/protocol/mutmem-protocol.js';
 import { commitHousekeeperSupersession } from '../../services/security/memory-lineage.js';
 import { resolveAimosDatabaseName } from '../../services/core/runtime-config.js';
 

@@ -1,0 +1,47 @@
+[
+  {
+    "id": "paper-radius-five",
+    "selectedCount": 3800,
+    "nCertify": 4000,
+    "alphaFamily": { "numerator": 5, "denominator": 100 },
+    "nMax": 100,
+    "pDel": { "numerator": 9, "denominator": 10 },
+    "expected": { "outcome": "certified", "reason": null, "fraction_ppm": 950000, "penalty_ppm": 30824, "mu_lower_ppm": 919176, "runner_upper_ppm": 80824, "theorem_argument_ppm": 580824, "radius": 5 }
+  },
+  {
+    "id": "all-selected",
+    "selectedCount": 4000,
+    "nCertify": 4000,
+    "alphaFamily": { "numerator": 5, "denominator": 100 },
+    "nMax": 100,
+    "pDel": { "numerator": 9, "denominator": 10 },
+    "expected": { "outcome": "certified", "reason": null, "fraction_ppm": 1000000, "penalty_ppm": 30824, "mu_lower_ppm": 969176, "runner_upper_ppm": 30824, "theorem_argument_ppm": 530824, "radius": 6 }
+  },
+  {
+    "id": "half-abstain",
+    "selectedCount": 500,
+    "nCertify": 1000,
+    "alphaFamily": { "numerator": 5, "denominator": 100 },
+    "nMax": 1,
+    "pDel": { "numerator": 3, "denominator": 5 },
+    "expected": { "outcome": "abstain", "reason": "confidence_not_above_half", "fraction_ppm": 500000, "penalty_ppm": 38703, "mu_lower_ppm": 461297, "runner_upper_ppm": 538703, "radius": null }
+  },
+  {
+    "id": "near-one",
+    "selectedCount": 999,
+    "nCertify": 1000,
+    "alphaFamily": { "numerator": 1, "denominator": 100 },
+    "nMax": 10,
+    "pDel": { "numerator": 19, "denominator": 20 },
+    "expected": { "outcome": "certified", "reason": null, "fraction_ppm": 999000, "penalty_ppm": 58770, "mu_lower_ppm": 940230, "runner_upper_ppm": 59770, "theorem_argument_ppm": 559770, "radius": 11 }
+  },
+  {
+    "id": "zero",
+    "selectedCount": 0,
+    "nCertify": 100,
+    "alphaFamily": { "numerator": 5, "denominator": 100 },
+    "nMax": 100,
+    "pDel": { "numerator": 3, "denominator": 4 },
+    "expected": { "outcome": "abstain", "reason": "confidence_not_above_half", "fraction_ppm": 0, "penalty_ppm": 194948, "mu_lower_ppm": 0, "runner_upper_ppm": 1000000, "radius": null }
+  }
+]

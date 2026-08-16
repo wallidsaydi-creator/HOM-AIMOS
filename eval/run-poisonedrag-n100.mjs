@@ -241,7 +241,7 @@ function loadCandidatePool() {
   return documents;
 }
 
-export function loadPoisonedRagInputs(targetCount) {
+export function loadPoisonedRagInputs(targetCount, { ordinals = null } = {}) {
   const { lock: sourceLock, source_lock_sha256: sourceLockSha256 } = loadSourceLock(SOURCE_LOCK_FILE);
   const privateManifest = assertManifest(
     readJsonFile(PRIVATE_MANIFEST_FILE, POISONEDRAG_SCHEMAS.PRIVATE_TARGET_MANIFEST),
@@ -268,7 +268,19 @@ export function loadPoisonedRagInputs(targetCount) {
   if (documents.size !== corpusResolution.unique_candidate_document_count) {
     throw new Error('poisonedrag_candidate_pool_count_mismatch');
   }
-  const targets = privateManifest.targets.slice(0, targetCount);
+  if (ordinals !== null && (!Array.isArray(ordinals)
+    || ordinals.length !== targetCount
+    || new Set(ordinals).size !== ordinals.length
+    || ordinals.some((ordinal) => !Number.isInteger(ordinal) || ordinal < 0 || ordinal >= 100))) {
+    throw new Error('poisonedrag_selected_ordinals_invalid');
+  }
+  const targets = ordinals === null
+    ? privateManifest.targets.slice(0, targetCount)
+    : ordinals.map((ordinal) => {
+        const target = privateManifest.targets.find((entry) => entry.ordinal === ordinal);
+        if (!target) throw new Error(`poisonedrag_selected_ordinal_missing:${ordinal}`);
+        return target;
+      });
   for (const target of targets) {
     const publicTarget = publicLock.targets[target.ordinal];
     const candidateIdHash = sha256(Buffer.from(poisonCanonicalJson(
@@ -442,7 +454,7 @@ async function executeSave(args, { file, body, operationId }) {
   throw new Error(`poisonedrag_save_retry_exhausted:${operationId}`);
 }
 
-async function ingestTarget(args, root, target, documents, progress) {
+export async function ingestTarget(args, root, target, documents, progress) {
   const targetRoot = path.join(root, 'targets', targetDirectoryName(target));
   const saveRoot = path.join(targetRoot, 'saves');
   mkdirSync(saveRoot, { recursive: true, mode: 0o700 });

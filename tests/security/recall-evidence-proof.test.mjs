@@ -33,6 +33,9 @@ function fixture(requestSigForm, options = {}) {
   const validFromUnix = 1_783_763_000;
   const validUntilUnix = 1_783_773_000;
   const masterFingerprint = pubkeyFingerprint(master.pubkey);
+  const certIssuer = options.certIssuer === 'aimos-master'
+    ? 'aimos-master'
+    : options.certIssuer || masterFingerprint;
   const signerCert = issueCert(master.privkey, {
     v: 1,
     agent_id: 'proof-agent',
@@ -40,14 +43,15 @@ function fixture(requestSigForm, options = {}) {
     device_fp: 'device-proof',
     valid_from: validFromUnix,
     valid_until: validUntilUnix,
-    issuer: masterFingerprint,
+    issuer: certIssuer,
     issued_at: validFromUnix,
   });
   const intentBody = {
     company_id: 'hom',
     agent_id: 'proof-agent',
     key: 'proof:recall:evidence',
-    value: 'This retained memory has exact cryptographic evidence for native recall admission.',
+    value: options.intentValue
+      ?? 'This retained memory has exact cryptographic evidence for native recall admission.',
     scope: 'global',
     clearance_level: 1,
     memory_type: 'declarative',
@@ -55,7 +59,9 @@ function fixture(requestSigForm, options = {}) {
   };
   const liveFields = {
     key: intentBody.key,
-    value: intentBody.value,
+    value: typeof intentBody.value === 'string'
+      ? intentBody.value
+      : JSON.stringify(intentBody.value),
     scope: intentBody.scope,
     memory_type: intentBody.memory_type,
     clearance_level: intentBody.clearance_level,
@@ -139,6 +145,12 @@ test('recall evidence fails closed on signature, body, snapshot, and identity ta
   assert.equal(verifyRecallEvidenceRow({ ...row, body_json: null }).valid, false);
 });
 
+test('recall evidence accepts canonical and legacy master issuer forms but rejects unknown issuers', () => {
+  assert.equal(verifyRecallEvidenceRow(fixture(3, { certIssuer: 'aimos-master' }).row).valid, true);
+  assert.equal(verifyRecallEvidenceRow(fixture(3).row).valid, true);
+  assert.equal(verifyRecallEvidenceRow(fixture(3, { certIssuer: 'unexpected-root' }).row).valid, false);
+});
+
 test('SAVE intent remains valid when the native writer reclassifies canonical fields', () => {
   const { row } = fixture(3);
   const normalizedFields = {
@@ -192,6 +204,58 @@ test('streamable MCP SAVE verifies the exact signed nested intent', () => {
   const ambiguousOuter = [outerBody, { ...outerBody, id: 'save-2' }];
   const ambiguous = fixture(3, { outerBody: ambiguousOuter, signedPath: '/mcp' }).row;
   assert.equal(verifyRecallEvidenceRow(ambiguous).reason, 'signed_save_intent_missing_or_ambiguous');
+});
+
+test('REST SAVE reconstructs structured object and array values without weakening exact strings', () => {
+  for (const intentValue of [
+    { summary: 'signed structured evidence', evidence: { marker: 'SECRET-3810AEFF' } },
+    ['signed structured evidence', { marker: 'SECRET-8597B901' }],
+  ]) {
+    const { row } = fixture(3, { intentValue });
+    assert.equal(verifyRecallEvidenceRow(row).valid, true);
+    assert.equal(
+      verifyRecallEvidenceRow({
+        ...row,
+        live_value: JSON.stringify({ tampered: true }),
+      }).valid,
+      false,
+    );
+  }
+});
+
+test('streamable MCP SAVE reconstructs structured values after JSONB member reordering', () => {
+  const intent = {
+    key: 'proof:recall:evidence',
+    value: { z: 'last in canonical order', a: { marker: 'SECRET-3810AEFF' } },
+    scope: 'global',
+    memory_type: 'declarative',
+    clearance_level: 1,
+    source: 'test',
+  };
+  const outerBody = {
+    jsonrpc: '2.0',
+    id: 'save-structured-1',
+    method: 'tools/call',
+    params: { name: 'aimos_save', arguments: intent },
+  };
+  const { row } = fixture(3, {
+    outerBody,
+    signedPath: '/mcp',
+    intentValue: intent.value,
+  });
+  row.live_value = JSON.stringify({ a: { marker: 'SECRET-3810AEFF' }, z: 'last in canonical order' });
+  const liveFields = {
+    key: row.live_key,
+    value: row.live_value,
+    scope: row.live_scope,
+    memory_type: row.live_memory_type,
+    clearance_level: row.live_clearance_level,
+    data_class: row.live_data_class,
+    source: row.live_source,
+  };
+  row.live_content_hash = computeLiveRowContentHash(liveFields);
+  row.snapshot_live_content_hash = row.live_content_hash;
+  assert.equal(verifyRecallEvidenceRow(row).valid, true);
 });
 
 function sessionTurnEvidenceFixture(overrides = {}) {

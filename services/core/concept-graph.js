@@ -45,6 +45,7 @@ import { AIMOS_COMPANY_ID } from './runtime-config.js';
 import { query } from '../../db/connection.js';
 import { getEmbedding } from './embeddings.js';
 import { persistMemory } from '../write/persist-memory.js';
+import { appendSignedConceptEdge } from '../security/concept-edge-provenance.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 const HUB_DEGREE_THRESHOLD = 50;
@@ -58,6 +59,17 @@ const WAVE5_GRAPH_DIAGNOSTIC_AUTHORITIES = [
   'Ontology-Aware Design Patterns for Clinical AI Systems: Translating Reification Theory into Software Architecture',
   'Generative 3D Gaussian Splatting for Arbitrary-Resolution Atmospheric Downscaling and Forecasting',
 ];
+
+/** Stable ordering for the existing live PPR-plus-cosine result surface. */
+export function compareHybridConceptResults(left = {}, right = {}) {
+  const leftScore = Number(left.score);
+  const rightScore = Number(right.score);
+  const boundedLeft = Number.isFinite(leftScore) ? leftScore : Number.NEGATIVE_INFINITY;
+  const boundedRight = Number.isFinite(rightScore) ? rightScore : Number.NEGATIVE_INFINITY;
+  const scoreOrder = boundedRight - boundedLeft;
+  if (scoreOrder !== 0) return scoreOrder;
+  return String(left.id || '').localeCompare(String(right.id || ''));
+}
 
 // ─── SCHEMA ───────────────────────────────────────────────────────────────
 /**
@@ -137,12 +149,13 @@ export async function ensureConceptNode(conceptLabel, companyId = COMPANY) {
 export async function linkToConcepts(memoryId, conceptLabels, companyId = COMPANY) {
   for (const label of conceptLabels) {
     const conceptId = await ensureConceptNode(label, companyId);
-    await query(
-      `INSERT INTO concept_edges (company_id, source_id, target_id, edge_type)
-       VALUES ($1, $2::uuid, $3::uuid, 'HAS_CONCEPT')
-       ON CONFLICT DO NOTHING`,
-      [companyId, memoryId, conceptId]
-    );
+    await appendSignedConceptEdge({
+      company_id: companyId,
+      source_id: memoryId,
+      target_id: conceptId,
+      edge_type: 'HAS_CONCEPT',
+      weight: 1,
+    });
   }
 }
 
@@ -150,12 +163,13 @@ export async function linkToConcepts(memoryId, conceptLabels, companyId = COMPAN
  * Create a derived-from edge (fact from episode, reflection from facts).
  */
 export async function linkDerived(sourceId, targetId, edgeType, companyId = COMPANY) {
-  await query(
-    `INSERT INTO concept_edges (company_id, source_id, target_id, edge_type)
-     VALUES ($1, $2::uuid, $3::uuid, $4)
-     ON CONFLICT DO NOTHING`,
-    [companyId, sourceId, targetId, edgeType]
-  );
+  return appendSignedConceptEdge({
+    company_id: companyId,
+    source_id: sourceId,
+    target_id: targetId,
+    edge_type: edgeType,
+    weight: 1,
+  });
 }
 
 /**
@@ -355,7 +369,7 @@ export async function hybridRetrieve(queryText, companyId = COMPANY, limit = 10,
   }
 
   return results
-    .sort((a, b) => b.score - a.score)
+    .sort(compareHybridConceptResults)
     .slice(0, limit);
 }
 

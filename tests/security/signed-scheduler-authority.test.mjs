@@ -8,6 +8,12 @@ test('canonical scheduler derives authority from retained signed events', async 
   const source = await readFile(new URL('services/orchestration/scheduler.js', ROOT), 'utf8');
 
   assert.match(source, /readVerifiedEventHistory\(COMPANY, \{ client \}\)/);
+  assert.match(source, /if \(projectionResult\.rows\.length === 0\) return \[\];/);
+  assert.ok(
+    source.indexOf('if (projectionResult.rows.length === 0) return [];')
+      < source.indexOf('readVerifiedEventHistory(COMPANY, { client })'),
+    'empty schedule projections must not scan the unrelated universal event ledger',
+  );
   assert.match(source, /authority\?\.kind !== 'verified_request'/);
   assert.match(source, /authority\.requestReceiptMutationHash/);
   assert.match(source, /'schedule_created'/);

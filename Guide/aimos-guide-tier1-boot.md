@@ -72,7 +72,7 @@ Identity and company come from the verified certificate context. A master-signed
 
 Both modes return `timem` envelopes on every memory showing day/session coordinates.
 
-**Stage Zero** runs before embeddings: a lightweight SQL pass identifies relevant days/sessions and feeds them as `source_boost` into the hybrid query. Check `recall_meta.temporal_scope.dayBuckets` to see which days matched.
+The **temporal-scoping prelude** runs before the 21 instrumented recall stages: a lightweight SQL pass identifies relevant days/sessions and feeds them as `source_boost` into the hybrid query. Check `recall_meta.temporal_scope.dayBuckets` to see which days matched.
 
 ## Save — Minimum Viable
 

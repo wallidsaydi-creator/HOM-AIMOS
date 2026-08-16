@@ -9,6 +9,7 @@ import {
 import {
   sessionKeyLikePattern,
   sessionKeyPrefix,
+  sessionKeyQueryScope,
 } from '../../services/shared/session-scope.js';
 
 function sqlLike(value, pattern) {
@@ -52,8 +53,17 @@ function makeHarness({ quarantinePredicate = () => false } = {}) {
       if (memoryTypes.length) rows = rows.filter((row) => memoryTypes.includes(row.memory_type));
       const pattern = params[1];
       if (typeof pattern === 'string') rows = rows.filter((row) => sqlLike(row.key, pattern));
-      if (sql.includes('right(key, 65)')) rows = rows.filter((row) => row.key.endsWith(params[2]));
-      rows = [...rows].sort((left, right) => left.key.localeCompare(right.key));
+      if (sql.includes('key COLLATE "C" >= $3::text COLLATE "C"')) {
+        rows = rows.filter((row) => row.key >= params[2] && row.key < params[3]);
+      }
+      if (sql.includes('right(key, 65)')) rows = rows.filter((row) => row.key.endsWith(params[4]));
+      rows = [...rows].sort((left, right) => {
+        if (sql.includes('ORDER BY created_at ASC, id ASC')) {
+          const timeDelta = new Date(left.created_at).getTime() - new Date(right.created_at).getTime();
+          return timeDelta || String(left.id).localeCompare(String(right.id));
+        }
+        return left.key.localeCompare(right.key);
+      });
       if (sql.includes('ORDER BY key DESC')) rows.reverse();
       const limit = Number(sql.match(/LIMIT (\d+)/)?.[1] || rows.length);
       return { rows: rows.slice(0, limit).map((row) => ({ ...row })) };
@@ -141,6 +151,17 @@ test('session LIKE patterns treat underscores and percent signs literally', () =
   const pattern = sessionKeyLikePattern('sample_session_%1');
   assert.equal(sqlLike(`${sessionKeyPrefix('sample_session_%1')}turn:000000000001:abc`, pattern), true);
   assert.equal(sqlLike('sess:sampleXsessionXanything1:turn:000000000001:abc', pattern), false);
+});
+
+test('session query scope keeps literal correctness and bounds the native key index', () => {
+  const scope = sessionKeyQueryScope('sample_session_%1', 'turn:');
+  const exactKey = `${sessionKeyPrefix('sample_session_%1')}turn:000000000001:abc`;
+  assert.equal(scope.pattern, 'sess:sample\\_session\\_\\%1:turn:%');
+  assert.equal(scope.lowerBound, 'sess:sample_session_%1:turn:');
+  assert.equal(scope.upperBound, 'sess:sample_session_%1:turn:\uFFFF');
+  assert.equal(exactKey >= scope.lowerBound && exactKey < scope.upperBound, true);
+  assert.equal(sqlLike(exactKey, scope.pattern), true);
+  assert.equal(sqlLike('sess:sampleXsessionXanything1:turn:000000000001:abc', scope.pattern), false);
 });
 
 test('RFC6962-style session root is deterministic and order-sensitive', () => {
@@ -242,6 +263,78 @@ test('three sessions survive owner restart, finalize once, and reject post-final
     }, { companyId: 'hom', agentId: 'fixture-agent', mutationAuthority: 'housekeeper' }),
     /session_turn_idempotency_conflict/,
   );
+});
+
+test('exact timeout retry copies remain retained, verified, and canonically ordered once', async () => {
+  const harness = makeHarness();
+  const owner = harness.createOwner();
+  const sessionId = 'timeout_retry_reconciliation';
+  const turns = [
+    { turn_id: 'turn-1', role: 'user', content: 'First retained turn.' },
+    { turn_id: 'turn-2', role: 'assistant', content: 'Second retained turn.' },
+    { turn_id: 'turn-3', role: 'user', content: 'Third retained turn.' },
+  ];
+  for (let index = 0; index < 2; index += 1) {
+    await owner.appendTurn({
+      session_id: sessionId,
+      observed_at: `2026-08-08T00:00:0${index}.000Z`,
+      ...turns[index],
+    }, { companyId: 'hom', agentId: 'housekeeper', mutationAuthority: 'housekeeper' });
+  }
+
+  const [first, second] = harness.state.rows.map((row) => ({ ...row }));
+  const duplicateFirst = {
+    ...first,
+    id: '00000000-0000-4000-8000-000000009901',
+    created_at: '2026-08-08T00:01:00.000Z',
+  };
+  const misplacedRecord = { ...JSON.parse(second.value), sequence: 1 };
+  const misplacedKey = second.key.replace(':turn:000000000002:', ':turn:000000000001:');
+  const misplacedSecond = {
+    ...second,
+    id: '00000000-0000-4000-8000-000000009902',
+    key: misplacedKey,
+    value: JSON.stringify(misplacedRecord),
+    content_hash: digest(`${misplacedKey}\n${JSON.stringify(misplacedRecord)}`),
+    created_at: '2026-08-08T00:02:00.000Z',
+  };
+  harness.state.rows.push(duplicateFirst, misplacedSecond);
+
+  const replayedSecond = await owner.appendTurn({
+    session_id: sessionId,
+    observed_at: '2026-08-08T00:00:01.000Z',
+    ...turns[1],
+  }, { companyId: 'hom', agentId: 'housekeeper', mutationAuthority: 'housekeeper' });
+  assert.equal(replayedSecond.idempotent, true);
+  assert.equal(replayedSecond.sequence, 2);
+  assert.equal(replayedSecond.memory_id, second.id);
+
+  const appendedThird = await owner.appendTurn({
+    session_id: sessionId,
+    observed_at: '2026-08-08T00:00:02.000Z',
+    ...turns[2],
+  }, { companyId: 'hom', agentId: 'housekeeper', mutationAuthority: 'housekeeper' });
+  assert.equal(appendedThird.sequence, 3);
+
+  const finalized = await owner.finalizeSession(
+    { session_id: sessionId },
+    { companyId: 'hom', agentId: 'housekeeper' },
+  );
+  assert.equal(finalized.turn_count, 3);
+  const manifestRow = harness.state.rows.find((row) => row.memory_type === 'session_manifest');
+  const manifest = JSON.parse(manifestRow.value);
+  assert.equal(manifest.retained_retry_copy_count, 2);
+  assert.deepEqual(new Set(manifest.retained_retry_copy_memory_ids), new Set([
+    duplicateFirst.id,
+    misplacedSecond.id,
+  ]));
+
+  const loaded = await owner.loadVerifiedTurns(
+    { session_id: sessionId },
+    { companyId: 'hom', agentId: 'housekeeper' },
+  );
+  assert.deepEqual(loaded.map((turn) => turn.sequence), [1, 2, 3]);
+  assert.deepEqual(loaded.map((turn) => turn.content), turns.map((turn) => turn.content));
 });
 
 test('ordered exchange v2 retains reversed speakers, image context, and a trailing turn', async () => {

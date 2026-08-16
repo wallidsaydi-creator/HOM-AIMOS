@@ -3,7 +3,7 @@
 // DB + Role bootstrap for a *fresh* HOM-AIMOS install.
 
 import { randomBytes } from 'node:crypto';
-// IMPORTANT: This is HOM-AIMOS (not Oracle). On a completely fresh deployment
+// IMPORTANT: This is the canonical HOM-AIMOS bootstrap. On a completely fresh deployment
 // there is NO database yet. This script is what creates it.
 //
 // What it does:

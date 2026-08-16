@@ -35,6 +35,7 @@ export async function beginToolAction({
   runtimeAgentId,
   executionContext,
   parentEventId = null,
+  purposeAuthorizationReceipt = null,
 } = {}) {
   const name = String(tool || '').trim();
   const runtimeAgent = String(runtimeAgentId || '').trim();
@@ -58,6 +59,10 @@ export async function beginToolAction({
     actor_identity_tier: actorIdentityTier,
     request_receipt_id: executionContext.requestReceiptId || null,
     request_receipt_mutation_hash: executionContext.requestReceiptMutationHash || null,
+    purpose_authorization_sha256: purposeAuthorizationReceipt?.artifactSha256 || null,
+    purpose_authorization_content_sha256: purposeAuthorizationReceipt?.contentSha256 || null,
+    purpose_authorization_operation: purposeAuthorizationReceipt?.operation || null,
+    purpose_authorization_read_root_sha256: purposeAuthorizationReceipt?.readRootSha256 || null,
     reasoning: `Housekeeper signed the exact derived ${name} action before execution; arguments are hash-bound and not copied into the event ledger.`,
     source_knowledge: 'tool-action-ledger.js — RFC 6962 / RFC 8032 derived-action authority',
   }, parentEventId, { authority: executionContext, returnReceipt: true });
@@ -74,6 +79,7 @@ export async function beginToolAction({
       actorValidFromIso,
       actorIdentityTier,
       companyId,
+      purposeAuthorizationSha256: purposeAuthorizationReceipt?.artifactSha256 || null,
     }),
   });
 }
@@ -120,6 +126,8 @@ export async function verifyToolActionAuthority(authority, {
     && String(metadata.actor_identity_tier || '').toUpperCase() === String(authority.actorIdentityTier || '').toUpperCase()
     && body?.event_id === authority.eventId
     && Buffer.from(row.mutation_hash).toString('hex') === authority.eventMutationHash
+    && (metadata.purpose_authorization_sha256 || null)
+      === (authority.purposeAuthorizationSha256 || null)
     && companyId === authority.companyId
     && (!expectedTool || expectedTool === authority.tool)
     && (!expectedActorAgentId || expectedActorAgentId === authority.actorAgentId)

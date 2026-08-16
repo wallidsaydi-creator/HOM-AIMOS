@@ -307,6 +307,7 @@ export function createAuthTier(deps = {}) {
       'sig_form_used',
       null,
       { sig_form: __sigFormUsed, declared_sig_form: __declaredForm || '1', method: __method, path: __path,
+        reasoning: 'Record the exact cryptographic request-signature form that authenticated this admitted request.',
         source_knowledge: 'R1 Step 2 stage N — verifier accepts sig-form 1|3; logging form for cutover watch.' }
     ).catch(() => {});
 

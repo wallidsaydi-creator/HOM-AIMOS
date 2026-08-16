@@ -23,7 +23,8 @@ export function getEarlyExitThreshold(memoryCount = MEMORY_COUNT_BASELINE) {
 /**
  * Adaptive Early-Exit Decision Engine
  *
- * Determines whether to stop the 16-stage recall pipeline early (after stage 7: BM25 rerank)
+ * Determines whether to stop optional post-fusion enrichment after the
+ * early-exit decision in the 21-stage native recall pipeline
  * based on confidence metrics and Minimum Viable Sufficiency (MVS).
  *
  * Exit conditions (ANY of these triggers early exit):
@@ -38,7 +39,7 @@ export function getEarlyExitThreshold(memoryCount = MEMORY_COUNT_BASELINE) {
  * @param {number[]} topScores - Array of similarity scores [highest, second, ...]
  * @param {number} mvsScore - Minimum Viable Sufficiency score (lower = more certain)
  * @param {object} context - Optional context (e.g., query_type, user_trust_level, top1_medallion, total_memories)
- * @returns {boolean} - true if pipeline should exit early, false to continue full 16 stages
+ * @returns {boolean} - true if optional enrichment may stop, false to continue all stages
  */
 export function shouldEarlyExit(topScores, mvsScore, context = {}) {
   // Guard: Need at least 2 scores to compute gap

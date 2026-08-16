@@ -4,12 +4,12 @@
 
 ## Pipeline Manifest
 
-**Single source of truth:** `services/pipeline-manifest.js` — 146 declared service connections across 6 pipelines, validated at boot.
+**Single source of truth:** `services/pipeline-manifest.js` — 156 declared service connections across 6 pipelines, validated at boot.
 
 | Pipeline | Entry | Declared service modules |
 |----------|-------|-------------------------:|
 | Save | `routes/aimos.js` | 13 |
-| Recall | `services/retrieval/native-recall-pipeline.js` | 68 |
+| Recall | `services/retrieval/native-recall-pipeline.js` | 78 |
 | Agent Run | `services/orchestration/agent-runner.js` | 34 |
 | Dream | `jobs/nightly-dream.js` | 20 |
 | Heartbeat | `jobs/heartbeat.js` | 1 |
@@ -19,7 +19,7 @@ Validate: `node -e "import('./services/pipeline-manifest.js').then(m => m.valida
 
 ## Service Annotation Format
 
-The manifest currently binds 275 service files. Paper-backed mathematical services carry source and pipeline annotations; infrastructure files carry their native ownership/connection contract.
+The manifest currently binds 300 service files. Paper-backed mathematical services carry source and pipeline annotations; infrastructure files carry their native ownership/connection contract.
 
 **Block 1 — Source & Compliance:**
 ```javascript
@@ -71,10 +71,10 @@ The manifest currently binds 275 service files. Paper-backed mathematical servic
 
 | Domain | Count | Key Papers |
 |--------|-------|------------|
-| `retrieval/` | 55 | HippoRAG, Adaptive RAG, QuIM-RAG, OrgForge RRF |
+| `retrieval/` | 68 | HippoRAG, Adaptive RAG, QuIM-RAG, OrgForge RRF |
 | `learning/` | 23 | STDP, SPICED, SM-2, Prospect Theory, R-MDP |
 | `orchestration/` | 43 | DISARM, HVR-Met, DIG, ContextCov, Constitutional |
-| `security/` | 36 | OWASP, Mitnick, Cialdini, Refusal Bias, P2P Trust |
+| `security/` | 48 | OWASP, Mitnick, Cialdini, Refusal Bias, P2P Trust |
 | `dream/` | 5 | SPICED, ThaCo, Sleep Homeostatic, MemGPT |
 | `write/` | 13 | Aladdin, Sutton&Barto RPE, Channel Separation |
 | `observe/` | 22 | OpenTelemetry, Senge, Moltbook, SVDD |

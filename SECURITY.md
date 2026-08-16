@@ -37,12 +37,46 @@ AIMOS is designed to provide:
 - method/path/body/nonce-bound request signatures;
 - append-only provenance, request, authorization, credential-use, tool-action,
   and cognitive-transition evidence;
+- signed, reversible epistemic labels for retained memory evidence;
+- explicit Canary traversal decisions at persistence, model-relay, tool-input,
+  and tool-output boundaries;
+- signed operational red-team manifests, per-case decisions, and terminal or
+  failed campaign evidence;
 - revocation and replay rejection without mutable bypass flags;
 - a restricted database role with no selective memory-deletion authority;
 - signed whole-brain purge as the only erasure ceremony.
 
 The ledger proves integrity and attribution. It does not prove that signed
 memory content is true. See [THREAT-MODEL.md](THREAT-MODEL.md).
+
+## Agent-security architecture
+
+HOM-AIMOS treats persistent memory as a security control plane: content that
+enters memory can influence later prompts, tools, and decisions. Defensive
+ownership is therefore split across explicit native boundaries:
+
+| Boundary | Native behavior | Honest limit |
+|---|---|---|
+| Epistemic classification | Retains content and appends a signed, reversible trust label | Classification is evidence, not factual truth |
+| Recall disclosure | Verifies provenance, authorization, label state, graph decision, calibration, and final receipt | A valid signature cannot make false content true |
+| Canary traversal | Detects the generated marker family at `PERSISTED`, `RELAYED`, `EXECUTED`, and `EXPOSED` | Does not detect arbitrary unmarked poison |
+| Cognitive mutation | Changes only bounded retrieval weight through a signed no-fork transition | Does not rewrite canonical memory content |
+| MAGMA graph selection | Permanently expands and ranks only admitted, principal-scoped evidence; signed configuration may only tighten bounded calibration | Owns candidate selection, not activation or final disclosure |
+| SABER-inspired campaigns | Evaluates fixed attack/benign vectors and commits signed case/aggregate evidence | Diagnostic evaluation, not certified robustness |
+
+The current signed operational campaign completed 27 attack cases and 28
+benign controls: all attacks were blocked or retained-quarantined, no benign
+control was blocked, and no case was indeterminate. This is conformance evidence
+for the declared vector set. It is not a universal success rate, DARPA SABER
+equivalence, or a formal robustness certificate.
+
+The public architecture and evidence boundaries are documented in
+[Agent-security architecture](docs/security/agent-security-architecture.md)
+and [SABER-inspired operational evidence](docs/security/saber-operational-evidence.md).
+
+SABER has no runtime authority. Save, recall, ranking, quarantine, and
+disclosure remain owned by their native pipelines. Runtime errors, timeouts,
+missing decisions, and missing cases are `indeterminate`; none count as blocks.
 
 ## Deployment boundary
 

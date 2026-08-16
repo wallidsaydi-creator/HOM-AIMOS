@@ -21,12 +21,12 @@ Aimos supports two parallel recall paths, modeled as **navigating a house**:
 
 Both modes always return `timem` (TiMem) envelopes on every memory, so you always see the day/session coordinates even in semantic mode.
 
-## Stage Zero: Temporal Scoping
+## Temporal-Scoping Prelude
 
-Before the embedding query (stage 1), Aimos runs **temporal scoping** — a lightweight SQL pass that identifies which days and sessions are relevant to the query. This is Stage Zero.
+Before the first instrumented stage, Aimos runs **temporal scoping** — a lightweight SQL pass that identifies which days and sessions are relevant to the query. It is a prelude, not an additional numbered recall stage.
 
 ```
-STAGE ZERO: temporal_scoping
+PRELUDE: temporal_scoping
   ├── Query recent memories matching keywords/tsvector
   ├── Extract day buckets (top 3 most recent days)
   └── Feed day buckets into hybrid query as source_boost
@@ -41,7 +41,7 @@ Temporal scoping gives recent matching memories a `source_boost` in the SQL cand
 | 7–30 days | 0.20 |
 | > 30 days | 0.30 |
 
-The `temporal_scope` field in `recall_meta` shows what Stage Zero found:
+The `temporal_scope` field in `recall_meta` shows what the prelude found:
 
 ```json
 "temporal_scope": {
@@ -66,33 +66,34 @@ The `temporal_scope` field in `recall_meta` shows what Stage Zero found:
 | `mode` | string | `"linear"` | `"adaptive"` = multi-scale |
 | `sort` | string | relevance | `"chronological"` = newest-first by day |
 
-## The 19-Stage Pipeline (with Stage Zero)
+## The 21-Stage Native Recall Pipeline
 
 ```
- 0. temporal_scoping ──── Pre-pipeline: identify relevant days/sessions → source_boost
+    temporal_scoping ──── Prelude: identify relevant days/sessions → source_boost
  1. embedding_query ────── 768d vector from query text (~5ms)
  2. cache_check ────────── Semantic cache (cos>0.85, TTL 300s) → HIT skips all
  3. hybrid_vector_bm25 ─── 3 parallel pools: vector + BM25 + temporal(source_boost) → UNION + RRF
- 4. entity_recall ──────── HippoRAG: extract entities → entity_memory_edges lookup
- 5. recursive_graph_walk ── WITH RECURSIVE on cross-refs (1-4 hops)
- 6. bm25_rescue ────────── Second keyword pass (large docs dilute embeddings)
- 7. reranking ──────────── Term overlap + recency boost (≤24h: +0.15, ≤7d: +0.10, ≤30d: +0.05)
- 8. qmd_activation ─────── Low confidence? → structured FTS + key/metadata search
- 9. hyde_expansion ─────── Still low? → HyDE expands query + multi-stage retrieval
-10. deep_recall_override ─ Specific cue pre-check before early exit
-11. early_exit_decision ── High confidence? → skip dormancy/trust/PPR/calibration/mnemonic, return now
-12. dormancy_evaluation ── Annotate low-frequency salience; never drop memories
-13. deep_recall_override ─ Exact key / strong identifier / high-specificity semantic cue → salience_penalty=0
+ 4. quim_lookup ────────── Query-indexed-memory evidence
+ 5. entity_recall ──────── HippoRAG: extract entities → entity_memory_edges lookup
+ 6. recursive_graph_walk ── WITH RECURSIVE on cross-refs (1-4 hops)
+ 7. bm25_rescue ────────── Second keyword pass (large docs dilute embeddings)
+ 8. reranking ──────────── Term overlap + recency boost (≤24h: +0.15, ≤7d: +0.10, ≤30d: +0.05)
+ 9. qmd_activation ─────── Low confidence? → structured FTS + key/metadata search
+10. hyde_expansion ─────── Still low? → HyDE expands query + multi-stage retrieval
+11. magma_native_gear ──── Bounded lineage evidence → central native RRF
+12. early_exit_decision ── High confidence? → skip optional enrichment, retain security closure
+13. salience_frequency_evaluation ── Annotate low-frequency evidence; never drop memories
 14. trust_scoring ──────── Rank by credit_score + access patterns
 15. concept_graph_ppr ──── HippoRAG PPR on knowledge graph + passage hydration
 16. recall_calibration ──── LMS dual-channel calibration (corrects bias)
 17. mnemonic_encoding ──── Style match (visual_hook, narrative, procedural)
-18. confidence_scoring ──── Final composite: semantic + authority + keyword + recency + type
-19. final_sort ──────────── TiMem-guided: day bucket → TMT level → confidence
-                           Chronological override if sort=chronological
+18. context_building ───── Build bounded working-memory context
+19. confidence_scoring ──── Final composite: semantic + authority + keyword + recency + type
+20. epistemic_trust_selection ── Signed epistemic admission and disclosure selection
+21. response_formatting ── Response projection, TiMem envelope, signed recall evidence
 ```
 
-**Stages 8-9 auto-activate** when initial results are poor. **Stage 11** can skip dormancy/trust/PPR/calibration/mnemonic when results are strong — but the uniformity guard prevents early exit when all rerank scores are identical (uncertainty, not confidence). You don't control this — the pipeline self-optimizes.
+**Stages 9-10 auto-activate** when initial results are poor. **Stage 12** may skip optional enrichment when results are strong, but it cannot skip signed epistemic selection, graph-security closure, Aladdin retention, or final recall evidence. The uniformity guard prevents early exit when all rerank scores are identical (uncertainty, not confidence).
 
 ## Confidence Scoring
 

@@ -1,7 +1,7 @@
 # AIMOS public architecture map
 
 Status: source-derived public runtime map
-Service census: 275 JavaScript services across 17 groups
+Service census: 300 JavaScript services across 17 groups
 
 This document describes the released AIMOS backend. It contains no deployment
 state, retained memory, private product roadmap, machine path, operator record,
@@ -76,7 +76,7 @@ envelopes; bearer-only authentication is not an AIMOS authority path.
 ## Canonical pipelines
 
 `services/pipeline-manifest.js` declares the critical wiring for six pipelines.
-It declares 146 service connections across 6 pipelines.
+It declares 156 service connections across 6 pipelines.
 
 | Pipeline | Entrypoint | Responsibility |
 |---|---|---|
@@ -125,15 +125,25 @@ owner. The externally visible path has eight principal stages:
 | 2 | Embedding and candidate opening | `services/core/embeddings.js` |
 | 3 | Similarity statistics | `services/retrieval/similarity-stats.js` |
 | 4 | Trust scoring | `services/learning/trust-score.js` |
-| 5 | Concept-graph retrieval | `services/core/concept-graph.js` |
+| 5 | Permanent dense, sparse, temporal, entity, QuIM, QMD, HyDE, and concept gears plus one bounded MAGMA/Reconstructed-Graph family channel with central deterministic RRF | `services/retrieval/native-recall-pipeline.js`, `services/retrieval/native-retrieval-fusion.js`, `services/retrieval/reconstructed-graph-native-candidate.js` |
 | 6 | Verified epistemic projection and selection | `services/retrieval/epistemic-trust-retrieval.js` |
 | 7 | Pre-disclosure calibration | `services/retrieval/recall-calibrator.js` |
 | 8 | Bounded evidence and signed receipt | `services/retrieval/native-recall.js` |
 
-The 68 declared recall connections span exact-identifier, semantic, temporal,
+The 78 declared recall connections span exact-identifier, semantic, temporal,
 graph, procedural, lineage, cache, instrumentation, and ingestion-assisted
 paths. Candidate evidence passes provenance and authorization admission before
 epistemic selection and bounded disclosure.
+
+MAGMA is an internal retrieval gear, not an activation mode or an alternative
+pipeline. Its principal-scoped reader opens bounded semantic, entity, and
+temporal topology; its four-view mathematical kernel also accepts signed causal
+edges when such evidence exists. MAGMA emits one rank channel plus
+provenance-re-admitted discoveries into the same deterministic reciprocal-rank
+fusion that combines the other native gears. It cannot remove the admitted
+baseline, authorize disclosure, mutate retained memory, or bypass epistemic,
+Canary, SABER-evidence, and Aladdin boundaries. Optional signed configuration
+can tighten bounded calibration only; it cannot enable or disable the gear.
 
 ### Native cognitive-mutation plane
 
@@ -182,9 +192,9 @@ barrels, hidden directories, and the root infrastructure file
 
 | Group | Files | Public responsibility |
 |---|---:|---|
-| retrieval | 55 | Query modes, vector/sparse retrieval, temporal and graph paths, epistemic selection and calibration |
+| retrieval | 68 | Query modes, vector/sparse retrieval, temporal and graph paths, epistemic selection and calibration |
 | orchestration | 43 | Agent execution, tools, governance, scheduling, model selection and run state |
-| security | 36 | Identity, signed envelopes, authorization, provenance, credentials, canaries and epistemic labels |
+| security | 48 | Identity, signed envelopes, authorization, provenance, credentials, canaries, purpose-bound non-memory authority, typed epistemic evidence assertions, graph-edge evidence, dormant edit certification and signed certificate custody |
 | temporal | 25 | Freshness, event order, supersession, time-aware retrieval and retained frequency |
 | learning | 23 | Calibration, reflection, skill consolidation, STDP and bounded plasticity |
 | observe | 22 | Event ledger, explanation, drift, routing, quantitative gates and diagnostics |
@@ -235,6 +245,31 @@ Beyond the principal stages above, native recall combines:
 Memory evidence is reference material, never an instruction channel. Recall
 does not expose hidden chain-of-thought; it returns bounded evidence and
 verifiable decision metadata.
+
+## Agent-security plane
+
+Security is composed into the memory lifecycle rather than attached as a final
+filter:
+
+| Capability | Runtime owner | Authority boundary |
+|---|---|---|
+| Certificate-envelope admission | `services/security/auth-gate.js` | Identity, method, path, body, nonce, timestamp, and request receipt are cryptographically bound |
+| Retained-memory epistemics | `services/security/memory-epistemic-classifier.js` | Signed, reversible label; canonical content remains retained |
+| Canary traversal | `services/security/canary-write-gate.js`, recall/tool owners | Explicit markers are observed at persistence, relay, execution, and exposure boundaries |
+| Graph security closure | `services/retrieval/native-recall-pipeline.js` | MAGMA rank evidence is fused downstream of principal/provenance admission and remains upstream of epistemic/Canary/retention disclosure control |
+| Cognitive mutation | governance owner, housekeeper signer, restricted writer | Only bounded retrieval weight changes through signed no-fork transitions |
+| Operational red-team evidence | `services/security/red-team-toolkit.js`, `routes/security.js` | Evaluation-only; fixed manifests and native case receipts, no runtime defense authority |
+
+The SABER-inspired operational harness does not accept caller-generated
+aggregates. A campaign is one signed start, an ordered set of native signed case
+decisions, and one signed terminal or failed outcome. Validators reconstruct
+only from verified terminal event identifiers. Timeout, runtime error, missing
+decision, and missing case outcomes remain indeterminate.
+
+Canary and epistemic poisoning defense are distinct. Canary proves traversal of
+the explicit AIMOS marker family. Epistemic classification handles retained
+evidence without requiring a marker. Neither mechanism establishes content
+truth, and the operational harness is not a formal robustness certificate.
 
 ## Cryptographic boundaries
 
@@ -295,7 +330,7 @@ restricted runtime role, applies ordered migrations, generates machine-local
 authority, provisions the housekeeper, and ingests every manifest-bound Guide
 file through the signed native save path.
 
-The installer rejects `.env` authority, reserved Oracle ports, unsafe database
+The installer rejects `.env` authority, reserved legacy ports, unsafe database
 names, missing dependency proofs, changed Guide bytes, and partial Genesis
 state. A new installation therefore starts with a cryptographically bound
 operating corpus rather than a blank brain.
@@ -328,10 +363,14 @@ distributed.
 | Cognitive tamper cases detected | 4/4 |
 | SQL/portable cognitive verifier parity | 9/9 records |
 | Signed cognitive-transition latency, median | 4.865 ms |
+| MAGMA permanent native-gear proof | 20/20 signed recalls; 8/20 graph-discovery observations; candidate p95 218.941 ms under its fixed 250 ms gate; 1/20 individual calls exceeded 250 ms |
+| SABER-inspired operational campaign | 27/27 attacks blocked or retained-quarantined; 0/28 benign false positives; 0 indeterminate |
 
 The protocols are distinct and are not averaged. The sanitized, self-hashed
-`eval/publication/verified-benchmark-results.json` binds the promoted run
-artifacts by SHA-256 and is the public numerical authority.
+`eval/publication/verified-benchmark-results.json` binds the promoted paper
+evidence by SHA-256. MAGMA and SABER-inspired values are later live conformance
+proofs with separate hash-addressed evidence and are not folded into that
+benchmark aggregate.
 
 ## Change discipline
 

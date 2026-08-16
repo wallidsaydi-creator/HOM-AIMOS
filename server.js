@@ -9,7 +9,7 @@ import { systemConfigStore } from './services/security/system-config-store.js';
 import { loadCredentialCache, reloadCredentialCache, peekCachedCredential } from './services/security/credential-cache.js';
 
 const app = express();
-// AIMOS owns 9100. Oracle owns 9000 and is never part of this fork's runtime.
+// AIMOS owns 9100. Reserved legacy ports are never part of this runtime.
 // Runtime configuration is ledger-backed; an environment override here would
 // reintroduce an unverified authority path before the ledger is even loaded.
 import {

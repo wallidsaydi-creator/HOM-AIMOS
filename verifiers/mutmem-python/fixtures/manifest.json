@@ -1,0 +1,190 @@
+{
+  "schema": "hom.aimos.mutmem-v2-s4-focused-fixture-manifest/v1",
+  "scope": "focused_cross_language_parity_not_v2_s5_full_corpus",
+  "synthetic_keys": true,
+  "private_keys_retained": false,
+  "live_aimos_data_included": false,
+  "vector_count": 18,
+  "vectors": [
+    {
+      "vector_id": "S4-CV-001",
+      "filename": "S4-CV-001.json",
+      "fixture_sha256": "f3590971fd0c5b62c6d7c1ab2c7358774bd0567ba324466bd5d466c738030474",
+      "expected_verdict": "valid",
+      "expected_primary_reason": null,
+      "producer_result_sha256": "f8a71a03f00a61a233fbb5186c54575cb0a84ac47b5c9f328f9bd2d9febfdb57",
+      "expected_bundle_sha256": "8eff1d0d5c52e1bd875142e361dc929b0b4eae6f770d359b52a82d6f93a791d6",
+      "expected_proof_root": "ff84b6f8551f3e133a5b62d3df75cb8c7ac92468b19460e0b70d5beab99773a5"
+    },
+    {
+      "vector_id": "S4-CV-002",
+      "filename": "S4-CV-002.json",
+      "fixture_sha256": "06d456db3ab47fe296bfce093e411f6b6b2ff2ec7410ec5543ce4a44f5d37f91",
+      "expected_verdict": "valid",
+      "expected_primary_reason": null,
+      "producer_result_sha256": "9f3f0915aae37b0b07cfef2d330d869e022fee0c249250bdcf133d5e3c7d21ac",
+      "expected_bundle_sha256": "854d62f7bd6cdaf30b9ba14fdec939eda74830476450bd3fac90112a34b3a6e0",
+      "expected_proof_root": "6ef0569fef80e4b1f6f299aa680e751c48b5dc66e23d25b77bfab9932650a002"
+    },
+    {
+      "vector_id": "S4-CV-003",
+      "filename": "S4-CV-003.json",
+      "fixture_sha256": "7d509b3b21869f733acf9accc2afe845e8c4526b475fcfe3e8977b7c9eec57cf",
+      "expected_verdict": "valid",
+      "expected_primary_reason": null,
+      "producer_result_sha256": "60c07b1f0ded41248cb1dcc52122d64c24306aa2444801b1ee1e819239ab9205",
+      "expected_bundle_sha256": "9ad2b2893c0affe8c713ffe55af5c6b76405cbcf2e94de73ae123bc8daa559f7",
+      "expected_proof_root": "6ef0569fef80e4b1f6f299aa680e751c48b5dc66e23d25b77bfab9932650a002"
+    },
+    {
+      "vector_id": "S4-CV-004",
+      "filename": "S4-CV-004.json",
+      "fixture_sha256": "f86d57bb6f4bf8aa48d2aa187ac835b239d7795b0b00a11ac46dd9de73e0771c",
+      "expected_verdict": "valid",
+      "expected_primary_reason": null,
+      "producer_result_sha256": "2863b76d5cd89dea5a18c05188aedf8a5f23ad719d648ddd6a8e90177cf2ab27",
+      "expected_bundle_sha256": "6a8b49c9cffef775f1105938d52b639f535984cb34a2772f61190f41fe4f9994",
+      "expected_proof_root": "6ef0569fef80e4b1f6f299aa680e751c48b5dc66e23d25b77bfab9932650a002"
+    },
+    {
+      "vector_id": "S4-CV-005",
+      "filename": "S4-CV-005.json",
+      "fixture_sha256": "45aa2596691d44e22daced57ed182d00d22824f7f3a61a4156bdfe4960cfb2f1",
+      "expected_verdict": "valid",
+      "expected_primary_reason": null,
+      "producer_result_sha256": "7f357fba4a573b13f2e0f8f0af82d10bcf7899abff5dcd4c2c89e590e6b1f6f2",
+      "expected_bundle_sha256": "6f5b13ba1486db6d760bc6ede4d9b88a1f81ad4b5358cccf6ed8de1b1fd73b3e",
+      "expected_proof_root": "25f2b37efe7f8306e81efd9e02b6e9742f2f78664c2d9e1269ca33ea57aad2cb"
+    },
+    {
+      "vector_id": "S4-CV-006",
+      "filename": "S4-CV-006.json",
+      "fixture_sha256": "90434af75f9883d3cbb224d79830d979bfc0c99bd660f54821c79893ee3258a0",
+      "expected_verdict": "valid",
+      "expected_primary_reason": null,
+      "producer_result_sha256": "93cdae3a61c16a65fafc992449922f1f1fdbfef0eb9c2609f9b5aeb674a630e4",
+      "expected_bundle_sha256": "582d785acfaef6d0cf501366a3be4a4d830a21b9390f5c52cb13430ea48330b9",
+      "expected_proof_root": "279558fc7a38689edc13087f56134b18c6030440e7d9872c48d5fc101c35f99d"
+    },
+    {
+      "vector_id": "S4-CV-007",
+      "filename": "S4-CV-007.json",
+      "fixture_sha256": "d9231513070195d59d40c872b32a8404df06852a624aadb1ea544eaab938cc95",
+      "expected_verdict": "valid",
+      "expected_primary_reason": null,
+      "producer_result_sha256": "19f44398e110677ca43729ad2ec061f442701aa3ec82cbad9f1d435fe4181bb4",
+      "expected_bundle_sha256": "e1fe7c401316c1811c06e63da087b6a46c0a63a7c50ab909a7672931ea63759d",
+      "expected_proof_root": "6c9c90b451caf8cdd0a5fc4777311d2e22ca24d26615ae9453020f7a87697805"
+    },
+    {
+      "vector_id": "S4-CV-008",
+      "filename": "S4-CV-008.json",
+      "fixture_sha256": "5a95fc9a57ac78709563fa7963f0f8e5de7f5023100de655c2e6c4a0729697ca",
+      "expected_verdict": "invalid",
+      "expected_primary_reason": "transition_signature_invalid",
+      "producer_result_sha256": "ab1dab03cde38f167081136ae034036aa94f6a21344881832e194535bcf8a2e5",
+      "expected_bundle_sha256": "46d82f222a347e10e001cec4924cb94e3e3e1ad31bd4a63ece8a088edb8b2926",
+      "expected_proof_root": "783a79afb5624976c06d402ac8cfba8100c2b7b1192c7fdbf62490523ed9edb9"
+    },
+    {
+      "vector_id": "S4-CV-009",
+      "filename": "S4-CV-009.json",
+      "fixture_sha256": "cf9bc6d01d3dfbadb8927f28bf1b51ad4be57d720895e44549b6e629292cb9f9",
+      "expected_verdict": "invalid",
+      "expected_primary_reason": "provenance_signed_body_content_hash_mismatch",
+      "producer_result_sha256": "389fddf9efb3479b3732156cf9c30f6b35ddf47b117564e1d56cd86ad76d129f",
+      "expected_bundle_sha256": "9d30e4c366919fff731a8aa3c1d4438583c8e9d3d24c3f3f8c828ba089bef5da",
+      "expected_proof_root": "b93326bec5d9f4354ba9aa12b8063347f2d48a8ece28b6d996a098cf28e7f9f5"
+    },
+    {
+      "vector_id": "S4-CV-010",
+      "filename": "S4-CV-010.json",
+      "fixture_sha256": "d0fa5035f61dc2bbdcd8fde54aa5620f2d31d8b31bfe59fdc3be4a2c5f1f7e54",
+      "expected_verdict": "invalid",
+      "expected_primary_reason": "terminal_weight_mismatch",
+      "producer_result_sha256": "d625a25c984bd2436e95d0835cc90dde5c040c7c16813c75afe3c270ced0dc6c",
+      "expected_bundle_sha256": "fdecd0b71be1db37078dfc1ada953bfc0b2ac01264f6ac92f03c1c3c0aabfd4a",
+      "expected_proof_root": "7cd25884383af8c1facd16afb21f439d388592a1d2c0df1e9c77e762575f7f2e"
+    },
+    {
+      "vector_id": "S4-CV-011",
+      "filename": "S4-CV-011.json",
+      "fixture_sha256": "005dfb17dd0eb1bee90c6c6be1b4b16223f764594b075c4c44a1c47c1b151338",
+      "expected_verdict": "invalid",
+      "expected_primary_reason": "continuity_break",
+      "producer_result_sha256": "128195e18b4c40e05f0a00ca9ebc274cdf4b500f8ca3a4a1e3bee50c53aeb690",
+      "expected_bundle_sha256": "1ea6edce1654dcc4434588762abfae05cee7d9909507070f1c2d329799763c3e",
+      "expected_proof_root": "1bbbeb7d162fce70d2abc085bb9d6b38dcb08383fe50199e4c5b0f173e0e6b9e"
+    },
+    {
+      "vector_id": "S4-CV-012",
+      "filename": "S4-CV-012.json",
+      "fixture_sha256": "904a15b2822ade072f8f043242558cba50fa728104eea130c1fcec6b2d5fecbc",
+      "expected_verdict": "invalid",
+      "expected_primary_reason": "cognitive_projection_genesis_invalid",
+      "producer_result_sha256": "43990a7e15e9a0131807bfeb91ddc9a136a9bc6a25258fd07f99c52bce13811d",
+      "expected_bundle_sha256": "0bb9d0ce406671441efd7a912b0e6f28decb3085fad436d7babdb96dcc1262e1",
+      "expected_proof_root": "7a0fa647f2ba18e3cdd2c1bc7c7b773262f987c6a76ccf35fd20353d1bad1c4f"
+    },
+    {
+      "vector_id": "S4-CV-013",
+      "filename": "S4-CV-013.json",
+      "fixture_sha256": "0e6827dac7f354b3de2baf8e12055d1b4b360fd879877f9c46cdf6cf885bce88",
+      "expected_verdict": "invalid",
+      "expected_primary_reason": "cognitive_projection_fork",
+      "producer_result_sha256": "8ad566acf2105463ca0bd9024eecb27fcde56e58373e39501fb246f751577aaa",
+      "expected_bundle_sha256": "2df8509b11a58ff3f818351a805d48d666352de2955f3d2e97f43755958f4242",
+      "expected_proof_root": "75af6004e0e0fad85fb66c462d64519774bf29b98c134b00e91388a7960c3115"
+    },
+    {
+      "vector_id": "S4-CV-014",
+      "filename": "S4-CV-014.json",
+      "fixture_sha256": "3a5f098f08c420b85e98041831ed39e20d604bcd71fd28c27b063f16035c9678",
+      "expected_verdict": "invalid",
+      "expected_primary_reason": "cognitive_projection_disconnected",
+      "producer_result_sha256": "ecd9d529de1e576bc086b00504263351e6d43bf081b5fb8e389c3ab7b09ce33e",
+      "expected_bundle_sha256": "2e703293a7e6d984fe60e85d35818e5ba964622b4515bf27dfb25d23c8ae11ee",
+      "expected_proof_root": "c9df794b0165c1bcd4031813112cf418c701af67924cf9449d48876853c1c1be"
+    },
+    {
+      "vector_id": "S4-CV-015",
+      "filename": "S4-CV-015.json",
+      "fixture_sha256": "cf16d3ede76825b151467a9c35538f27e3520c3a3fe9c2a0b8454babf55efa89",
+      "expected_verdict": "invalid",
+      "expected_primary_reason": "cognitive_evidence_bundle_schema_invalid",
+      "producer_result_sha256": "43e591fa3717a19706aba2c5ec5d51f087a2686c581a59e25e8432de2cc80c66",
+      "expected_bundle_sha256": "7da98a7bde3118f56ea988e826e38b9d9310d30757983cce751b582679a5953f",
+      "expected_proof_root": null
+    },
+    {
+      "vector_id": "S4-CV-016",
+      "filename": "S4-CV-016.json",
+      "fixture_sha256": "4c05f5f69b820c98501677e1b2de68d73911fc08ca595f3e18623810c61078e2",
+      "expected_verdict": "invalid",
+      "expected_primary_reason": "cognitive_evidence_bundle_schema_invalid",
+      "producer_result_sha256": "f06d2ac04f64a64ea229afe52fd1337e890bff474bac09f85c9be1059cf6dac6",
+      "expected_bundle_sha256": "c5cba6ded043a30c4d27465f3403b57b43b3e9e23e59f9186a8c874d18fed0f6",
+      "expected_proof_root": null
+    },
+    {
+      "vector_id": "S4-CV-017",
+      "filename": "S4-CV-017.json",
+      "fixture_sha256": "bfce4b54d5532cf7734aa5a162797c2c73ae3de5cb5ad53540582a0b2ba722c0",
+      "expected_verdict": "invalid",
+      "expected_primary_reason": "cognitive_evidence_master_fingerprint_mismatch",
+      "producer_result_sha256": "b7f69e8e6ca4038680f5ad56e9f87b138a23cbb2f18f7b9a2b2d5a9ec573fd14",
+      "expected_bundle_sha256": "f84f5f2d8af9b2a628f0ebcae420fb256be5561788b018f8b74ff407180ea9b7",
+      "expected_proof_root": null
+    },
+    {
+      "vector_id": "S4-CV-018",
+      "filename": "S4-CV-018.json",
+      "fixture_sha256": "db8c733edc12d73e2b7edafbb538c44a6d7873ad7ba1ca3ab0c39a67c8c74a70",
+      "expected_verdict": "invalid",
+      "expected_primary_reason": "cognitive_evidence_event_identity_epoch_invalid",
+      "producer_result_sha256": "ca56a320ee435e1fd4083f3d212500494f50beaf3e0eac83252d6e4231c6eb83",
+      "expected_bundle_sha256": "c4fc58a2e5d25e16b5d9e891fbc71bce7cf0034ef88f6b969b741fa6d809c9e6",
+      "expected_proof_root": "6ef0569fef80e4b1f6f299aa680e751c48b5dc66e23d25b77bfab9932650a002"
+    }
+  ]
+}

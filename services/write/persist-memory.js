@@ -70,8 +70,9 @@ import { verifyToolActionAuthority } from '../orchestration/tool-action-ledger.j
 import { canonicalJson } from '../security/agent-identity.js';
 import { refreshCachedCredential } from '../security/credential-cache.js';
 import { recallAuthorizationService } from '../security/recall-authorization.js';
-import { sessionKeyLikePattern } from '../shared/session-scope.js';
+import { sessionKeyQueryScope } from '../shared/session-scope.js';
 import { classifyAndCommitRetainedMemoryGroup } from '../security/memory-epistemic-classifier.js';
+import { serializeMemoryValue } from '../security/protocol/memory-value.js';
 
 // ─── AGENT ID NORMALIZATION ─────────────────────────────────────────────────
 // Operator agent + normalization come from the cert-enveloped aimos_system_config
@@ -90,11 +91,29 @@ const AIMOS_SECRET_PATTERNS = [
 const QUARANTINE_STRUCTURAL_TYPES = new Set(['session_exchange']);
 
 export function redactAimosValue(text) {
-  let out = String(text || '');
-  for (const pat of AIMOS_SECRET_PATTERNS) {
-    out = out.replace(pat, '[REDACTED]');
+  const redactString = (value) => {
+    let rendered = String(value);
+    for (const pat of AIMOS_SECRET_PATTERNS) {
+      rendered = rendered.replace(pat, '[REDACTED]');
+    }
+    return rendered;
+  };
+  if (text == null) {
+    return '';
+  } else if (typeof text === 'string') {
+    return redactString(text);
   }
-  return out;
+  try {
+    return JSON.stringify(text, (key, value) => {
+      if (typeof value !== 'string') return value;
+      if (/^(?:access_token|refresh_token)$/i.test(key) && value.length >= 20) {
+        return '[REDACTED]';
+      }
+      return redactString(value);
+    });
+  } catch {
+    return redactString(text);
+  }
 }
 
 // ─── DATA CLASSIFICATION ────────────────────────────────────────────────────
@@ -217,22 +236,74 @@ export async function findRecentCommittedDuplicate(client, companyId, value, { s
   const cid = String(companyId || '').trim();
   const text = String(value ?? '');
   if (!cid) throw new Error('duplicate_company_required');
-  const sessionPattern = sessionId == null ? null : sessionKeyLikePattern(sessionId);
+  const sessionScope = sessionId == null ? null : sessionKeyQueryScope(sessionId);
   const digest = createHash('sha256').update(Buffer.from(text, 'utf8')).digest('hex');
   await client.query(
     'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
-    [`aimos:dedup:v2:${cid.length}:${cid}:${sessionPattern || 'global'}:${digest}`],
+    [`aimos:dedup:v2:${cid.length}:${cid}:${sessionScope?.pattern || 'global'}:${digest}`],
   );
   const existing = await client.query(
     `SELECT id::text
        FROM aimos_memories
       WHERE company_id = $1
         AND value = $2
-        AND ($3::text IS NULL OR key LIKE $3 ESCAPE '\\')
+        AND (
+          $3::text IS NULL
+          OR (
+            key LIKE $3 ESCAPE '\\'
+            AND key COLLATE "C" >= $4::text COLLATE "C"
+            AND key COLLATE "C" < $5::text COLLATE "C"
+          )
+        )
         AND created_at >= clock_timestamp() - interval '1 hour'
       ORDER BY created_at DESC, id DESC
       LIMIT 1`,
-    [cid, text, sessionPattern],
+    [
+      cid,
+      text,
+      sessionScope?.pattern || null,
+      sessionScope?.lowerBound || null,
+      sessionScope?.upperBound || null,
+    ],
+  );
+  return existing.rows[0] || null;
+}
+
+/**
+ * Resolve an already-committed Guide row carrying the exact current Genesis
+ * corpus binding. The content-dedup advisory lock is acquired by
+ * findRecentCommittedDuplicate() before this query is used, so a corpus upgrade
+ * cannot race itself into two equivalent heads.
+ */
+export async function findExactGenesisManifestBinding(client, companyId, key, value, body) {
+  const existing = await client.query(
+    `SELECT m.id::text
+       FROM aimos_memories m
+       JOIN aimos_memory_provenance p
+         ON p.memory_id = m.id
+        AND p.event_type = 'SAVE'
+      WHERE m.company_id = $1
+        AND m.key = $2
+        AND m.value = $3
+        AND m.source = 'guide:genesis-install'
+        AND p.body_json->>'genesis_manifest_schema' = $4
+        AND p.body_json->>'genesis_manifest_version' = $5
+        AND p.body_json->>'genesis_corpus_root' = $6
+        AND p.body_json->>'genesis_file_path' = $7
+        AND p.body_json->>'genesis_file_sha256' = $8
+        AND (p.body_json->>'genesis_file_bytes')::int = $9
+      LIMIT 1`,
+    [
+      companyId,
+      key,
+      value,
+      body.genesis_manifest_schema,
+      String(body.genesis_manifest_version),
+      body.genesis_corpus_root,
+      body.genesis_file_path,
+      body.genesis_file_sha256,
+      Number(body.genesis_file_bytes),
+    ],
   );
   return existing.rows[0] || null;
 }
@@ -252,6 +323,7 @@ async function commitInitialEvidence({
   actionSource,
   sessionId,
   liveContentHash,
+  memoryOriginatedAt,
   supersessionEvidence,
 }) {
   let signed;
@@ -374,15 +446,20 @@ async function commitInitialEvidence({
   // seen. Append a second, housekeeper-signed node in the same transaction that
   // binds the exact memory row, canonical live snapshot, and original request
   // evidence. This is a native commit receipt, not a fabricated user signature.
+  const memoryOriginatedAtUnixMs = new Date(memoryOriginatedAt).getTime();
+  if (!Number.isSafeInteger(memoryOriginatedAtUnixMs) || memoryOriginatedAtUnixMs <= 0) {
+    throw mutationCommitError('provenance', 'memory_originated_at_invalid');
+  }
   const bindingSigned = await signAsHousekeeper({
     event_type: 'BIND',
-    binding_schema_version: 3,
+    binding_schema_version: 4,
     memory_id: memoryId,
     company_id: companyId,
     subject_agent_id: subjectAgentId,
     key,
     session_id: sessionId || null,
     live_content_hash: Buffer.from(liveContentHash).toString('hex'),
+    memory_originated_at_unix_ms: memoryOriginatedAtUnixMs,
     attestation_reason: 'native_save_commit',
     attested_predecessor_mutation_hash: Buffer.from(provenance.mutationHash).toString('hex'),
     attested_predecessor_node_count: 1,
@@ -410,7 +487,8 @@ async function commitInitialEvidence({
     eventType: 'BIND',
     bodyJson: bindingSigned.body,
     liveContentHash,
-    bindingSchemaVersion: 3,
+    memoryOriginatedAt,
+    bindingSchemaVersion: 4,
     client,
   });
   if (!binding.ok) throw mutationCommitError('provenance', `binding_${binding.reason}`);
@@ -686,7 +764,9 @@ function isQuarantineCandidate(text) {
   return QUARANTINE_PATTERNS.some((p) => p.test(decoded));
 }
 
-function isPublisherVerifiedGenesisGuide({
+const HOUSEKEEPER_GENESIS_PUBLISHER_TIERS = new Set(['T1', 'T1_SYSTEM_SELF']);
+
+export function isPublisherVerifiedGenesisGuide({
   authority,
   companyId,
   agentId,
@@ -696,7 +776,7 @@ function isPublisherVerifiedGenesisGuide({
 }) {
   if (authority?.kind !== 'verified_request'
     || authority.agentId !== 'housekeeper'
-    || authority.identityTier !== 'T1_SYSTEM_SELF'
+    || !HOUSEKEEPER_GENESIS_PUBLISHER_TIERS.has(authority.identityTier)
     || companyId !== AIMOS_COMPANY_ID
     || agentId !== 'housekeeper'
     || source !== 'guide:genesis-install') {
@@ -848,7 +928,7 @@ export async function persistMemory({
   // initial provenance itself before it can return a memory id.
   const cid = company_id || AIMOS_COMPANY_ID;
   const aid = normalizeOperatorAgentId(agent_id);
-  const securityInput = typeof value === 'string' ? value : JSON.stringify(value);
+  const securityInput = serializeMemoryValue(value);
   const safeValue = redactAimosValue(value);
   const securityDecision = security_disposition?.decision || null;
   const securityReceipt = security_disposition?.receipt || null;
@@ -900,7 +980,7 @@ export async function persistMemory({
   // while storing the redacted body would falsely claim the signature covered
   // different bytes. The only sound native outcome is to reject and require the
   // dedicated Keychain credential lane.
-  if (mutation_authority?.kind === 'verified_request' && safeValue !== String(value || '')) {
+  if (mutation_authority?.kind === 'verified_request' && safeValue !== securityInput) {
     return {
       rejected: true,
       reason: 'secret_material_requires_credential_lane',
@@ -1082,9 +1162,29 @@ export async function persistMemory({
       clearanceLevel: effectiveClearanceLevel,
       dataClass,
     });
-    const duplicate = await findRecentCommittedDuplicate(txClient, cid, safeValue, {
+    let duplicate = await findRecentCommittedDuplicate(txClient, cid, safeValue, {
       sessionId: session_id,
     });
+    let genesisCorpusRebinding = false;
+    if (publisherVerifiedGenesis) {
+      const exactGenesisBinding = await findExactGenesisManifestBinding(
+        txClient,
+        cid,
+        key,
+        safeValue,
+        mutation_authority.body,
+      );
+      if (exactGenesisBinding) {
+        duplicate = exactGenesisBinding;
+      } else if (duplicate) {
+        // The body bytes are equal, but the signed corpus root/version/file
+        // commitment is new. This is a new immutable Guide version, not an
+        // exact semantic duplicate. It must continue through the canonical
+        // save, provenance, and supersession path.
+        duplicate = null;
+        genesisCorpusRebinding = true;
+      }
+    }
     if (duplicate) {
       const duplicateWalls = {
         ...(qualityResult.walls || {}),
@@ -1119,6 +1219,17 @@ export async function persistMemory({
           reasoning: 'Save rejected by the rollback-safe committed exact-value check.',
         },
       };
+    }
+    if (genesisCorpusRebinding) {
+      await logEvent(cid, aid, 'quality_gate_genesis_corpus_rebind', key, {
+        genesis_manifest_schema: mutation_authority.body.genesis_manifest_schema,
+        genesis_manifest_version: mutation_authority.body.genesis_manifest_version,
+        genesis_corpus_root: mutation_authority.body.genesis_corpus_root,
+        genesis_file_path: mutation_authority.body.genesis_file_path,
+        value_sha256: createHash('sha256').update(Buffer.from(safeValue, 'utf8')).digest('hex'),
+        reasoning: 'Identical Guide bytes were admitted as a new immutable version because the verified housekeeper request binds a different complete Genesis corpus commitment.',
+        source_knowledge: 'persist-memory.js — signed Genesis corpus rebinding through canonical persistence',
+      }, null, { client: txClient });
     }
     if (key) {
       // Serialize one immutable chain per company/key, including the no-row
@@ -1192,7 +1303,7 @@ export async function persistMemory({
                  $10, $11, $12, $13, $14, $15, $16, NOW(), NOW(), $17, $18,
                  CASE WHEN $6 = 'quarantine' OR $8 = 'quarantine' THEN 0.1 ELSE 1.0 END, 0, $19, $20, $21, $22, $23, $24, $25,
                  $26, $27, $28, $29, $30, $31)
-         RETURNING id, memory_tier, expires_at, last_verified_at, verified_by, verification_basis, freshness_state,
+         RETURNING id, created_at, memory_tier, expires_at, last_verified_at, verified_by, verification_basis, freshness_state,
            semantic_triples, surprise_at_save, compression_ratio, valid_from, valid_until
         `, [
           cid, aid, key, safeValue, JSON.stringify(embedding), effectiveScope,
@@ -1225,7 +1336,7 @@ export async function persistMemory({
                  $10, $11, $12, $13, $14, $15, $16, NOW(), NOW(), $17, $18,
                  CASE WHEN $6 = 'quarantine' OR $8 = 'quarantine' THEN 0.1 ELSE 1.0 END, 0, $19, $20, $21, $22, $23,
                  $24, $25, $26, $27, $28, $29)
-         RETURNING id, memory_tier, expires_at, last_verified_at, verified_by, verification_basis, freshness_state,
+         RETURNING id, created_at, memory_tier, expires_at, last_verified_at, verified_by, verification_basis, freshness_state,
            semantic_triples, surprise_at_save, compression_ratio, valid_from, valid_until
         `, [
           cid, aid, key, safeValue, JSON.stringify(embedding), effectiveScope,
@@ -1423,6 +1534,7 @@ export async function persistMemory({
     actionSource: effectiveSource,
     sessionId: session_id,
     liveContentHash: liveContentHashBuf,
+    memoryOriginatedAt: result.rows[0].created_at,
     supersessionEvidence,
   });
 

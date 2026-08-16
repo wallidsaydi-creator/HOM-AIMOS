@@ -82,7 +82,7 @@ export const PIPELINES = {
 
   // ─── RECALL ──────────────────────────────────────────────────────────────────
   recall: {
-    description: 'Memory retrieval: query → embedding → similarity → trust-score → concept-graph → signed epistemic projection → pre-disclosure calibration → bounded output',
+    description: 'Memory retrieval: query → native dense/sparse/temporal/entity/QuIM/QMD/HyDE/concept gears plus one bounded MAGMA/Reconstructed-Graph family channel → central RRF fusion → trust and signed epistemic projection → pre-disclosure calibration → Canary/Aladdin closure → decision-bound output receipt',
     entry: 'services/retrieval/native-recall-pipeline.js',
     services: [
       {
@@ -92,6 +92,26 @@ export const PIPELINES = {
       {
         path: './retrieval/native-recall.js',
         exports: ['resolveNativeRecallAuthority', 'admitNativeRecallCandidates', 'finalizeNativeRecall'],
+      },
+      {
+        path: './retrieval/native-retrieval-fusion.js',
+        exports: ['NATIVE_RETRIEVAL_FUSION_CONTRACT', 'fuseNativeRetrievalGears'],
+      },
+      {
+        path: './retrieval/magma-native-candidate.js',
+        exports: ['MAGMA_NATIVE_CANDIDATE_CONTRACT', 'composeMagmaNativeCandidate'],
+      },
+      {
+        path: './retrieval/magma-native-reader.js',
+        exports: ['MAGMA_NATIVE_READER_CONTRACT', 'openMagmaNativeReadSession'],
+      },
+      {
+        path: './retrieval/reconstructed-graph-native-candidate.js',
+        exports: ['RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT', 'composeReconstructedGraphNativeCandidate'],
+      },
+      {
+        path: './retrieval/magma-lineage-retriever.js',
+        exports: ['MAGMA_CONSTANTS', 'runMagmaRetrievalKernel'],
       },
       {
         path: './security/recall-authorization.js',
@@ -106,6 +126,23 @@ export const PIPELINES = {
         exports: ['calibrateEpistemicRecall'],
       },
       {
+        path: './security/system-config-store.js',
+        exports: ['systemConfigStore'],
+      },
+      {
+        path: './security/system-config-ledger.js',
+        exports: [
+          'validateTwinPrimeRetrievalPolicy',
+          'validateMagmaRetrievalCalibration',
+          'validateQuimRetrievalPolicy',
+          'validateConceptPprRetrievalPolicy',
+        ],
+      },
+      {
+        path: './retrieval/twin-prime-arithmetic.js',
+        exports: ['computeB2Distance', 'computeTwinPrimeDistance', 'gaussianTwinIndicator'],
+      },
+      {
         path: './core/embeddings.js',
         exports: ['getEmbedding'],
       },
@@ -118,8 +155,16 @@ export const PIPELINES = {
         exports: ['rankByTrust'],
       },
       {
-        path: './core/concept-graph.js',
-        exports: ['hybridRetrieve'],
+        path: './retrieval/quim-index.js',
+        exports: ['quimLookup', 'buildQuimIndex'],
+      },
+      {
+        path: './retrieval/query-entity-anchors.js',
+        exports: ['extractQueryEntityAnchors', 'normalizeEntityAnchor'],
+      },
+      {
+        path: './retrieval/concept-ppr-native.js',
+        exports: ['conceptPprLookup', 'buildConceptPprGraph'],
       },
       {
         path: './retrieval/recall-calibrator.js',

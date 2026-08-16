@@ -1,12 +1,13 @@
 /**
- * magma-lineage-retriever.js — MAGMA-compatible bounded lineage evidence paths
+ * magma-lineage-retriever.js — native MAGMA mathematical kernel and retained
+ * bounded legacy lineage evidence reader
  * Source: MAGMA: A Multi-Graph based Agentic Memory Architecture for AI Agents
  * (Jiang et al., arXiv:2601.03236, 2026)
  * Supporting source: Graph-based Agent Memory: Taxonomy, Techniques, and
  * Applications (Yang et al., arXiv:2602.05665, 2026)
  *
  * SERVICE CONNECTION GUIDE:
- * 1. ← Triggered by: routes/aimos.js when recall-mode-planner selects lineage mode
+ * 1. ← Called by: magma-native-candidate.js with admitted bounded evidence
  * 2. → Pulls from: concept_edges for semantic/concept paths
  * 3. → Pulls from: entity_memory_edges for entity paths
  * 4. → Pulls from: memory_cross_refs for semantic/zettelkasten paths
@@ -14,14 +15,16 @@
  *
  * LOGIC GUIDE:
  * MAGMA retrieves over orthogonal graph views: semantic, temporal, causal, and
- * entity. This service implements a bounded evidence-path layer over the tables
- * Aimos already has. It does not change PPR, embedding, MVS, or calibration math.
+ * entity. Pure exports implement paper Equations (4)-(6), bounded beam traversal,
+ * and explicit temporal/causal linearization over injected admitted evidence.
+ * The pure kernel is a native retrieval gear. The legacy read adapter later in
+ * this file remains non-authoritative and is not the canonical database path.
+ * Neither surface changes PPR, embeddings, MVS, calibration, canonical memory,
+ * or any database state.
  *
- * Additive Batch8 authority: HeLa-Mem: Hebbian Learning and Associative Memory
- * for LLM Agents. Aimos maps HeLa-Mem to diagnostic co-recall edge candidates:
- * w_ij_next = min(cap, (1 - lambda) * w_ij_observed + eta * I(pair co-recalled
- * in K_t)). This is read-path diagnostic output only: no persistence, no PPR
- * change, no ranking change, and no STDP formula change.
+ * The previous HeLa diagnostic loss term is prohibited by Aladdin full retention.
+ * Diagnostic co-recall evidence may only accumulate under a fixed cap; it never
+ * persists, changes ranking, changes PPR, or mutates canonical memory.
  */
 
 import { query as defaultQuery } from '../../db/connection.js';
@@ -32,8 +35,489 @@ const DEFAULT_MAX_HOPS = 2;
 const TEMPORAL_WINDOW_HOURS = 6;
 const HELA_MEM_MAX_ASSOCIATIVE_CANDIDATES = 12;
 const HELA_MEM_ETA = 0.15;
-const HELA_MEM_DECAY_LAMBDA = 0.05;
 const HELA_MEM_STRENGTH_CAP = 1.0;
+
+export const MAGMA_RELATIONS = Object.freeze(['semantic', 'temporal', 'causal', 'entity']);
+
+export const MAGMA_CONSTANTS = Object.freeze({
+  rrf_k: 60,
+  anchor_top_k: 20,
+  max_depth: 5,
+  max_nodes: 200,
+  max_beam_width: 20,
+  lambda_structure: 1.0,
+  lambda_semantic: 0.5,
+  path_carry_factor: 1.0,
+});
+
+export const MAGMA_GUARDRAILS = Object.freeze({
+  native_retrieval_kernel: true,
+  dormant: false,
+  injected_evidence_only: true,
+  accesses_database_in_pure_kernel: false,
+  uses_environment_authority: false,
+  uses_model_policy: false,
+  persists_graph: false,
+  mutates_canonical_memory: false,
+  prunes_canonical_memory: false,
+  applies_decay: false,
+  deletes_memory: false,
+  suppresses_memory: false,
+  query_rewrite: false,
+});
+
+const MAGMA_INTENT_PROFILES = Object.freeze({
+  WHY: Object.freeze({ semantic: 2.5, temporal: 0.5, causal: 5.0, entity: 2.5 }),
+  WHEN: Object.freeze({ semantic: 2.5, temporal: 4.0, causal: 3.0, entity: 2.5 }),
+  ENTITY: Object.freeze({ semantic: 2.5, temporal: 0.5, causal: 3.0, entity: 6.0 }),
+  SEMANTIC: Object.freeze({ semantic: 5.0, temporal: 0.5, causal: 3.0, entity: 2.5 }),
+});
+
+function asArray(value) {
+  return Array.isArray(value) ? value : [];
+}
+
+function finiteVector(value) {
+  return Array.isArray(value)
+    && value.length > 0
+    && value.every((entry) => Number.isFinite(Number(entry)))
+    ? value.map(Number)
+    : null;
+}
+
+function boundedInteger(value, fallback, minimum, maximum) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(minimum, Math.min(maximum, Math.floor(number)));
+}
+
+function normalizeIntent(value) {
+  const intent = String(value || '').trim().toUpperCase();
+  return Object.hasOwn(MAGMA_INTENT_PROFILES, intent) ? intent : 'SEMANTIC';
+}
+
+function normalizeRelation(value) {
+  const relation = String(value || '').trim().toLowerCase();
+  return MAGMA_RELATIONS.includes(relation) ? relation : null;
+}
+
+export function cosineSimilarityMagma(left, right) {
+  const a = finiteVector(left);
+  const b = finiteVector(right);
+  if (!a || !b || a.length !== b.length) return 0;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let index = 0; index < a.length; index += 1) {
+    dot += a[index] * b[index];
+    normA += a[index] ** 2;
+    normB += b[index] ** 2;
+  }
+  if (normA === 0 || normB === 0) return 0;
+  return Math.max(-1, Math.min(1, dot / Math.sqrt(normA * normB)));
+}
+
+/** Paper Equation (4), with ranks starting at one. */
+export function reciprocalRankFusionMagma(rankLists = [], k = MAGMA_CONSTANTS.rrf_k) {
+  const offset = Math.max(1, Number.isFinite(Number(k)) ? Number(k) : MAGMA_CONSTANTS.rrf_k);
+  const fused = new Map();
+  asArray(rankLists).forEach((rankList, channelIndex) => {
+    const seenInChannel = new Set();
+    asArray(rankList).forEach((item, index) => {
+      const id = String(item?.id || item || '').trim();
+      if (!id || seenInChannel.has(id)) return;
+      seenInChannel.add(id);
+      const previous = fused.get(id) || { id, score: 0, channels: [] };
+      previous.score += 1 / (offset + index + 1);
+      previous.channels.push(channelIndex);
+      fused.set(id, previous);
+    });
+  });
+  return [...fused.values()].sort((left, right) => right.score - left.score || left.id.localeCompare(right.id));
+}
+
+export function identifyMagmaAnchors({
+  vectorRanks = [],
+  lexicalRanks = [],
+  temporalRanks = [],
+  topK = MAGMA_CONSTANTS.anchor_top_k,
+} = {}) {
+  const cap = boundedInteger(topK, MAGMA_CONSTANTS.anchor_top_k, 1, MAGMA_CONSTANTS.anchor_top_k);
+  return reciprocalRankFusionMagma([vectorRanks, lexicalRanks, temporalRanks]).slice(0, cap);
+}
+
+export function relationIntentVectorMagma(intent = 'SEMANTIC', overrides = null) {
+  const profile = { ...MAGMA_INTENT_PROFILES[normalizeIntent(intent)] };
+  if (overrides && typeof overrides === 'object' && !Array.isArray(overrides)) {
+    for (const relation of MAGMA_RELATIONS) {
+      const candidate = Number(overrides[relation]);
+      if (Number.isFinite(candidate) && candidate >= 0) profile[relation] = candidate;
+    }
+  }
+  return Object.freeze(profile);
+}
+
+/** Paper Equation (6): phi(r,Tq)=w_Tq^T 1_r. */
+export function structuralAlignmentMagma(relation, intentWeights) {
+  const normalized = normalizeRelation(relation);
+  if (!normalized || !intentWeights || typeof intentWeights !== 'object') return 0;
+  const weight = Number(intentWeights[normalized]);
+  return Number.isFinite(weight) && weight >= 0 ? weight : 0;
+}
+
+/** Paper Equation (5): exp(lambda1*phi + lambda2*cosine). */
+export function transitionScoreMagma({
+  relation,
+  intentWeights,
+  neighborEmbedding,
+  queryEmbedding,
+  semanticSimilarity = null,
+  lambdaStructure = MAGMA_CONSTANTS.lambda_structure,
+  lambdaSemantic = MAGMA_CONSTANTS.lambda_semantic,
+} = {}) {
+  const lambda1 = Number(lambdaStructure);
+  const lambda2 = Number(lambdaSemantic);
+  if (!Number.isFinite(lambda1) || !Number.isFinite(lambda2) || lambda1 < 0 || lambda2 < 0) return 0;
+  const suppliedSimilarity = Number(semanticSimilarity);
+  const similarity = semanticSimilarity != null && Number.isFinite(suppliedSimilarity)
+    ? Math.max(-1, Math.min(1, suppliedSimilarity))
+    : cosineSimilarityMagma(neighborEmbedding, queryEmbedding);
+  const exponent = (lambda1 * structuralAlignmentMagma(relation, intentWeights))
+    + (lambda2 * similarity);
+  if (!Number.isFinite(exponent) || exponent > 700 || exponent < -700) return 0;
+  const score = Math.exp(exponent);
+  return Number.isFinite(score) ? score : 0;
+}
+
+export function buildMagmaGraph({ nodes = [], edges = [] } = {}) {
+  const normalizedNodes = [];
+  const nodeById = new Map();
+  for (const node of asArray(nodes)) {
+    const id = String(node?.id || '').trim();
+    const content = String(node?.content || '').replace(/\s+/g, ' ').trim();
+    if (!id || !content || nodeById.has(id)) continue;
+    const timestamp = asIso(node.timestamp || node.created_at);
+    const normalized = {
+      id,
+      content,
+      timestamp,
+      embedding: finiteVector(node.embedding),
+      reference_id: String(node.reference_id || id),
+      attributes: node.attributes && typeof node.attributes === 'object' && !Array.isArray(node.attributes)
+        ? { ...node.attributes }
+        : {},
+    };
+    normalizedNodes.push(normalized);
+    nodeById.set(id, normalized);
+    if (normalizedNodes.length >= MAGMA_CONSTANTS.max_nodes) break;
+  }
+
+  const normalizedEdges = [];
+  const rejectedEdges = [];
+  const edgeIds = new Set();
+  for (const edge of asArray(edges)) {
+    const id = String(edge?.id || '').trim();
+    const sourceId = String(edge?.source_id || '').trim();
+    const targetId = String(edge?.target_id || '').trim();
+    const relation = normalizeRelation(edge?.relation);
+    let reason = null;
+    if (!id || edgeIds.has(id)) reason = 'missing_or_duplicate_edge_id';
+    else if (!nodeById.has(sourceId) || !nodeById.has(targetId)) reason = 'unknown_endpoint';
+    else if (!relation) reason = 'unknown_relation';
+    else if (sourceId === targetId) reason = 'self_edge';
+    else if (relation === 'temporal') {
+      const sourceTime = Date.parse(nodeById.get(sourceId).timestamp || '');
+      const targetTime = Date.parse(nodeById.get(targetId).timestamp || '');
+      if (!Number.isFinite(sourceTime) || !Number.isFinite(targetTime) || sourceTime >= targetTime) {
+        reason = 'temporal_order_not_strict';
+      }
+    }
+    if (reason) {
+      rejectedEdges.push({ id: id || null, reason });
+      continue;
+    }
+    edgeIds.add(id);
+    normalizedEdges.push({ id, source_id: sourceId, target_id: targetId, relation });
+  }
+
+  const adjacency = new Map(normalizedNodes.map((node) => [node.id, []]));
+  for (const edge of normalizedEdges) {
+    adjacency.get(edge.source_id).push({ edge, target_id: edge.target_id });
+    if (edge.relation === 'semantic' || edge.relation === 'entity') {
+      adjacency.get(edge.target_id).push({ edge, target_id: edge.source_id });
+    }
+  }
+  for (const neighbors of adjacency.values()) {
+    neighbors.sort((left, right) => left.edge.id.localeCompare(right.edge.id) || left.target_id.localeCompare(right.target_id));
+  }
+
+  return { nodes: normalizedNodes, edges: normalizedEdges, nodeById, adjacency, rejected_edges: rejectedEdges };
+}
+
+export function adaptiveMagmaBeamTraversal({
+  graph,
+  anchors = [],
+  queryEmbedding = null,
+  intent = 'SEMANTIC',
+  intentWeights = null,
+  lambdaStructure = MAGMA_CONSTANTS.lambda_structure,
+  lambdaSemantic = MAGMA_CONSTANTS.lambda_semantic,
+  maxDepth = MAGMA_CONSTANTS.max_depth,
+  beamWidth = MAGMA_CONSTANTS.max_beam_width,
+  budget = MAGMA_CONSTANTS.max_nodes,
+} = {}) {
+  const safeGraph = graph?.nodeById instanceof Map && graph?.adjacency instanceof Map ? graph : buildMagmaGraph(graph);
+  const depthCap = boundedInteger(maxDepth, MAGMA_CONSTANTS.max_depth, 1, MAGMA_CONSTANTS.max_depth);
+  const beamCap = boundedInteger(beamWidth, MAGMA_CONSTANTS.max_beam_width, 1, MAGMA_CONSTANTS.max_beam_width);
+  const budgetCap = boundedInteger(budget, MAGMA_CONSTANTS.max_nodes, 1, MAGMA_CONSTANTS.max_nodes);
+  const weights = intentWeights || relationIntentVectorMagma(intent);
+  const finiteQueryEmbedding = finiteVector(queryEmbedding);
+  const queryNorm = finiteQueryEmbedding
+    ? Math.sqrt(finiteQueryEmbedding.reduce((sum, value) => sum + (value * value), 0))
+    : 0;
+  const semanticSimilarityByNode = new Map();
+  const semanticSimilarity = (node) => {
+    if (semanticSimilarityByNode.has(node.id)) return semanticSimilarityByNode.get(node.id);
+    const embedding = node.embedding;
+    if (!finiteQueryEmbedding || !embedding || embedding.length !== finiteQueryEmbedding.length || queryNorm === 0) {
+      semanticSimilarityByNode.set(node.id, 0);
+      return 0;
+    }
+    let dot = 0;
+    let nodeNormSquared = 0;
+    for (let index = 0; index < embedding.length; index += 1) {
+      dot += embedding[index] * finiteQueryEmbedding[index];
+      nodeNormSquared += embedding[index] * embedding[index];
+    }
+    const nodeNorm = Math.sqrt(nodeNormSquared);
+    const similarity = nodeNorm === 0
+      ? 0
+      : Math.max(-1, Math.min(1, dot / (nodeNorm * queryNorm)));
+    semanticSimilarityByNode.set(node.id, similarity);
+    return similarity;
+  };
+  const visited = new Set();
+  const selected = [];
+  let frontier = [];
+
+  for (const anchor of asArray(anchors)) {
+    const id = String(anchor?.id || anchor || '').trim();
+    if (!safeGraph.nodeById.has(id) || visited.has(id) || visited.size >= budgetCap) continue;
+    const initialScore = Number(anchor?.score);
+    const cumulativeScore = Number.isFinite(initialScore) && initialScore > 0 ? initialScore : 1;
+    visited.add(id);
+    const entry = { id, cumulative_score: cumulativeScore, depth: 0, path_node_ids: [id], path_edge_ids: [] };
+    frontier.push(entry);
+    selected.push(entry);
+  }
+  frontier.sort((left, right) => right.cumulative_score - left.cumulative_score || left.id.localeCompare(right.id));
+
+  const trace = [];
+  let terminationReason = !frontier.length
+    ? 'no_valid_anchors'
+    : visited.size >= budgetCap
+      ? 'budget_reached'
+      : 'maximum_depth';
+  for (let depth = 1; depth <= depthCap && frontier.length && visited.size < budgetCap; depth += 1) {
+    const candidates = new Map();
+    let cycleRejections = 0;
+    for (const current of frontier) {
+      for (const neighbor of safeGraph.adjacency.get(current.id) || []) {
+        if (visited.has(neighbor.target_id) || current.path_node_ids.includes(neighbor.target_id)) {
+          cycleRejections += 1;
+          continue;
+        }
+        const target = safeGraph.nodeById.get(neighbor.target_id);
+        const transitionScore = transitionScoreMagma({
+          relation: neighbor.edge.relation,
+          intentWeights: weights,
+          neighborEmbedding: target.embedding,
+          queryEmbedding,
+          semanticSimilarity: semanticSimilarity(target),
+          lambdaStructure,
+          lambdaSemantic,
+        });
+        if (!(transitionScore > 0)) continue;
+        const candidate = {
+          id: target.id,
+          cumulative_score: (current.cumulative_score * MAGMA_CONSTANTS.path_carry_factor) + transitionScore,
+          transition_score: transitionScore,
+          relation: neighbor.edge.relation,
+          depth,
+          parent_id: current.id,
+          path_node_ids: [...current.path_node_ids, target.id],
+          path_edge_ids: [...current.path_edge_ids, neighbor.edge.id],
+        };
+        const previous = candidates.get(target.id);
+        const candidatePath = candidate.path_node_ids.join('\0');
+        const previousPath = previous?.path_node_ids.join('\0') || '';
+        if (!previous
+          || candidate.cumulative_score > previous.cumulative_score
+          || (candidate.cumulative_score === previous.cumulative_score && candidatePath < previousPath)) {
+          candidates.set(target.id, candidate);
+        }
+      }
+    }
+    const remaining = budgetCap - visited.size;
+    const next = [...candidates.values()]
+      .sort((left, right) => right.cumulative_score - left.cumulative_score || left.id.localeCompare(right.id))
+      .slice(0, Math.min(beamCap, remaining));
+    trace.push({ depth, frontier_size: frontier.length, candidate_count: candidates.size, selected_count: next.length, cycle_rejections: cycleRejections });
+    if (!next.length) {
+      terminationReason = 'frontier_exhausted';
+      frontier = [];
+      break;
+    }
+    for (const entry of next) {
+      visited.add(entry.id);
+      selected.push(entry);
+    }
+    frontier = next;
+    if (visited.size >= budgetCap) terminationReason = 'budget_reached';
+  }
+
+  return {
+    selected,
+    visited_ids: [...visited],
+    trace,
+    intent: normalizeIntent(intent),
+    intent_weights: { ...weights },
+    termination_reason: terminationReason,
+    carry_policy: 'full_retention_additive_path_score',
+  };
+}
+
+function compareTemporalNodes(left, right) {
+  const leftTime = Date.parse(left.timestamp || '');
+  const rightTime = Date.parse(right.timestamp || '');
+  if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) return leftTime - rightTime;
+  if (Number.isFinite(leftTime) !== Number.isFinite(rightTime)) return Number.isFinite(leftTime) ? -1 : 1;
+  return left.id.localeCompare(right.id);
+}
+
+export function linearizeMagmaGraph({ graph, selectedIds = [], intent = 'SEMANTIC' } = {}) {
+  const safeGraph = graph?.nodeById instanceof Map ? graph : buildMagmaGraph(graph);
+  const selected = [];
+  const selectedSet = new Set();
+  for (const value of asArray(selectedIds)) {
+    const id = String(value?.id || value || '').trim();
+    if (safeGraph.nodeById.has(id) && !selectedSet.has(id)) {
+      selectedSet.add(id);
+      selected.push(id);
+    }
+  }
+  const normalizedIntent = normalizeIntent(intent);
+  let orderedIds = [...selected];
+  let cycleNodeIds = [];
+
+  if (normalizedIntent === 'WHEN') {
+    orderedIds.sort((left, right) => compareTemporalNodes(safeGraph.nodeById.get(left), safeGraph.nodeById.get(right)));
+  } else if (normalizedIntent === 'WHY') {
+    const indegree = new Map(orderedIds.map((id) => [id, 0]));
+    const outgoing = new Map(orderedIds.map((id) => [id, []]));
+    for (const edge of safeGraph.edges) {
+      if (edge.relation !== 'causal' || !selectedSet.has(edge.source_id) || !selectedSet.has(edge.target_id)) continue;
+      outgoing.get(edge.source_id).push(edge.target_id);
+      indegree.set(edge.target_id, indegree.get(edge.target_id) + 1);
+    }
+    const queue = orderedIds.filter((id) => indegree.get(id) === 0).sort();
+    const topological = [];
+    while (queue.length) {
+      const id = queue.shift();
+      topological.push(id);
+      for (const targetId of outgoing.get(id).sort()) {
+        indegree.set(targetId, indegree.get(targetId) - 1);
+        if (indegree.get(targetId) === 0) {
+          queue.push(targetId);
+          queue.sort();
+        }
+      }
+    }
+    cycleNodeIds = orderedIds.filter((id) => !topological.includes(id)).sort();
+    orderedIds = [...topological, ...cycleNodeIds];
+  }
+
+  const orderedNodes = orderedIds.map((id) => safeGraph.nodeById.get(id));
+  return {
+    ordered_nodes: orderedNodes,
+    cycle_detected: cycleNodeIds.length > 0,
+    cycle_node_ids: cycleNodeIds,
+    context: orderedNodes.map((node) => `<t:${node.timestamp || 'unknown'}> ${node.content} <ref:${node.reference_id}>`).join('\n'),
+  };
+}
+
+export function runMagmaRetrievalKernel({
+  nodes = [],
+  edges = [],
+  vectorRanks = [],
+  lexicalRanks = [],
+  temporalRanks = [],
+  queryEmbedding = null,
+  intent = 'SEMANTIC',
+  intentWeights = null,
+  topK = MAGMA_CONSTANTS.anchor_top_k,
+  maxDepth = MAGMA_CONSTANTS.max_depth,
+  beamWidth = MAGMA_CONSTANTS.max_beam_width,
+  budget = MAGMA_CONSTANTS.max_nodes,
+} = {}) {
+  const graph = buildMagmaGraph({ nodes, edges });
+  const anchors = identifyMagmaAnchors({ vectorRanks, lexicalRanks, temporalRanks, topK })
+    .filter((anchor) => graph.nodeById.has(anchor.id));
+  const traversal = adaptiveMagmaBeamTraversal({
+    graph,
+    anchors,
+    queryEmbedding,
+    intent,
+    intentWeights,
+    maxDepth,
+    beamWidth,
+    budget,
+  });
+  const linearization = linearizeMagmaGraph({
+    graph,
+    selectedIds: traversal.selected.map((entry) => entry.id),
+    intent,
+  });
+  return {
+    anchors,
+    traversal,
+    linearization,
+    graph_stats: {
+      nodes: graph.nodes.length,
+      edges: graph.edges.length,
+      rejected_edges: graph.rejected_edges.length,
+    },
+    formulae: {
+      anchor: 'Equation (4): sum_m 1/(k+rank_m(n))',
+      transition: 'Equation (5): exp(lambda1*phi(relation,intent)+lambda2*cosine(neighbor,query))',
+      alignment: 'Equation (6): w_intent^T one_hot(relation)',
+      path: 'full-retention adaptation: cumulative_next=cumulative_parent+transition_score',
+    },
+    guardrails: MAGMA_GUARDRAILS,
+    implementation_profile: {
+      paper_faithful: [
+        'Equation (4) reciprocal-rank fusion',
+        'Equation (5) exponential transition score',
+        'Equation (6) intent-relation alignment',
+        'bounded adaptive beam traversal',
+      ],
+      native_adaptations: [
+        'deterministic AIMOS query-intent classification instead of model-owned routing',
+        'signed principal-scoped topology reads with provenance admission',
+        'central candidate ownership and downstream epistemic/Canary/Aladdin disclosure closure',
+      ],
+      deferred: [
+        'model-produced causal edges without signed source-independent evidence',
+        'model-owned context synthesis',
+      ],
+    },
+  };
+}
+
+// Compatibility-only alias for historical receipts and focused tests. Runtime
+// ownership belongs to runMagmaRetrievalKernel; this alias carries no separate
+// activation or execution semantics.
+export const runMagmaDormantKernel = runMagmaRetrievalKernel;
 
 function clampLimit(limit) {
   return Math.min(Math.max(Number(limit || 10), 1), MAX_LIMIT);
@@ -546,7 +1030,7 @@ export function buildBoundedAssociativeEdgeCandidates(paths = [], limit = HELA_M
       const coActivationSignal = Math.min(1, candidate.co_recall_count);
       const nextStrength = Math.min(
         HELA_MEM_STRENGTH_CAP,
-        (1 - HELA_MEM_DECAY_LAMBDA) * candidate.observed_strength + HELA_MEM_ETA * coActivationSignal
+        candidate.observed_strength + HELA_MEM_ETA * coActivationSignal
       );
       const delta = Math.max(0, nextStrength - candidate.observed_strength);
       return {
@@ -659,10 +1143,10 @@ export async function retrieveMagmaLineage({
       associative_candidates: associativeCandidates,
       hela_mem_candidate_count: associativeCandidates.length,
       hela_mem_formula: {
-        rule: 'w_ij_next = min(cap, (1 - lambda) * w_ij_observed + eta * I(pair co-recalled in K_t))',
+        rule: 'w_ij_next = min(cap, w_ij_observed + eta * I(pair co-recalled in K_t))',
         eta: HELA_MEM_ETA,
-        lambda: HELA_MEM_DECAY_LAMBDA,
         cap: HELA_MEM_STRENGTH_CAP,
+        full_retention: true,
       },
       hela_mem_guardrails: {
         diagnostic_only: true,

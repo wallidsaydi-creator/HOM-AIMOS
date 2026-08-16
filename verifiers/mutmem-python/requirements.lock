@@ -1,0 +1,5 @@
+# Complete direct and transitive runtime dependency lock for the independent
+# verifier on CPython. Optional cryptography extras are intentionally absent.
+cryptography==49.0.0
+cffi==2.0.0
+pycparser==3.0

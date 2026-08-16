@@ -2,7 +2,7 @@
 /**
  * genesis-install.mjs — HOM-AIMOS Genesis Installer (Part A)
  *
- * This is HOM-AIMOS (not Oracle).
+ * This is the canonical HOM-AIMOS Genesis path.
  *
  * On a fresh clone + fresh Postgres there is **no database yet**.
  * Phase A2 is the step that creates the aimos database and agent_runtime role
@@ -242,8 +242,8 @@ async function phaseA5HousekeeperSelfProvision() {
   // pubkey we INSERT here must match the key that will actually SIGN saves.
   //
   // If a key already exists on disk we MUST reuse it (derive its pubkey), and
-  // NEVER overwrite it — it may back another install on this machine (e.g.
-  // oracle). Generating a NEW keypair while an old key sits on disk, and then
+  // NEVER overwrite it — it may back another install on this machine.
+  // Generating a NEW keypair while an old key sits on disk, and then
   // refusing to overwrite that old key would desynchronize the database public
   // key from the signing key and make signed Guide ingestion fail closed.
   // We only WRITE a fresh key when none exists.
@@ -422,8 +422,9 @@ async function phaseA5_2CalibrationGenesis() {
 }
 
 // Phase A5.5 — REMOVED (R11b). The housekeeper no longer masquerades as a
-// pseudo-session. The write-validator grants intrinsic write authority to
-// the exact T1_SYSTEM_SELF housekeeper principal.
+// pseudo-session. The write-validator grants intrinsic write authority to the
+// exact housekeeper principal under its Genesis T1_SYSTEM_SELF certificate or
+// the key-continuous master-signed T1 custody successor.
 
 export async function phaseA6GenesisGuideIngestion({
   targetPool = pool,
@@ -438,7 +439,7 @@ export async function phaseA6GenesisGuideIngestion({
   ]);
 
   console.log('Spinning up genesis-mode Express server (auth-gate + /aimos router, no background services).');
-  console.log('Each Guide .md → real signed POST /aimos/save as housekeeper T1_SYSTEM_SELF.');
+  console.log('Each Guide .md → real signed POST /aimos/save as the verified housekeeper system identity.');
   console.log('No direct persistMemory / commitProvenance calls. The auth-gate runs on every save.');
 
   if (!fs.existsSync(GUIDE_DIR) || !fs.statSync(GUIDE_DIR).isDirectory()) {
@@ -668,7 +669,7 @@ export async function phaseA6GenesisGuideIngestion({
   console.log('     Every genesis row has: sig + nonce + ts_signed + content_hash + chain_hash + mutation_hash.');
   console.log(`     Every provenance body commits to corpus_root=${manifestVerification.corpusRoot}.`);
   console.log('     Every Guide memory has a housekeeper-signed BIND receipt and zero are quarantined.');
-  console.log('     identity_tier=T1_SYSTEM_SELF, is_genesis=true (auto-derived via CHECK constraint).');
+  console.log('     identity_tier=verified housekeeper tier (T1 or T1_SYSTEM_SELF), is_genesis=true (auto-derived via CHECK constraint).');
   console.log('     Auth-gate ran on every save. No bypass.');
   return Object.freeze({ ...a6Result, quarantined: Number(quarantinedCount) });
 }
@@ -749,7 +750,7 @@ async function phaseA7Handoff() {
   console.log('    Each request must use its documented signed envelope and return a');
   console.log('    documented success response. No placeholder endpoint counts as proof.');
   console.log('');
-  console.log('B10. 16-pipeline + adaptive surface:');
+  console.log('B10. 21-stage native recall + 10-gear fusion surface:');
   console.log('    Signed recall with mode=adaptive (or whatever triggers the full retrieval stack).');
   console.log('    Verify recall_meta shows the expected multi-stage pipeline.');
   console.log('');

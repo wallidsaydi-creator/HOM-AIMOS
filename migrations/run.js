@@ -60,6 +60,112 @@ function leadingInt(filename) {
 }
 
 /**
+ * Split a PostgreSQL migration into top-level statements without treating
+ * semicolons inside strings, quoted identifiers, comments, or dollar-quoted
+ * bodies as boundaries. Concurrent DDL must be sent as one protocol statement;
+ * a multi-statement query is an implicit transaction block in PostgreSQL.
+ */
+function splitSqlStatements(sql) {
+  const source = String(sql || '');
+  const statements = [];
+  let current = '';
+  let mode = 'default';
+  let dollarTag = null;
+  let blockDepth = 0;
+
+  const push = () => {
+    const statement = current.trim();
+    if (statement) statements.push(statement);
+    current = '';
+  };
+
+  for (let index = 0; index < source.length; index++) {
+    const char = source[index];
+    const next = source[index + 1] || '';
+    current += char;
+
+    if (mode === 'line_comment') {
+      if (char === '\n') mode = 'default';
+      continue;
+    }
+    if (mode === 'block_comment') {
+      if (char === '/' && next === '*') {
+        current += next;
+        index++;
+        blockDepth++;
+      } else if (char === '*' && next === '/') {
+        current += next;
+        index++;
+        blockDepth--;
+        if (blockDepth === 0) mode = 'default';
+      }
+      continue;
+    }
+    if (mode === 'single_quote') {
+      if (char === '\\' && next) {
+        current += next;
+        index++;
+      } else if (char === "'" && next === "'") {
+        current += next;
+        index++;
+      } else if (char === "'") {
+        mode = 'default';
+      }
+      continue;
+    }
+    if (mode === 'double_quote') {
+      if (char === '"' && next === '"') {
+        current += next;
+        index++;
+      } else if (char === '"') {
+        mode = 'default';
+      }
+      continue;
+    }
+    if (mode === 'dollar_quote') {
+      if (source.startsWith(dollarTag, index)) {
+        current += dollarTag.slice(1);
+        index += dollarTag.length - 1;
+        mode = 'default';
+        dollarTag = null;
+      }
+      continue;
+    }
+
+    if (char === '-' && next === '-') {
+      current += next;
+      index++;
+      mode = 'line_comment';
+    } else if (char === '/' && next === '*') {
+      current += next;
+      index++;
+      mode = 'block_comment';
+      blockDepth = 1;
+    } else if (char === "'") {
+      mode = 'single_quote';
+    } else if (char === '"') {
+      mode = 'double_quote';
+    } else if (char === '$') {
+      const match = source.slice(index).match(/^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/);
+      if (match) {
+        dollarTag = match[0];
+        current += dollarTag.slice(1);
+        index += dollarTag.length - 1;
+        mode = 'dollar_quote';
+      }
+    } else if (char === ';') {
+      push();
+    }
+  }
+
+  if (mode === 'single_quote' || mode === 'double_quote' || mode === 'dollar_quote' || mode === 'block_comment') {
+    throw new Error(`migration_sql_unterminated_${mode}`);
+  }
+  push();
+  return statements;
+}
+
+/**
  * Enumerate migration files in the canonical apply order.
  * HARD ERROR on any .sql file that does not begin with a number — silence is
  * exactly what let two orphaned migrations never run.
@@ -97,10 +203,14 @@ async function applyMigration(pool, filename, sql) {
 
   if (CONCURRENTLY_RE.test(sql)) {
     // CONCURRENTLY cannot run inside a transaction block. Apply unwrapped,
-    // then record. A crash between the two leaves the index built but
-    // unrecorded; IF NOT EXISTS makes the retry idempotent.
+    // one protocol statement at a time, then record. Sending CREATE INDEX and
+    // COMMENT in one query creates an implicit transaction block and fails.
+    // A crash between statements leaves the index built but unrecorded;
+    // IF NOT EXISTS makes the retry idempotent.
     try {
-      await pool.query(sql);
+      const statements = splitSqlStatements(sql);
+      if (statements.length === 0) throw new Error('migration_sql_empty');
+      for (const statement of statements) await pool.query(statement);
       await pool.query(
         'INSERT INTO schema_migrations (filename, checksum) VALUES ($1, $2)',
         [filename, checksum]
@@ -254,4 +364,4 @@ if (process.argv[1] && process.argv[1].includes('run.js')) {
   }
 }
 
-export { runMigrations, getMigrationFiles };
+export { runMigrations, getMigrationFiles, splitSqlStatements };

@@ -32,6 +32,23 @@ export function sessionKeyLikePattern(sessionId, suffix = '') {
   return `${escapeSqlLikeLiteral(sessionKeyPrefix(sessionId))}${escapeSqlLikeLiteral(suffix)}%`;
 }
 
+/**
+ * Return the exact LIKE predicate plus an index-bounded range for one retained
+ * session-key family. Callers must keep the LIKE predicate as the correctness
+ * boundary and compare both bounds with `COLLATE "C"`. Locale-aware text
+ * order does not guarantee that `prefix + U+FFFF` follows every ASCII child;
+ * bytewise collation does, and prevents a retry from overlooking a retained
+ * turn. The range is a planner hint, never an authority boundary.
+ */
+export function sessionKeyQueryScope(sessionId, suffix = '') {
+  const lowerBound = `${sessionKeyPrefix(sessionId)}${String(suffix)}`;
+  return Object.freeze({
+    pattern: `${escapeSqlLikeLiteral(lowerBound)}%`,
+    lowerBound,
+    upperBound: `${lowerBound}\uFFFF`,
+  });
+}
+
 export const SESSION_SCOPE_CONSTANTS = Object.freeze({
   MAX_SESSION_ID_BYTES,
 });

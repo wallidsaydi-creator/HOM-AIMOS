@@ -24,10 +24,8 @@ import { loadCredentialCache } from '../services/security/credential-cache.js';
 import { canonicalJson } from '../services/security/agent-identity.js';
 import { signAsHousekeeper } from '../services/security/housekeeper-signer.js';
 import { systemConfigStore } from '../services/security/system-config-store.js';
-import {
-  normalizeNativeRecallCommand,
-  recallMerkleRoot,
-} from '../services/retrieval/native-recall.js';
+import { normalizeNativeRecallCommand } from '../services/retrieval/native-recall.js';
+import { recallMerkleRoot } from '../services/security/protocol/mutmem-protocol.js';
 import { resolveAimosDatabaseName } from '../services/core/runtime-config.js';
 import { validateReplayOrigin } from './replay-sessions.mjs';
 import {
@@ -560,7 +558,22 @@ export function verifyRecallReceipt({
   const command = normalizeNativeRecallCommand(signedBody);
   const expectedCommandHash = canonicalSha256(command);
   const expectedOuterHash = canonicalSha256(signedBody);
-  const expectedRoot = recallMerkleRoot(receipt.evidence).toString('hex');
+  let merkleEntries = receipt.evidence;
+  if (receipt.merkle_schema != null) {
+    if (receipt.merkle_schema !== 'hom-aimos/recall-merkle/v2-epistemic-decision'
+      || !/^[0-9a-f]{64}$/.test(String(receipt.epistemic_decision_sha256 || ''))
+      || !Array.isArray(receipt.merkle_entries)
+      || receipt.merkle_entries.length !== receipt.evidence.length + 1
+      || canonicalJson(receipt.merkle_entries[0]) !== canonicalJson({
+        entry_type: 'epistemic_decision',
+        decision_sha256: receipt.epistemic_decision_sha256,
+      })
+      || canonicalJson(receipt.merkle_entries.slice(1)) !== canonicalJson(receipt.evidence)) {
+      throw new Error('recall_receipt_epistemic_binding_invalid');
+    }
+    merkleEntries = receipt.merkle_entries;
+  }
+  const expectedRoot = recallMerkleRoot(merkleEntries).toString('hex');
   if (receipt.command_hash !== expectedCommandHash
     || receipt.outer_request_hash !== expectedOuterHash
     || receipt.merkle_root !== expectedRoot
