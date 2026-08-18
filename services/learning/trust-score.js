@@ -144,9 +144,10 @@ function normalizeCreditAttribution(creditScore, maxCredit = 100) {
  * Rank memories by trust score (descending)
  *
  * @param {Array<object>} memories - Array of memory objects
+ * @param {object} [options] - { memoryCount } for scale-adaptive ceilings
  * @returns {Array<object>}
  */
-export function rankByTrust(memories) {
+export function rankByTrust(memories, options = {}) {
   if (!Array.isArray(memories)) {
     return [];
   }
@@ -154,7 +155,7 @@ export function rankByTrust(memories) {
   // Compute trust for each and sort
   const scored = memories.map(mem => ({
     memory: mem,
-    trust_score: computeTrustScore(mem)
+    trust_score: computeTrustScore(mem, options)
   }));
 
   scored.sort((a, b) => b.trust_score - a.trust_score);

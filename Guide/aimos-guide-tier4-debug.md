@@ -4,12 +4,12 @@
 
 ## Pipeline Manifest
 
-**Single source of truth:** `services/pipeline-manifest.js` — 156 declared service connections across 6 pipelines, validated at boot.
+**Single source of truth:** `services/pipeline-manifest.js` — 153 declared service connections across 6 pipelines, validated at boot.
 
 | Pipeline | Entry | Declared service modules |
 |----------|-------|-------------------------:|
 | Save | `routes/aimos.js` | 13 |
-| Recall | `services/retrieval/native-recall-pipeline.js` | 78 |
+| Recall | `services/retrieval/native-recall-pipeline.js` | 75 |
 | Agent Run | `services/orchestration/agent-runner.js` | 34 |
 | Dream | `jobs/nightly-dream.js` | 20 |
 | Heartbeat | `jobs/heartbeat.js` | 1 |

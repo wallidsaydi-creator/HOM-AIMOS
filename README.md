@@ -12,7 +12,7 @@ identity owns autonomous maintenance without borrowing an enrolled user agent.
 
 HOM-AIMOS is a complete persistent-memory backend, not a provenance layer
 attached to a vector store. Its source-derived architecture binds a
-300-service census and declares six critical pipelines containing 156 service
+300-service census and declares six critical pipelines containing 153 service
 connections. Save and recall each expose eight principal native execution
 boundaries.
 
@@ -37,7 +37,7 @@ boundaries.
 | 2 | Embedding and candidate opening | `services/core/embeddings.js` |
 | 3 | Similarity statistics | `services/retrieval/similarity-stats.js` |
 | 4 | Trust scoring | `services/learning/trust-score.js` |
-| 5 | Permanent dense, sparse, temporal, entity, QuIM, QMD, HyDE, and concept gears plus one bounded MAGMA/Reconstructed-Graph family channel with central deterministic RRF | `services/retrieval/native-recall-pipeline.js`, `services/retrieval/native-retrieval-fusion.js`, `services/retrieval/reconstructed-graph-native-candidate.js` |
+| 5 | Permanent dense, sparse, temporal, entity, QuIM, QMD, HyDE, and concept gears plus one bounded Reconstructed-Graph G2 family channel with central deterministic RRF | `services/retrieval/native-recall-pipeline.js`, `services/retrieval/native-retrieval-fusion.js`, `services/retrieval/reconstructed-graph-native-candidate.js` |
 | 6 | Verified epistemic projection and selection | `services/retrieval/epistemic-trust-retrieval.js` |
 | 7 | Pre-disclosure calibration | `services/retrieval/recall-calibrator.js` |
 | 8 | Bounded evidence and signed receipt | `services/retrieval/native-recall.js` |
@@ -51,15 +51,13 @@ family channel. Every outer channel has one vote in deterministic reciprocal
 rank fusion; a graph subgear cannot multiply its voting mass or remove the
 admitted baseline.
 
-MAGMA is permanently compiled into the graph-family channel. It has no runtime
-activation mode. Its principal-scoped reader opens a bounded topology, its
-four-view kernel contributes rank evidence and provenance-re-admitted
-discoveries, and the ordinary epistemic, Canary, retention, and signed-recall
-owners still decide disclosure. Optional signed configuration may tighten
-bounded calibration, but cannot enable, disable, or promote MAGMA above the
-other gears.
+MAGMA is retained as dormant research. Its paper adaptation, principal-scoped
+reader, pure kernel, tests, and signed historical artifacts remain reviewable,
+but canonical recall does not call it, accept its discoveries, or give it a
+rank vote. This boundary follows a current-stack utility/latency failure and is
+represented explicitly in recall metadata rather than hidden behind a flag.
 
-Reconstructed Graph G2 is a second bounded subgear in that same family channel.
+Reconstructed Graph G2 is the sole bounded subgear in the live family channel.
 Additional graph candidates are evaluated one at a time as marginal additions
 to the complete gearbox; they are not advertised as active merely because a
 service or isolated test exists.
@@ -100,14 +98,14 @@ proof-root contracts. The normative byte layout and invariants are published
 in [`docs/security/cognitive-weight-chain-SPEC.md`](docs/security/cognitive-weight-chain-SPEC.md).
 
 The save manifest declares 13 critical service connections; recall declares
-78 spanning exact-identifier, semantic, temporal, graph, procedural, and
+75 spanning exact-identifier, semantic, temporal, graph, procedural, and
 lineage paths. The service census contains retrieval 68, orchestration 43,
 security 48, temporal 25, learning 23, observe 22, core 15, write 13, context
 9, integrations 9, governance 7, dream 5, ingestion 4, shared 4, answering 2,
 runtime 2, and caching 1.
 
 `services/pipeline-manifest.js` is the source of truth for the six critical
-connection maps. Its validator dynamically imports all 156 declarations and
+connection maps. Its validator dynamically imports all 153 declarations and
 checks their named exports; architecture tests and the release-source gate fail
 when the declared topology and public documentation diverge.
 
@@ -142,11 +140,11 @@ save, recall, mutation, tools, graph selection, and evidence output:
   retained under quarantine; marked relay, tool input, or tool output is kept
   out of the downstream execution context. Canary detects its explicit marker
   family, not arbitrary unmarked poisoning.
-- **Governed graph retrieval:** MAGMA and the source-bound Reconstructed Graph
-  G2 adaptation are bounded native subgears inside one structural family channel,
+- **Governed graph retrieval:** the source-bound Reconstructed Graph G2
+  adaptation is the sole live subgear inside one structural family channel,
   fused with dense, sparse, temporal, entity, QuIM, QMD, HyDE, and concept
-  evidence. Neither has an activation mode or can replace the admitted
-  baseline. The caller's
+  evidence. It cannot replace the admitted baseline. MAGMA is retained dormant
+  with zero runtime execution or rank contribution. The caller's
   verified identity/grant scopes its reads; provenance, epistemic, Canary,
   Aladdin-retention, and signed-recall owners retain final disclosure authority.
 - **Signed self-red-teaming:** the SABER-inspired operational harness commits a
@@ -171,7 +169,8 @@ all-or-nothing whole-brain purge that emits a signed terminal receipt.
 | Cognitive tamper cases detected | 4/4 |
 | SQL/portable cognitive verifier parity | 9/9 records |
 | Signed cognitive-transition latency, median | 4.865 ms |
-| MAGMA permanent native-gear proof | 20/20 signed recalls; 8/20 graph-discovery observations; candidate p95 218.941 ms under its fixed 250 ms gate; 1/20 individual calls exceeded 250 ms |
+| MAGMA retained research proof (historical) | 20/20 signed recalls; 8/20 graph-discovery observations; candidate p95 218.941 ms under its fixed 250 ms gate |
+| MAGMA current-stack ruling | Dormant: later Gate50 evidence recall −0.028 and judged accuracy −0.04, candidate p95 430.081 ms; no canonical recall caller or rank vote |
 | Reconstructed Graph G2 additive proof | 840/840 exact fixed-corpus rows; multi-hop nDCG@20 +0.012325; evidence recall@20 +0.021237 |
 | Reconstructed Graph G2 canonical live proof | 20/20 signed recalls; incremental p95 27.023 ms under its unchanged 50 ms gate; canonical roots unchanged |
 | SABER-inspired live operational campaign | 27/27 attacks blocked or retained-quarantined; 0/28 benign false positives; 0 indeterminate |
@@ -179,10 +178,10 @@ all-or-nothing whole-brain purge that emits a signed terminal receipt.
 These are distinct protocols and are not averaged. The utility, poisoning, and
 mutation figures regenerate from the sanitized, self-hashed aggregate in
 [`eval/publication/verified-benchmark-results.json`](eval/publication/verified-benchmark-results.json),
-which binds the promoted publication runs by SHA-256. MAGMA and the operational
-red-team campaign are later signed live conformance gates with separate
-hash-addressed artifacts; they are not silently folded into the paper's
-benchmark aggregate.
+which binds the promoted publication runs by SHA-256. MAGMA's retained
+historical artifacts and the operational red-team campaign are separate from
+that aggregate; dormant MAGMA evidence is not presented as current runtime
+performance.
 
 The central security distinction is **integrity, not omniscience**. AIMOS can
 prove that an authorized identity asserted a specific memory at a particular

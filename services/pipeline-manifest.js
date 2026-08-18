@@ -82,7 +82,7 @@ export const PIPELINES = {
 
   // ─── RECALL ──────────────────────────────────────────────────────────────────
   recall: {
-    description: 'Memory retrieval: query → native dense/sparse/temporal/entity/QuIM/QMD/HyDE/concept gears plus one bounded MAGMA/Reconstructed-Graph family channel → central RRF fusion → trust and signed epistemic projection → pre-disclosure calibration → Canary/Aladdin closure → decision-bound output receipt',
+    description: 'Memory retrieval: query → native dense/sparse/temporal/entity/QuIM/QMD/HyDE/concept gears → request-bound Canary/quarantine graph admission → one bounded Reconstructed-Graph G2 family channel → central RRF fusion → trust and signed epistemic projection → pre-disclosure Canary/Aladdin closure → decision-bound output receipt; MAGMA remains retained dormant research with no pipeline edge',
     entry: 'services/retrieval/native-recall-pipeline.js',
     services: [
       {
@@ -98,20 +98,8 @@ export const PIPELINES = {
         exports: ['NATIVE_RETRIEVAL_FUSION_CONTRACT', 'fuseNativeRetrievalGears'],
       },
       {
-        path: './retrieval/magma-native-candidate.js',
-        exports: ['MAGMA_NATIVE_CANDIDATE_CONTRACT', 'composeMagmaNativeCandidate'],
-      },
-      {
-        path: './retrieval/magma-native-reader.js',
-        exports: ['MAGMA_NATIVE_READER_CONTRACT', 'openMagmaNativeReadSession'],
-      },
-      {
         path: './retrieval/reconstructed-graph-native-candidate.js',
         exports: ['RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT', 'composeReconstructedGraphNativeCandidate'],
-      },
-      {
-        path: './retrieval/magma-lineage-retriever.js',
-        exports: ['MAGMA_CONSTANTS', 'runMagmaRetrievalKernel'],
       },
       {
         path: './security/recall-authorization.js',

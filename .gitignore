@@ -101,3 +101,6 @@ eval/public-results/
 # Whole-brain purge receipts (Amendment 1): carry master key fingerprints and
 # pre-purge row counts. Attestation artifacts — durable, but never committed.
 artifacts/
+
+# Unreleased research lanes are not source-release inputs.
+research/

@@ -19,6 +19,34 @@ function sha256Hex(value) {
   return sha256(value).toString('hex');
 }
 
+export function genesisGuideMemoryType(content) {
+  const firstH1 = (String(content || '').match(/^#\s*(.+)$/m) || [])[1] || '';
+  if (/guide|manual|how to|connect|llm|agent/i.test(firstH1)) return 'procedural_seed';
+  return 'book_extract';
+}
+
+export function genesisGuideRequestBody({ manifest, fileRecord, content, key, signedTs = null }) {
+  return {
+    company_id: 'hom',
+    agent_id: 'housekeeper',
+    key,
+    value: content,
+    memory_type: genesisGuideMemoryType(content),
+    source: 'guide:genesis-install',
+    memory_tier: 'long-term',
+    scope: 'system',
+    clearance_level: 10,
+    is_genesis: true,
+    genesis_manifest_schema: manifest.schema,
+    genesis_manifest_version: manifest.version,
+    genesis_corpus_root: manifest.corpusRoot,
+    genesis_file_path: fileRecord.path,
+    genesis_file_sha256: fileRecord.sha256,
+    genesis_file_bytes: fileRecord.bytes,
+    ...(signedTs == null ? {} : { ts_signed: Number(signedTs) }),
+  };
+}
+
 function leafPreimage(record) {
   return JSON.stringify({
     bytes: record.bytes,

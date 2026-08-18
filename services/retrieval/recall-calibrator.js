@@ -221,23 +221,56 @@ async function readVerifiedStream(companyId, client) {
 
 async function loadSnapshotWithClient(companyId, client) {
   const rows = await readVerifiedStream(companyId, client);
-  return { rows, snapshot: reconstructCalibrationSnapshot(rows) };
+  const relevant = calibrationRows(rows);
+  const head = relevant.length
+    ? Object.freeze({
+        event_id: String(relevant.at(-1).id),
+        mutation_hash: Buffer.from(relevant.at(-1).mutation_hash).toString('hex'),
+      })
+    : null;
+  return { rows, snapshot: reconstructCalibrationSnapshot(rows), head };
+}
+
+async function readCalibrationStreamHead(companyId, client) {
+  const result = await client.query(
+    `SELECT id::text AS event_id,
+            encode(mutation_hash, 'hex') AS mutation_hash
+       FROM public.aimos_events
+      WHERE company_id = $1
+        AND signer_agent_id = 'housekeeper'
+        AND operation = ANY($2::text[])
+        AND ledger_version = 1
+      ORDER BY ts_signed DESC, ts DESC, id DESC
+      LIMIT 1`,
+    [companyId, [GENESIS_OPERATION, OBSERVATION_OPERATION, UPDATE_OPERATION]],
+  );
+  const row = result.rows?.[0];
+  return row ? Object.freeze({
+    event_id: String(row.event_id),
+    mutation_hash: String(row.mutation_hash).toLowerCase(),
+  }) : null;
 }
 
 export async function getVerifiedCalibrationSnapshot(companyId = COMPANY, { client = null } = {}) {
   const company = String(companyId || '').trim();
   if (!company) throw new Error('calibration_company_required');
-  if (!client) {
-    const cached = snapshotCache.get(company);
-    if (cached && (Date.now() - cached.fetchedAt) < CACHE_TTL_MS) return cached.snapshot;
+  const cached = snapshotCache.get(company);
+  if (cached && (Date.now() - cached.fetchedAt) < CACHE_TTL_MS) return cached.snapshot;
+  if (cached && client) {
+    const head = await readCalibrationStreamHead(company, client);
+    if (canonicalJson(head) === canonicalJson(cached.head)) {
+      snapshotCache.set(company, { ...cached, fetchedAt: Date.now() });
+      return cached.snapshot;
+    }
   }
-  const snapshot = client
-    ? (await loadSnapshotWithClient(company, client)).snapshot
+  const loaded = client
+    ? await loadSnapshotWithClient(company, client)
     : await withTransaction(
-        async (tx) => (await loadSnapshotWithClient(company, tx)).snapshot,
+        async (tx) => loadSnapshotWithClient(company, tx),
         { restricted: true, client_id: company, agent_id: 'housekeeper' },
       );
-  if (!client) snapshotCache.set(company, { snapshot, fetchedAt: Date.now() });
+  const snapshot = loaded.snapshot;
+  snapshotCache.set(company, { snapshot, head: loaded.head, fetchedAt: Date.now() });
   return snapshot;
 }
 

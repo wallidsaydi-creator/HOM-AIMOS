@@ -108,10 +108,13 @@ test('a single unverified query echo is response-local suspect, not persistently
     ],
     limit: 2,
   });
-  const quoted = result.memories.find((entry) => entry.id === 'quoted-question');
+  const quoted = result.decision.decisions.find((entry) => entry.memory_id === 'quoted-question');
   assert.equal(quoted.epistemic_state, 'query_lure_suspect');
   assert.equal(quoted.evidence_handling, 'untrusted_reference_only');
-  assert.equal(quoted.epistemic_signals.persistent_reweight_eligible, false);
+  assert.equal(quoted.persistent_reweight_eligible, false);
+  assert.equal(result.memories.some((entry) => entry.id === 'quoted-question'), false);
+  assert.deepEqual(result.decision.withheld_untrusted_memory_ids, ['quoted-question']);
+  assert.equal(result.decision.active_context_withholding_enforced, true);
 });
 
 test('existing quarantine remains retained at the 0.1 epistemic floor', () => {
@@ -126,10 +129,11 @@ test('existing quarantine remains retained at the 0.1 epistemic floor', () => {
     ],
     limit: 1,
   });
-  assert.equal(result.memories.length, 1);
-  assert.equal(result.memories[0].epistemic_state, 'retained_quarantine');
-  assert.equal(result.memories[0].evidence_handling, 'untrusted_reference_only');
-  assert.equal(result.memories[0].epistemic_score, 0.1);
+  assert.equal(result.memories.length, 0);
+  assert.equal(result.decision.decisions[0].epistemic_state, 'retained_quarantine');
+  assert.equal(result.decision.decisions[0].evidence_handling, 'untrusted_reference_only');
+  assert.equal(result.decision.decisions[0].epistemic_score, 0.1);
+  assert.deepEqual(result.decision.withheld_untrusted_memory_ids, ['quarantine']);
   assert.equal(result.decision.abstention_required, true);
 });
 
@@ -145,11 +149,13 @@ test('stored signed poison labels take precedence over valid transport provenanc
     ],
     limit: 1,
   });
-  assert.equal(result.memories[0].epistemic_state, 'poison_likely');
-  assert.equal(result.memories[0].epistemic_score, 0.1);
-  assert.equal(result.memories[0].evidence_handling, 'untrusted_reference_only');
-  assert.equal(result.memories[0].epistemic_signals.provenance_valid, true);
-  assert.equal(result.memories[0].epistemic_signals.stored_epistemic_confidence_milli, 900);
+  assert.equal(result.memories.length, 0);
+  const decision = result.decision.decisions[0];
+  assert.equal(decision.epistemic_state, 'poison_likely');
+  assert.equal(decision.epistemic_score, 0.1);
+  assert.equal(decision.evidence_handling, 'untrusted_reference_only');
+  assert.equal(decision.stored_epistemic_confidence_milli, 900);
+  assert.deepEqual(result.decision.withheld_untrusted_memory_ids, ['labelled-poison']);
   assert.equal(result.decision.abstention_required, true);
 });
 
@@ -576,6 +582,16 @@ test('native twin-prime integration is signed-policy owned and shortcut closed',
     (pipeline.match(/epistemicDecisionHash: epistemicReceiptDecisionHash/g) || []).length,
     5,
   );
+  assert.equal(
+    (pipeline.slice(pipeline.indexOf('export async function executeNativeRecall'))
+      .match(/calibrateAndFinalizeNativeRecallReturn\(\{/g) || []).length,
+    5,
+  );
+  assert.match(pipeline, /securityClosureDecisionHash: securityClosure\.decision\.decision_sha256/);
+  assert.match(pipeline, /returnProjectionDecision: projection/);
   assert.match(receipt, /hom-aimos\/recall-merkle\/v2-epistemic-decision/);
+  assert.match(receipt, /hom-aimos\/recall-merkle\/v3-epistemic-and-security-closure/);
   assert.match(receipt, /entry_type: 'epistemic_decision'/);
+  assert.match(receipt, /entry_type: 'canary_final_security_closure'/);
+  assert.match(receipt, /canary_final_security_closure_sha256/);
 });

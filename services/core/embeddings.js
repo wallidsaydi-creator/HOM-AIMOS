@@ -131,6 +131,35 @@ export function getEmbeddingHealth() {
 }
 
 /**
+ * Complete one deterministic local inference before the server advertises
+ * recall readiness. This creates no memory, cache authority, network request,
+ * or user-derived state; it only proves the pinned 768d runtime is executable.
+ */
+export async function prewarmEmbeddingRuntime() {
+  const startedAt = performance.now();
+  const extractor = await getPipeline();
+  const output = await extractor('HOM AIMOS local embedding runtime readiness', {
+    pooling: 'mean',
+    normalize: true,
+  });
+  const dimension = Number(output?.data?.length || 0);
+  if (dimension !== 768) {
+    throw new Error(`embedding_runtime_prewarm_dimension_invalid:${dimension}`);
+  }
+  _health.healthy = true;
+  _health.lastCheck = Date.now();
+  return Object.freeze({
+    ready: true,
+    model_id: MODEL_ID,
+    revision: MODEL_REVISION,
+    dimension,
+    runtime_ms: Number((performance.now() - startedAt).toFixed(3)),
+    canonical_memory_changed: false,
+    authority_changed: false,
+  });
+}
+
+/**
  * Generate a 768-dimension embedding vector from text.
  * Runs entirely local — no network calls after initial model download.
  *

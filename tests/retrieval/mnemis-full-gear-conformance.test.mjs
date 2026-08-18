@@ -93,7 +93,7 @@ test('Mnemis remains one graph-family subgear alongside every native retrieval c
     'hyde',
     'entity',
     'concept_ppr',
-    'magma',
+    'graph_family',
     'temporal',
   ].sort();
 
@@ -107,9 +107,9 @@ test('Mnemis remains one graph-family subgear alongside every native retrieval c
   );
   assert.deepEqual(
     baseline.decision.channels
-      .filter((channel) => channel.gear !== 'magma'),
+      .filter((channel) => channel.gear !== 'graph_family'),
     candidate.decision.channels
-      .filter((channel) => channel.gear !== 'magma'),
+      .filter((channel) => channel.gear !== 'graph_family'),
   );
   assert.equal(baselineFamily.decision.outer_channel_count, 1);
   assert.equal(candidateFamily.decision.outer_channel_count, 1);

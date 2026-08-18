@@ -258,6 +258,14 @@ async function startBackgroundServices() {
       skillsRuntime.loadSkillsFromDisk();
     }
 
+    // A server is not recall-ready while its pinned local embedding model is
+    // still cold. Complete one authority-free deterministic inference before
+    // health advertises readiness; this prevents first-user requests from
+    // absorbing model initialization and post-load memory pressure.
+    const { prewarmEmbeddingRuntime } = await import('./services/core/embeddings.js');
+    const embeddingReadiness = await prewarmEmbeddingRuntime();
+    console.log(`[embeddings] Runtime ready: ${embeddingReadiness.dimension}d in ${embeddingReadiness.runtime_ms}ms`);
+
     await startScheduler();
     backgroundReady = true;
     backgroundBootError = null;

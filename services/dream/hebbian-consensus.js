@@ -38,6 +38,7 @@ import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { query, withTransaction } from '../../db/connection.js';
 import { commitGovernorMutation } from '../governance/governor-provenance.js';
 import { logEvent } from '../observe/event-ledger.js';
+import { resolvePrincipalStateMutationTargets } from '../learning/mutation-composition/target-resolver.js';
 
 // Thresholds — first-pass defaults. CALIBRATE against the live corpus before
 // enforcing (spec §9.5); tune with HeLa-Mem δ_hub methodology, not by memory.
@@ -77,32 +78,57 @@ const COMPANY = AIMOS_COMPANY_ID;
  */
 export async function computeConsensus(memoryId, { companyId = COMPANY } = {}) {
   const { ASSOC_MIN, TOP_K, MIN_NEIGHBORS } = HEBBIAN_CONSTANTS;
-  const res = await query(
-    `WITH target AS (
-        SELECT embedding FROM aimos_memories
-         WHERE company_id = $1 AND id = $2 AND embedding IS NOT NULL AND is_active = true
-     ),
-     neigh AS (
-        SELECT n.retrieval_weight::double precision AS w,
-               1 - (n.embedding <=> t.embedding)     AS sim
-          FROM aimos_memories n, target t
-         WHERE n.company_id = $1 AND n.id <> $2
-           AND n.is_active = true AND n.embedding IS NOT NULL
-         ORDER BY n.embedding <=> t.embedding
-         LIMIT $3
-     )
-     SELECT count(*)                        FILTER (WHERE sim >= $4)  AS ncount,
-            coalesce(sum(w)                 FILTER (WHERE sim >= $4), 0) AS wsum,
-            coalesce(sum(w * sim)           FILTER (WHERE sim >= $4), 0) AS support
-       FROM neigh`,
-    [companyId, memoryId, TOP_K, ASSOC_MIN]
-  );
-  const row = res.rows[0];
-  const ncount = Number(row?.ncount || 0);
-  const wsum = Number(row?.wsum || 0);
-  const support = Number(row?.support || 0);
-  if (ncount < MIN_NEIGHBORS || wsum <= 0) return null;
-  return { alignment: support / wsum, support, neighborCount: ncount };
+  return withTransaction(async (client) => {
+    const targetAdmission = await resolvePrincipalStateMutationTargets({
+      memoryIds: [memoryId],
+      companyId,
+      client,
+      maximumIds: 1,
+    });
+    if (targetAdmission.targets.length !== 1) return null;
+    const candidates = await client.query(
+      `WITH target AS (
+          SELECT embedding FROM aimos_memories
+           WHERE company_id=$1 AND id=$2::uuid AND embedding IS NOT NULL
+       )
+       SELECT n.id::text,n.retrieval_weight::double precision AS w,
+              1-(n.embedding <=> target.embedding) AS sim
+         FROM aimos_memories n,target
+        WHERE n.company_id=$1 AND n.id<>$2::uuid AND n.embedding IS NOT NULL
+        ORDER BY n.embedding <=> target.embedding,n.id
+        LIMIT $3`,
+      [companyId, memoryId, TOP_K * 4],
+    );
+    if (!candidates.rows.length) return null;
+    const neighborAdmission = await resolvePrincipalStateMutationTargets({
+      memoryIds: candidates.rows.map((row) => row.id),
+      companyId,
+      client,
+      maximumIds: TOP_K * 4,
+    });
+    const byId = new Map(candidates.rows.map((row) => [String(row.id), row]));
+    const neighbors = neighborAdmission.targets
+      .map((target) => byId.get(target.representative_memory_id))
+      .filter(Boolean)
+      .filter((row) => Number(row.sim) >= ASSOC_MIN)
+      .sort((left, right) => Number(right.sim) - Number(left.sim)
+        || String(left.id).localeCompare(String(right.id)))
+      .slice(0, TOP_K);
+    const ncount = neighbors.length;
+    const wsum = neighbors.reduce((sum, row) => sum + Number(row.w), 0);
+    const support = neighbors.reduce(
+      (sum, row) => sum + Number(row.w) * Number(row.sim),
+      0,
+    );
+    if (ncount < MIN_NEIGHBORS || wsum <= 0) return null;
+    return {
+      alignment: support / wsum,
+      support,
+      neighborCount: ncount,
+      retainedNeighborRows: candidates.rows.length,
+      uniquePrincipalStateNeighbors: neighborAdmission.targets.length,
+    };
+  }, { restricted: true, client_id: companyId, agent_id: 'housekeeper' });
 }
 
 /**
@@ -198,7 +224,19 @@ export async function runHebbianConsensusBatch(batchIndex, batchCount = HEBBIAN_
   }
 
   const ids = await selectBatch(batchIndex, batchCount, { companyId });
-  for (const memoryId of ids) {
+  const targetResolution = await withTransaction(
+    (client) => resolvePrincipalStateMutationTargets({
+      memoryIds: ids,
+      companyId,
+      client,
+      maximumIds: 500,
+    }),
+    { restricted: true, client_id: companyId, agent_id: 'housekeeper' },
+  );
+  const targetIds = targetResolution.targets.map(
+    (target) => target.representative_memory_id,
+  );
+  for (const memoryId of targetIds) {
     stats.reviewed += 1;
     let consensus;
     try {
@@ -224,7 +262,12 @@ export async function runHebbianConsensusBatch(batchIndex, batchCount = HEBBIAN_
   }
 
   await logEvent(companyId, 'hebbian_consensus', 'batch_complete', `dream:hebbian:${batchIndex}`, {
-    ...stats, batch_index: batchIndex, batch_count: batchCount,
+    ...stats,
+    batch_index: batchIndex,
+    batch_count: batchCount,
+    retained_target_rows: ids.length,
+    unique_principal_state_targets: targetIds.length,
+    duplicate_occurrence_targets_collapsed: ids.length - targetIds.length,
     reasoning: 'Relational consolidation swept one rotating corpus batch; supported hubs elevated, divergent members attenuated, all signed + chained, existence preserved.',
     source_knowledge: 'HeLa-Mem association→consolidation; Complementary Learning Systems slow pass',
   }).catch(() => {});

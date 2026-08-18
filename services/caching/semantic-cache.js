@@ -6,7 +6,9 @@
 //   "Strong confidence among samples signals collective hallucination"
 //   When top-5 scores are all >0.95, flag as hallucination_risk
 // Batch 10 Lane 1: R3Mem WARM tier + 500xCompressor intent-aware compression policy
-//   WARM tier stores R3Mem-compressed representations alongside original.
+//   Compression ratios remain diagnostic for active-context shaping. Durable
+//   recall cache entries store identity/state references only; a cache hit must
+//   hydrate and verify canonical bytes before it can influence disclosure.
 //   Intent-aware compression maps memory_type to target ratio.
 //   cache_tier(entry) = HOT if access_freq > 0.8 else WARM if compressed else COLD
 //   WARM tier is cache-only. Original memory in PostgreSQL is never modified.
@@ -16,7 +18,10 @@
 // Compliance: Knowledge Gate [X] | Aladdin Law [X] (ephemeral only)
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { createHash } from 'node:crypto';
+
 import { logEvent } from '../observe/event-ledger.js';
+import { canonicalJson } from '../security/protocol/canonical-json.js';
 
 // Agreement paradox threshold — Frugal Knowledge Graph (Jourlin, 2026)
 // When all top-N scores exceed this, the result is flagged as potential
@@ -40,6 +45,81 @@ const COMPRESSION_POLICY = {
 
 // WARM tier access frequency threshold
 const HOT_ACCESS_FREQ = 0.8;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const HEX_32 = /^[0-9a-f]{64}$/;
+
+export const SEMANTIC_CACHE_STATE_REFERENCE_CONTRACT = Object.freeze({
+  schema: 'hom-aimos/semantic-cache-state-reference/v1',
+  maximum_state_references: 200,
+  stored_authority: 'verified_identity_and_content_state_references_only',
+  canonical_hydration_required: true,
+  provenance_reverification_required: true,
+  content_state_reselection_required: true,
+  cached_response_body_authority: false,
+  compressed_memory_body_authority: false,
+  disclosure_authority: false,
+  mutation_authority: false,
+  deletion_authority: false,
+});
+
+function buildStateReferenceEnvelope(result = {}, context = {}) {
+  const memories = Array.isArray(result?.memories) ? result.memories : [];
+  if (!memories.length || memories.length > SEMANTIC_CACHE_STATE_REFERENCE_CONTRACT.maximum_state_references) {
+    return null;
+  }
+  const stateRefs = [];
+  const seenIds = new Set();
+  const seenStates = new Set();
+  for (const memory of memories) {
+    const memoryId = String(memory?.id || memory?.memory_id || '').trim().toLowerCase();
+    const proof = memory?.provenance_proof;
+    const liveContentHash = String(proof?.live_content_hash || '').trim().toLowerCase();
+    const saveMutationHash = proof?.save_mutation_hash == null
+      ? null
+      : String(proof.save_mutation_hash).trim().toLowerCase();
+    const bindingMutationHash = String(proof?.binding_mutation_hash || '').trim().toLowerCase();
+    if (!UUID.test(memoryId) || !HEX_32.test(liveContentHash)
+        || (saveMutationHash != null && !HEX_32.test(saveMutationHash))
+        || !HEX_32.test(bindingMutationHash)) {
+      return null;
+    }
+    if (seenIds.has(memoryId) || seenStates.has(liveContentHash)) return null;
+    seenIds.add(memoryId);
+    seenStates.add(liveContentHash);
+    stateRefs.push(Object.freeze({
+      memory_id: memoryId,
+      live_content_hash: liveContentHash,
+      save_mutation_hash: saveMutationHash,
+      binding_mutation_hash: bindingMutationHash,
+    }));
+  }
+  const sourceBinding = Object.freeze({
+    content_state_decision_sha256: /^[0-9a-f]{64}$/.test(String(context.contentStateDecisionHash || '').toLowerCase())
+      ? String(context.contentStateDecisionHash).toLowerCase() : null,
+    native_fusion_decision_sha256: /^[0-9a-f]{64}$/.test(String(context.nativeFusionDecisionHash || '').toLowerCase())
+      ? String(context.nativeFusionDecisionHash).toLowerCase() : null,
+    epistemic_decision_sha256: /^[0-9a-f]{64}$/.test(String(context.epistemicDecisionHash || '').toLowerCase())
+      ? String(context.epistemicDecisionHash).toLowerCase() : null,
+    security_closure_decision_sha256: /^[0-9a-f]{64}$/.test(String(context.securityClosureDecisionHash || '').toLowerCase())
+      ? String(context.securityClosureDecisionHash).toLowerCase() : null,
+  });
+  const body = {
+    schema: SEMANTIC_CACHE_STATE_REFERENCE_CONTRACT.schema,
+    state_references: stateRefs,
+    state_reference_count: stateRefs.length,
+    source_binding: sourceBinding,
+    canonical_hydration_required: true,
+    provenance_reverification_required: true,
+    content_state_reselection_required: true,
+    cached_response_body_authority: false,
+  };
+  return Object.freeze({
+    ...body,
+    decision_sha256: createHash('sha256')
+      .update(Buffer.from(canonicalJson(body), 'utf8'))
+      .digest('hex'),
+  });
+}
 
 /**
  * SemanticCache: LRU cache with similarity-based lookup
@@ -57,10 +137,8 @@ export class SemanticCache {
     this._cache = new Map();
     this._accessOrder = []; // For LRU eviction
 
-    // Batch 10 Lane 1: WARM tier for R3Mem-compressed representations
-    // WARM entries store a semantic summary instead of the full result.
-    // On WARM cache hit, the summary is served (lower fidelity, same key match).
-    // Original memory in PostgreSQL is never modified (Aladdin compliance).
+    // WARM entries retain the same bounded identity/state envelope as HOT.
+    // They never retain or serve truncated canonical memory bodies.
     this._compressedStore = new Map();
     this._compressedAccessOrder = [];
     this._compressedMaxSize = options.compressedMaxSize || 2000;
@@ -86,7 +164,10 @@ export class SemanticCache {
         return null;
       }
       this._markAccessed(exactKey);
-      logEvent('hom', 'system', 'cache_hit', queryText, { type: 'exact_match' }).catch(() => {});
+      logEvent('hom', 'system', 'cache_hit', queryText, {
+        type: 'exact_match',
+        reasoning: 'An ACL- and calibration-namespaced state-reference proposal matched the exact query text; live hydration and verification remain mandatory.',
+      }).catch(() => {});
       return item.result;
     }
     
@@ -107,7 +188,8 @@ export class SemanticCache {
           logEvent('hom', 'system', 'cache_hit', queryText, {
             type: 'semantic_match',
             similarity: sim,
-            cached_key: key
+            cached_key: key,
+            reasoning: 'A namespaced state-reference proposal exceeded the semantic threshold; this is not response-body or disclosure authority.',
           }).catch(() => {});
           return item.result;
         }
@@ -125,19 +207,24 @@ export class SemanticCache {
         }
         const sim = this._cosineSimilarity(queryEmbedding, item.embedding);
         if (sim > this.similarityThreshold * 0.95) {
-          // Slightly lower threshold for compressed entries (fidelity tradeoff)
+          // Slightly lower threshold is a proposal-cache tradeoff only. Live
+          // hydration, provenance verification, and state reselection remain
+          // mandatory before the references can influence a response.
           this._markCompressedAccessed(key);
           logEvent('hom', 'system', 'cache_hit', queryText, {
-            type: 'warm_compressed_match',
+            type: 'warm_state_reference_match',
             similarity: sim,
-            cached_key: key
+            cached_key: key,
+            reasoning: 'A WARM identity/state proposal exceeded its bounded threshold; canonical bytes are not cached and must be hydrated live.',
           }).catch(() => {});
           return item.result;
         }
       }
     }
 
-    logEvent('hom', 'system', 'cache_miss', queryText).catch(() => {});
+    logEvent('hom', 'system', 'cache_miss', queryText, {
+      reasoning: 'No namespaced state-reference proposal satisfied the bounded cache contract; continue the full native path.',
+    }).catch(() => {});
     return null;
   }
 
@@ -154,8 +241,10 @@ export class SemanticCache {
     // The semantic cache's 0.85 cosine similarity hit threshold ensures only similar queries reuse cached results.
     const topConfidence = result.memories?.[0]?.recall_confidence ?? 0;
     if (topConfidence < 0.50) {
-      return; // Don't cache low-confidence results
+      return false; // Don't cache low-confidence results
     }
+    const stateReferenceEnvelope = buildStateReferenceEnvelope(result, context);
+    if (!stateReferenceEnvelope) return false;
 
     // Agreement paradox detection — Frugal Knowledge Graph (Jourlin, 2026)
     // "Strong confidence among samples signals collective hallucination"
@@ -182,11 +271,15 @@ export class SemanticCache {
 
     // Store new entry
     const namespace = this._namespace(context);
-    if (!namespace) return;
+    if (!namespace) return false;
     const cacheKey = `${namespace}\u0000${queryText}`;
     this._cache.set(cacheKey, {
       embedding: queryEmbedding,
-      result: { ...result, hallucination_risk: hallucinationRisk },
+      result: Object.freeze({
+        ...stateReferenceEnvelope,
+        cache_tier: 'HOT',
+        hallucination_risk: hallucinationRisk,
+      }),
       namespace,
       timestamp: Date.now(),
       trust_score: result.meta?.trust_score,
@@ -195,16 +288,21 @@ export class SemanticCache {
 
     this._markAccessed(cacheKey);
 
-    // Batch 10 Lane 1: Also store compressed WARM representation
-    // R3Mem compression: semantic summarization based on memory_type
+    // WARM retains the same state-reference envelope. Compression policy is
+    // available to the later response shaper, never to evidence authority.
     const memoryType = result.memories?.[0]?.memory_type || 'declarative';
     const compressionRatio = COMPRESSION_POLICY[memoryType] ?? 0.05;
 
     if (compressionRatio < 1.0 && this._compressedStore.size < this._compressedMaxSize) {
-      const compressedResult = compressCacheResult(result, compressionRatio);
       this._compressedStore.set(cacheKey, {
         embedding: queryEmbedding,
-        result: compressedResult,
+        result: Object.freeze({
+          ...stateReferenceEnvelope,
+          cache_tier: 'WARM',
+          compression_ratio: compressionRatio,
+          canonical_body_compressed: false,
+          hallucination_risk: hallucinationRisk,
+        }),
         namespace,
         timestamp: Date.now(),
         compression_ratio: compressionRatio,
@@ -213,6 +311,7 @@ export class SemanticCache {
       });
       this._markCompressedAccessed(cacheKey);
     }
+    return true;
   }
 
   /**
@@ -220,10 +319,12 @@ export class SemanticCache {
    * @param {string} triggerType - 'cross_ref_update' | 'weight_change' | 'full'
    */
   invalidate(triggerType) {
-    if (triggerType === 'full' || triggerType === 'cross_ref_update') {
-      const count = this._cache.size;
+    if (triggerType === 'full' || triggerType === 'cross_ref_update' || triggerType === 'weight_change') {
+      const count = this._cache.size + this._compressedStore.size;
       this._cache.clear();
       this._accessOrder = [];
+      this._compressedStore.clear();
+      this._compressedAccessOrder = [];
       logEvent('hom', 'system', 'cache_invalidate', 'all', { count, trigger: triggerType });
     }
     // Note: Fine-grained invalidation by memory_id would require indexing
@@ -337,9 +438,9 @@ export class SemanticCache {
 }
 
 /**
- * Batch 10 Lane 1: Compress a cache result using semantic summarization (R3Mem).
- * Compression is cache-only — original memory in PostgreSQL is never modified.
- * Aladdin compliance: compression only reduces context window bandwidth.
+ * Batch 10 Lane 1 diagnostic response compression. This helper is deliberately
+ * not used by SemanticCache.set(): cryptographic recall must hydrate canonical
+ * bytes from PostgreSQL after every cache hit.
  *
  * @param {object} result - Full cache result with memories array
  * @param {number} ratio - Target compression ratio (0.05 to 1.0)

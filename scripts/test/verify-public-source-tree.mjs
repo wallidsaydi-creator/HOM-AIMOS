@@ -74,6 +74,7 @@ for (const forbidden of [
   'architecture-authority.json',
   'plans',
   'remediation',
+  'research',
   'scratchpad',
   'eval/public-results',
   'eval/results',

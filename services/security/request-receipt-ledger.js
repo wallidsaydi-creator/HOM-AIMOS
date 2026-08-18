@@ -306,8 +306,124 @@ export async function readVerifiedRequestReceiptById({
       requestReceiptMutationHash: expectedMutation,
       actorAgentId: actor,
       actorValidFromIso: actorEpoch,
+      actorCertFingerprint: certFingerprint,
       signedMethod: row.signed_method,
       signedPath: row.signed_path,
+      signedTs: Number(row.ts_signed),
+      requestHash: Buffer.from(row.request_hash).toString('hex'),
+    });
+  } catch (error) {
+    if (ownsTransaction) {
+      try { await conn.query('ROLLBACK'); } catch { /* connection may be gone */ }
+    }
+    throw error;
+  } finally {
+    if (ownsTransaction) conn.release();
+  }
+}
+
+/**
+ * Verify one retained request receipt and its immediate predecessor in O(1).
+ * This is the native occurrence-authority lookup. Full-stream verification
+ * remains the ceremony/checkpoint owner for prefix-deletion detection.
+ */
+export async function readVerifiedRequestReceiptByMutationHash({
+  companyId,
+  requestReceiptMutationHash: mutationHashHex,
+  client = null,
+} = {}) {
+  const company = String(companyId || '').trim();
+  const expectedMutation = String(mutationHashHex || '').toLowerCase();
+  if (!company || !/^[0-9a-f]{64}$/.test(expectedMutation)) {
+    throw new Error('request_receipt_mutation_scope_required');
+  }
+  const ownsTransaction = !client;
+  const conn = client || await agentPool.connect();
+  try {
+    if (ownsTransaction) await conn.query('BEGIN');
+    await conn.query('SELECT set_config($1,$2,true)', ['app.current_client_id', company]);
+    await conn.query('SELECT set_config($1,$2,true)', ['app.current_agent_id', 'housekeeper']);
+    const result = await conn.query(
+      `SELECT receipt.*, identity.pubkey, identity.cert,
+              master.master_pubkey, master.fingerprint AS master_fingerprint,
+              revocation.ts_signed AS revocation_ts_signed,
+              predecessor.request_receipt_id AS predecessor_id,
+              predecessor.company_id AS predecessor_company_id,
+              predecessor.actor_agent_id AS predecessor_actor_agent_id,
+              predecessor.actor_valid_from AS predecessor_actor_valid_from,
+              predecessor.mutation_hash AS predecessor_mutation_hash
+         FROM aimos_request_receipts receipt
+         JOIN agent_identity identity
+           ON identity.agent_id = receipt.actor_agent_id
+          AND identity.valid_from = receipt.actor_valid_from
+         LEFT JOIN aimos_master_identity master ON master.id = 1
+         LEFT JOIN aimos_agent_revocation_events revocation
+           ON revocation.agent_id = identity.agent_id
+          AND revocation.agent_valid_from = identity.valid_from
+         LEFT JOIN aimos_request_receipts predecessor
+           ON predecessor.company_id = receipt.company_id
+          AND predecessor.actor_agent_id = receipt.actor_agent_id
+          AND predecessor.actor_valid_from = receipt.actor_valid_from
+          AND predecessor.mutation_hash = receipt.prev_mutation_hash
+        WHERE receipt.company_id = $1 AND receipt.mutation_hash = $2
+        ORDER BY receipt.request_receipt_id
+        LIMIT 2`,
+      [company, Buffer.from(expectedMutation, 'hex')],
+    );
+    if (result.rows.length !== 1) throw new Error('request_receipt_mutation_ambiguous');
+    const row = result.rows[0];
+    const previous = row.prev_mutation_hash ? Buffer.from(row.prev_mutation_hash) : null;
+    const linkValid = previous == null
+      ? row.is_genesis === true && row.predecessor_id == null
+      : row.is_genesis === false
+        && row.predecessor_id != null
+        && row.predecessor_company_id === row.company_id
+        && row.predecessor_actor_agent_id === row.actor_agent_id
+        && new Date(row.predecessor_actor_valid_from).toISOString()
+          === new Date(row.actor_valid_from).toISOString()
+        && sameBytes(row.predecessor_mutation_hash, previous);
+    const expected = requestReceiptMutationHash({
+      previousMutationHash: previous,
+      requestHash: row.request_hash,
+      claimsHash: row.signed_claims_hash,
+      signature: row.sig,
+      method: row.signed_method,
+      path: row.signed_path,
+      nonce: row.nonce,
+      signedTs: Number(row.ts_signed),
+    });
+    if (!linkValid || !sameBytes(expected, row.mutation_hash)) {
+      throw new Error('request_receipt_mutation_link_invalid');
+    }
+    const certBody = certificateBody(row.cert);
+    const certFingerprint = sha256(Buffer.from(String(row.cert), 'utf8')).toString('hex');
+    if (!certBody
+        || certBody.agent_id !== row.actor_agent_id
+        || certBody.pubkey !== row.pubkey
+        || certFingerprint !== row.cert_fingerprint) {
+      throw new Error('request_receipt_actor_identity_mismatch');
+    }
+    const authorityPubkey = certBody.issuer === certBody.agent_id
+      ? row.pubkey
+      : row.master_pubkey;
+    const certificate = authorityPubkey
+      ? verifyCertChain(row.cert, authorityPubkey, { nowFn: () => Number(row.ts_signed) })
+      : { valid: false };
+    if (!certificate.valid
+        || (row.revocation_ts_signed != null
+          && Number(row.revocation_ts_signed) <= Number(row.ts_signed))) {
+      throw new Error('request_receipt_actor_epoch_invalid');
+    }
+    if (ownsTransaction) await conn.query('COMMIT');
+    return Object.freeze({
+      requestReceiptId: String(row.request_receipt_id),
+      requestReceiptMutationHash: expectedMutation,
+      actorAgentId: String(row.actor_agent_id),
+      actorValidFromIso: new Date(row.actor_valid_from).toISOString(),
+      actorCertFingerprint: certFingerprint,
+      signedMethod: row.signed_method,
+      signedPath: row.signed_path,
+      signedTs: Number(row.ts_signed),
       requestHash: Buffer.from(row.request_hash).toString('hex'),
     });
   } catch (error) {
@@ -455,6 +571,7 @@ export async function reserveVerifiedRequest({
 export default {
   reserveVerifiedRequest,
   readVerifiedRequestReceiptById,
+  readVerifiedRequestReceiptByMutationHash,
   verifyRequestReceiptProof,
   verifyRequestReceiptChain,
 };

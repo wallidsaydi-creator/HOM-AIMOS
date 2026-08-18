@@ -138,7 +138,7 @@ test('runtime contains no unsigned calibration projection or fake ORCA implement
     readFile(new URL('../../migrations/063-retire-unsigned-recall-calibration.sql', import.meta.url), 'utf8'),
   ]);
   assert.doesNotMatch(calibrator, /\b(?:INSERT INTO recall_observations|UPDATE recall_calibration|ON CONFLICT \(company_id, channel\)|selectLTTThreshold|computeConformalInterval|computeTTTFastWeights|calibratePreference)\b/);
-  assert.match(pipeline, /const calibrationSnapshot = await getVerifiedCalibrationSnapshot\(company\)/);
+  assert.match(pipeline, /const calibrationSnapshot = await getVerifiedCalibrationSnapshot\(company, \{[\s\S]*?verifiedAdmissionSession\.read/);
   assert.match(pipeline, /applyCalibrationSnapshot\(memories, calibrationSnapshot\)/);
   assert.doesNotMatch(pipeline, /recall-calibrator error \(non-fatal\)/);
   assert.match(receipt, /raw_calibration_score/);

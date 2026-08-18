@@ -33,6 +33,8 @@ export const RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT = Object.freeze({
   graph_family_outer_channels: 1,
   graph_family_equation: 'max_reciprocal_rank_pooling',
   graph_family_duplicate_signal_idempotent: true,
+  content_state_workspace_required_in_production: true,
+  one_workspace_node_per_verified_content_state: true,
   maximum_workspace_states: RECONSTRUCTED_GRAPH_MARGINAL_GEAR_CONTRACT.maximum_workspace_states,
   maximum_emitted_ranks: RECONSTRUCTED_GRAPH_MARGINAL_GEAR_CONTRACT.maximum_emitted_ranks,
   native_workspace_states: NATIVE_WORKSPACE_STATES,
@@ -57,6 +59,7 @@ export function composeNativeGraphFamilyChannel({
   reconstructedGraphGear = null,
   rrfK = 60,
   limit = 50,
+  contentStateProjection = null,
 } = {}) {
   return fuseBoundedGraphFamily({
     magmaGear,
@@ -65,6 +68,7 @@ export function composeNativeGraphFamilyChannel({
       : [],
     rrfK,
     limit,
+    contentStateProjection,
   });
 }
 
@@ -115,12 +119,18 @@ function normalizeNativeBindings(memory) {
 export function composeReconstructedGraphNativeCandidate({
   admittedMemories = [],
   queryText = '',
+  contentStateSelectionDecision = null,
+  requireContentStateSelection = false,
 } = {}) {
   if (!Array.isArray(admittedMemories) || admittedMemories.length === 0) {
     fail('admitted_memories_required');
   }
   if (admittedMemories.some((memory) => memory?.canary_admitted !== true)) {
     fail('canary_admission_required');
+  }
+  if (requireContentStateSelection
+    && !/^[0-9a-f]{64}$/.test(String(contentStateSelectionDecision?.decision_sha256 || ''))) {
+    fail('content_state_selection_required');
   }
 
   const boundMemories = admittedMemories.map(normalizeNativeBindings);
@@ -146,6 +156,15 @@ export function composeReconstructedGraphNativeCandidate({
       ...gear.decision,
       edge_commitment_sha256: gear.decision.graph_sha256,
       selected_memory_ids: selectedMemoryIds,
+      content_state_selection_decision_sha256:
+        contentStateSelectionDecision?.decision_sha256 || null,
+      content_state_input_occurrence_count:
+        contentStateSelectionDecision?.unique_candidate_count || admittedMemories.length,
+      content_state_selected_state_count: admittedMemories.length,
+      content_state_workspace_count: gear.decision.workspace_population,
+      content_state_collapsed_occurrence_count:
+        contentStateSelectionDecision?.collapsed_occurrence_count || 0,
+      one_workspace_node_per_verified_content_state: requireContentStateSelection,
       runtime_adapter_schema: RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT.schema,
     }),
     runtime_breakdown_ms: Object.freeze({

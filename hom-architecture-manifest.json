@@ -1,7 +1,7 @@
 {
   "project": "HOM Distributed Cognitive Engine",
   "version": "1.2.5-Batch9.75-Coexistence",
-  "updated": "2026-08-16",
+  "updated": "2026-08-18",
   "doctrine": "Distributed Aladdin Law",
   "total_services": 300,
   "research_papers_ingested": 197,
@@ -463,7 +463,7 @@
     ],
     "pipeline_manifest": {
       "file": "services/pipeline-manifest.js",
-      "validated_connections": 156,
+      "validated_connections": 153,
       "pipelines": 6,
       "scope": "Critical pipeline wiring registry. Not the complete live service inventory."
     }

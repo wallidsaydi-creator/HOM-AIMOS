@@ -48,8 +48,20 @@ test('MAGMA native reader is a permanent bounded gear, read-only, and has no ENV
     MAGMA_NATIVE_READER_CONTRACT.topology_access_strategy,
     'bounded_indexed_lateral_expansion_before_join',
   );
+  assert.equal(
+    MAGMA_NATIVE_READER_CONTRACT.entity_neighbor_domain,
+    'current_bounded_graph_workspace',
+  );
+  assert.equal(
+    MAGMA_NATIVE_READER_CONTRACT.entity_candidate_materialization,
+    'once_per_topology_read',
+  );
   assert.equal(MAGMA_NATIVE_READER_CONTRACT.maximum_entity_names_scanned_per_frontier, 16);
   assert.equal(MAGMA_NATIVE_READER_CONTRACT.maximum_rows_per_frontier, 26);
+  assert.equal(MAGMA_NATIVE_READER_CONTRACT.retained_quarantine_graph_admission, false);
+  assert.ok(MAGMA_NATIVE_READER_CONTRACT.required_indexes.includes(
+    'aimos_memories(company_id,source,memory_type,created_at,id)',
+  ));
 });
 
 test('MAGMA native read session binds one verified snapshot across multiple bounded reads', async () => {
@@ -81,7 +93,7 @@ test('MAGMA native read session binds one verified snapshot across multiple boun
   assert.equal(statements.filter((row) => row.text === 'COMMIT').length, 1);
   assert.equal(statements.filter((row) => /^SELECT set_config/.test(row.text)).length, 1);
   const principalBinding = statements.find((row) => /^SELECT set_config/.test(row.text));
-  assert.deepEqual(principalBinding.params.slice(-2), ['plan_cache_mode', 'force_generic_plan']);
+  assert.deepEqual(principalBinding.params.slice(-2), ['plan_cache_mode', 'force_custom_plan']);
   assert.equal(releases, 1);
   await assert.rejects(session.query('SELECT 3', []), /magma_native_reader:read_session_closed/);
 });
@@ -103,6 +115,10 @@ test('MAGMA native evidence query applies every principal and command predicate 
   assert.match(statement.text, /COALESCE\(m\.data_class, 'public'\) = ANY\(\$3::text\[\]\)/);
   assert.match(statement.text, /m\.agent_id = \$4/);
   assert.match(statement.text, /m\.scope = 'quarantine'/);
+  assert.match(
+    statement.text,
+    /NOT \(m\.scope = 'quarantine' OR m\.memory_type = 'quarantine' OR COALESCE\(m\.retrieval_weight, 1\.0\) = 0\.1\)/,
+  );
   assert.match(statement.text, /m\.id = ANY\(\$6::uuid\[\]\)/);
   assert.match(statement.text, /m\.source = \$7/);
   assert.match(statement.text, /m\.memory_type = \$8/);
@@ -161,23 +177,33 @@ test('MAGMA topology query applies one eligible scope to all three bounded views
     recallAuthority: authority({ command: { source_filter: 'benchmark:scope' } }),
     frontierIds: [IDS[0]],
     queryEmbedding: [0.6, 0.8],
+    entityCandidateIds: IDS,
   });
 
   assert.match(statement.text, /WITH eligible AS NOT MATERIALIZED/);
+  assert.match(
+    statement.text,
+    /NOT \(m\.scope = 'quarantine' OR m\.memory_type = 'quarantine' OR COALESCE\(m\.retrieval_weight, 1\.0\) = 0\.1\)/,
+  );
   assert.match(statement.text, /frontier AS MATERIALIZED/);
   assert.match(statement.text, /cr\.authority_event_id IS NOT NULL/);
   assert.match(statement.text, /CROSS JOIN LATERAL/);
   assert.match(statement.text, /LIMIT 8/);
   assert.match(statement.text, /LIMIT 16/);
   assert.match(statement.text, /LIMIT 4/);
-  assert.match(statement.text, /pe\.entity = entity_anchor\.entity/);
-  assert.doesNotMatch(statement.text, /lower\(pe\.entity\)|lower\(ae\.entity\)/);
+  assert.match(statement.text, /entity_candidate_scope AS MATERIALIZED/);
+  assert.match(statement.text, /AS query_similarity/);
+  assert.match(statement.text, /candidate\.id = ANY\(\$9::uuid\[\]\)/);
+  assert.match(statement.text, /candidate\.entity = entity_anchor\.entity/);
+  assert.doesNotMatch(statement.text, /lower\(candidate\.entity\)|lower\(ae\.entity\)/);
   assert.match(statement.text, /signed_endpoint_origin_time/);
   assert.match(statement.text, /m\.source = \$8/);
   assert.doesNotMatch(statement.text, /benchmark:scope|signed-agent/);
   assert.match(statement.preparedName, /^magma_native_topology_v2_[0-9a-f]{24}$/);
   assert.deepEqual(statement.params[5], [IDS[0]]);
   assert.equal(statement.params[6], '[0.6,0.8]');
+  assert.deepEqual(statement.params[8], [...IDS]);
+  assert.deepEqual(statement.entityCandidateIds, [...IDS]);
 });
 
 test('MAGMA topology reader rejects unsigned semantic edges and accepts bounded evidence labels', async () => {
@@ -218,6 +244,9 @@ test('MAGMA topology reader rejects unsigned semantic edges and accepts bounded 
   assert.equal(topology.edges.length, 2);
   assert.equal(topology.decision.semantic_edges, 1);
   assert.equal(topology.decision.entity_edges, 1);
+  assert.equal(topology.decision.entity_candidate_pool_count, 1);
+  assert.equal(topology.decision.entity_neighbor_domain, 'current_bounded_graph_workspace');
+  assert.equal(topology.decision.entity_candidate_materialization, 'once_per_topology_read');
   assert.equal(topology.decision.entity_edge_receipt_required_at_recall_decision, true);
   assert.equal(topology.decision.content_read, false);
 });
@@ -238,6 +267,15 @@ test('MAGMA native reader fails closed on malformed authority, identifiers, and 
     () => buildMagmaNativeEvidenceQuery({ recallAuthority: authority(), candidateIds: tooMany }),
     /magma_native_reader:candidate_limit_exceeded/,
   );
+  assert.throws(
+    () => buildMagmaNativeTopologyQuery({
+      recallAuthority: authority(),
+      frontierIds: [IDS[0]],
+      queryEmbedding: [1, 0],
+      entityCandidateIds: tooMany,
+    }),
+    /magma_native_reader:candidate_limit_exceeded/,
+  );
 });
 
 test('MAGMA native reader source has no write statement or ENV authority and declares its sole caller', async () => {
@@ -249,8 +287,20 @@ test('MAGMA native reader source has no write statement or ENV authority and dec
   assert.doesNotMatch(source, /\b(?:INSERT|UPDATE|DELETE|TRUNCATE)\s+(?:INTO|FROM)?\s*aimos_/i);
   assert.match(source, /BEGIN READ ONLY/);
   assert.match(source, /SELECT set_config\(\$1,\$2,true\),\s+set_config\(\$3,\$4,true\),\s+set_config\(\$5,\$6,true\)/);
-  assert.match(source, /'plan_cache_mode', 'force_generic_plan'/);
+  assert.match(source, /'plan_cache_mode', 'force_custom_plan'/);
   assert.doesNotMatch(source, /\bFOR\s+(?:UPDATE|NO KEY UPDATE|SHARE|KEY SHARE)\b/i);
   assert.match(source, /admitNativeRecallCandidates/);
   assert.match(source, /canonical_caller:\s*'magma-native-candidate'/);
+});
+
+test('MAGMA filtered temporal-neighborhood migration is additive and matches the live query shape', async () => {
+  const source = await readFile(
+    new URL('../../migrations/096-native-retrieval-filtered-temporal-neighborhood-index.sql', import.meta.url),
+    'utf8',
+  );
+  assert.match(source, /CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_aimos_memories_company_source_type_created_id/);
+  assert.match(source, /aimos_memories\s*\(company_id, source, memory_type, created_at, id\)/);
+  assert.doesNotMatch(source, /\b(?:DROP|DELETE|UPDATE|TRUNCATE)\b/i);
+  assert.match(source, /no authority/i);
+  assert.match(source, /no memory/i);
 });

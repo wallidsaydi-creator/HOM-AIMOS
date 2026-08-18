@@ -19,11 +19,22 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { agentPool, query, withTransaction } from '../../db/connection.js';
 import { persistMemory } from '../write/persist-memory.js';
-import { logEvent, readVerifiedEventHistory } from '../observe/event-ledger.js';
-import { verifyPayloadSigWithContext } from '../security/agent-identity.js';
+import {
+  logEvent,
+  readVerifiedEventById,
+  readVerifiedEventHistory,
+} from '../observe/event-ledger.js';
+import { canonicalJson, verifyPayloadSigWithContext } from '../security/agent-identity.js';
 import { contentHash } from '../security/identity-chain.js';
-import { verifyMutationHash } from '../security/memory-provenance.js';
-import { verifyGenesisManifest } from '../../scripts/verify-genesis-manifest.mjs';
+import {
+  verifyMutationHash,
+  verifyOccurrenceEvidenceRowV3,
+} from '../security/memory-provenance.js';
+import { readVerifiedRequestReceiptByMutationHash } from '../security/request-receipt-ledger.js';
+import {
+  genesisGuideRequestBody,
+  verifyGenesisManifest,
+} from '../../scripts/verify-genesis-manifest.mjs';
 
 const COMPANY = 'hom';
 const CRON_TIMEZONE = 'UTC';
@@ -69,7 +80,12 @@ function parseBodyJson(value) {
  * registration; server.js awaits startScheduler(), so downstream background
  * watchers do not start either.
  */
-export async function verifySchedulerGenesisReadiness({ queryFn = null, brainRoot = BRAIN_ROOT } = {}) {
+export async function verifySchedulerGenesisReadiness({
+  queryFn = null,
+  brainRoot = BRAIN_ROOT,
+  requestReceiptReader = readVerifiedRequestReceiptByMutationHash,
+  eventReader = readVerifiedEventById,
+} = {}) {
   let manifest;
   try {
     manifest = verifyGenesisManifest({ brainRoot });
@@ -80,8 +96,9 @@ export async function verifySchedulerGenesisReadiness({ queryFn = null, brainRoo
   const expectedKeys = manifest.files.map((record) => `guide:housekeeper:${path.basename(record.path, '.md')}`);
   let housekeeperResult;
   let corpusResult;
+  let proofClient = null;
   try {
-    const readReadiness = async (runQuery) => {
+    const readReadiness = async (runQuery, client = null) => {
       const identity = await runQuery(
         `SELECT agent_id, pubkey
           FROM agent_identity
@@ -95,25 +112,55 @@ export async function verifySchedulerGenesisReadiness({ queryFn = null, brainRoo
           LIMIT 1`
       );
       const corpus = await runQuery(
-        `SELECT m.key, m.value,
-                p.agent_id, p.body_json, p.content_hash, p.mutation_hash,
-                p.prev_mutation_hash, p.ts_signed, p.nonce, p.sig
+        `SELECT m.id::text AS memory_id,
+                m.company_id AS live_company_id,
+                m.key, m.key AS live_key,
+                m.value, m.value AS live_value,
+                m.scope AS live_scope,
+                m.memory_type AS live_memory_type,
+                m.clearance_level AS live_clearance_level,
+                m.data_class AS live_data_class,
+                m.source AS live_source,
+                m.content_hash AS live_content_hash,
+                p.provenance_id::text,
+                p.agent_id, p.agent_id AS provenance_agent_id,
+                p.agent_valid_from, p.cert_fingerprint, p.identity_tier,
+                p.event_type, p.sig_form_version,
+                p.body_json, p.content_hash, p.content_hash AS prov_content_hash,
+                p.live_content_hash AS snapshot_live_content_hash,
+                p.mutation_hash, p.prev_mutation_hash, p.ts_signed, p.nonce, p.sig,
+                signer.pubkey AS signer_pubkey,
+                signer.cert AS signer_cert,
+                master.master_pubkey,
+                master.fingerprint AS master_fingerprint,
+                revocation.sig AS revocation_sig,
+                revocation.ts_signed AS revocation_ts_signed
            FROM aimos_memories m
            JOIN aimos_memory_provenance p ON p.memory_id = m.id
+           JOIN agent_identity signer
+             ON signer.agent_id = p.agent_id
+            AND signer.valid_from = p.agent_valid_from
+           LEFT JOIN aimos_master_identity master ON master.id = 1
+           LEFT JOIN aimos_agent_revocation_events revocation
+             ON revocation.agent_id = signer.agent_id
+            AND revocation.agent_valid_from = signer.valid_from
           WHERE m.company_id = $2
             AND m.source = 'guide:genesis-install'
             AND m.key = ANY($1::text[])
             AND p.backfilled = false`,
         [expectedKeys, COMPANY]
       );
-      return [identity, corpus];
+      return [identity, corpus, client];
     };
-    [housekeeperResult, corpusResult] = queryFn
-      ? await readReadiness(queryFn)
+    [housekeeperResult, corpusResult, proofClient] = queryFn
+      ? await readReadiness(queryFn, null)
       : await withTransaction(
-        (client) => readReadiness(client.query.bind(client)),
+        (client) => readReadiness(client.query.bind(client), client),
         { restricted: true, clientId: COMPANY, agentId: 'housekeeper' },
       );
+    // The readiness transaction is complete here. Domain proof readers open
+    // their own restricted transactions rather than reusing a released client.
+    proofClient = null;
   } catch (error) {
     return { ok: false, reason: 'genesis_readiness_query_failed', detail: error.message };
   }
@@ -127,7 +174,8 @@ export async function verifySchedulerGenesisReadiness({ queryFn = null, brainRoo
   const missing = [];
   for (const record of manifest.files) {
     const key = `guide:housekeeper:${path.basename(record.path, '.md')}`;
-    const matched = rows.some((row) => {
+    let matched = false;
+    for (const row of rows) {
       const body = parseBodyJson(row.body_json);
       const signedTs = Number(row.ts_signed);
       const storedSignature = Buffer.isBuffer(row.sig) ? row.sig.toString('base64url') : '';
@@ -144,7 +192,7 @@ export async function verifySchedulerGenesisReadiness({ queryFn = null, brainRoo
           { skewSeconds: 0, nowFn: () => signedTs }
         )
         : { valid: false };
-      return row.key === key
+      const direct = row.key === key
         && contentSha256(row.value) === record.sha256
         && row.agent_id === 'housekeeper'
         && signatureCheck.valid === true
@@ -163,7 +211,65 @@ export async function verifySchedulerGenesisReadiness({ queryFn = null, brainRoo
         && body?.genesis_file_path === record.path
         && body?.genesis_file_sha256 === record.sha256
         && Number(body?.genesis_file_bytes) === record.bytes;
-    });
+      if (direct) {
+        matched = true;
+        break;
+      }
+
+      if (row.key !== key
+          || contentSha256(row.value) !== record.sha256
+          || row.event_type !== 'SAVE_REASSERT'
+          || Number(row.sig_form_version) !== 3) continue;
+      const occurrence = verifyOccurrenceEvidenceRowV3(row);
+      if (!occurrence.valid || occurrence.record.request_receipt_present !== 1) continue;
+      let requestAuthority;
+      let admission;
+      try {
+        requestAuthority = await requestReceiptReader({
+          companyId: COMPANY,
+          requestReceiptMutationHash: occurrence.record.request_receipt_mutation_hash_hex,
+          client: proofClient,
+        });
+        admission = await eventReader(
+          occurrence.record.authorization_event_id,
+          COMPANY,
+          { client: proofClient },
+        );
+      } catch {
+        continue;
+      }
+      const requestBody = genesisGuideRequestBody({
+        manifest,
+        fileRecord: record,
+        content: row.value,
+        key,
+        signedTs: requestAuthority.signedTs,
+      });
+      const expectedRequestHash = createHash('sha256')
+        .update(Buffer.from(canonicalJson(requestBody), 'utf8'))
+        .digest('hex');
+      const metadata = parseBodyJson(admission?.metadata);
+      const reassert = requestAuthority.requestHash === expectedRequestHash
+        && requestAuthority.requestReceiptMutationHash
+          === occurrence.record.request_receipt_mutation_hash_hex
+        && requestAuthority.actorAgentId === 'housekeeper'
+        && requestAuthority.signedMethod === 'POST'
+        && requestAuthority.signedPath === '/aimos/save'
+        && occurrence.record.request_body_hash_hex === expectedRequestHash
+        && occurrence.record.signed_method === 'POST'
+        && occurrence.record.signed_path === '/aimos/save'
+        && occurrence.record.authorization_event_present === 1
+        && String(admission?.id) === occurrence.record.authorization_event_id
+        && admission?.operation === 'request_admission_verified'
+        && admission?.agent_id === requestAuthority.actorAgentId
+        && metadata?.request_receipt_mutation_hash
+          === occurrence.record.request_receipt_mutation_hash_hex
+        && metadata?.request_hash === expectedRequestHash;
+      if (reassert) {
+        matched = true;
+        break;
+      }
+    }
     if (!matched) missing.push(key);
   }
 

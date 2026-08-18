@@ -46,6 +46,12 @@ import { logEvent } from '../../services/observe/event-ledger.js';
 import { valenceLedger } from '../../services/governance/valence-ledger.js';
 import { computeValence } from '../../services/governance/valence-judge.js';
 import { commitGovernorMutation } from '../../services/governance/governor-provenance.js';
+import { canonicalJson } from '../security/protocol/canonical-json.js';
+import {
+  appendMutationOutcomeEvidenceEvent,
+  verifyOutcomeMutationEvidence,
+} from './mutation-composition/outcome-authority.js';
+import { validateOutcomeMutationEvidence } from './mutation-composition/principal-state.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -292,11 +298,16 @@ export async function applyRewardSignal(memoryId, rewardSign, context = {}) {
     throw new Error('rewardSign must be +1 or -1');
   }
 
-  const contextHash = createHash('sha256').update(JSON.stringify({
+  const outcomeEvidence = validateOutcomeMutationEvidence(context.outcomeEvidence || {});
+  if (outcomeEvidence.memory_id !== memoryId || outcomeEvidence.company_id !== COMPANY) {
+    throw new Error('mutation_outcome_target_mismatch');
+  }
+  const contextHash = createHash('sha256').update(canonicalJson({
     memory_id: memoryId,
     reward_sign: rewardSign,
     co_activation_score: Number(coActivationScore || 0),
-    lag_ms: Number(lagMs || 0)
+    lag_ms: Number(lagMs || 0),
+    outcome_evidence: outcomeEvidence,
   })).digest('hex');
   const eta = Math.max(0.001, Math.min(0.5, Number(context.eta || VALENCE_ETA)));
   let oldWeight = 1;
@@ -314,18 +325,43 @@ export async function applyRewardSignal(memoryId, rewardSign, context = {}) {
       [`cognitive-reweight:${COMPANY}:${memoryId}`]
     );
     const current = await client.query(
-      'SELECT retrieval_weight FROM aimos_memories WHERE company_id = $1 AND id = $2',
+      `SELECT retrieval_weight,encode(content_hash,'hex') AS live_content_hash
+         FROM aimos_memories WHERE company_id = $1 AND id = $2`,
       [COMPANY, memoryId]
     );
     if (current.rows.length === 0) throw new Error('memory_not_found');
+    const verifiedOutcome = await verifyOutcomeMutationEvidence(outcomeEvidence, { client });
+    if (verifiedOutcome.live_content_hash !== current.rows[0].live_content_hash) {
+      throw new Error('mutation_outcome_current_state_mismatch');
+    }
+    const outcomeReceipt = await appendMutationOutcomeEvidenceEvent({
+      verifiedEvidence: verifiedOutcome,
+      rewardSign,
+      client,
+    });
     valenceCommit = await valenceLedger.appendValence({
       memoryId,
       rewardSign,
       contextHash,
+      attribution: verifiedOutcome,
+      outcomeReceipt,
       client,
     });
     if (!valenceCommit.ok) {
       throw new Error(`valence_ledger_failed:${valenceCommit.reason}`);
+    }
+    if (verifiedOutcome.target_scope === 'occurrence_observation') {
+      newWeight = oldWeight = Number(current.rows[0].retrieval_weight || R_TARGET);
+      await logEvent(COMPANY, 'housekeeper', 'mutation_occurrence_observation_retained', memoryId, {
+        outcome_id: verifiedOutcome.outcome_id,
+        occurrence_ref: verifiedOutcome.occurrence_ref,
+        reward_sign: rewardSign,
+        target_scope: verifiedOutcome.target_scope,
+        projection_appended: false,
+        reasoning: 'Occurrence-scoped outcome evidence was retained and signed but carries no principal-state retrieval-weight authority.',
+        source_knowledge: 'R7-M occurrence-attributed mutation scope contract',
+      }, outcomeReceipt.event_id, { client });
+      return;
     }
     valence = await computeValence(memoryId, { client });
     oldWeight = Number(current.rows[0].retrieval_weight || R_TARGET);

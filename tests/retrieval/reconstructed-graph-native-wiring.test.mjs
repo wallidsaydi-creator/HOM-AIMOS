@@ -9,41 +9,47 @@ test('G2 is a permanent bounded subgear inside one graph-family channel before d
     new URL('../../services/retrieval/native-recall-pipeline.js', import.meta.url),
     'utf8',
   );
-  const admission = source.indexOf('const mainAdmission = await admitNativeRecallCandidates');
-  const magma = source.indexOf('magmaCandidate = await composeMagmaNativeCandidate', admission);
-  const baselineFamily = source.indexOf('graphFamilyCandidate = composeNativeGraphFamilyChannel', magma);
-  const baselineFusion = source.indexOf('const graphFamilyBaselineFusion = fuseNativeRetrievalGears', baselineFamily);
+  const session = source.indexOf('verifiedAdmissionSession = await openNativeRecallAdmissionSession');
+  const admission = source.indexOf('const mainAdmission = await contentStateOccurrenceAdmission.admit');
+  const dormant = source.indexOf("skipStage('magma_native_gear', 'dormant_research_not_in_live_recall')", admission);
+  const baselineFusion = source.indexOf('const graphFamilyBaselineFusion = fuseNativeRetrievalGears', dormant);
   const canary = source.indexOf('const reconstructedGraphCanaryPartition = partitionGraphCanaryDisclosure', baselineFusion);
-  const g2 = source.indexOf('reconstructedGraphCandidate = composeReconstructedGraphNativeCandidate', canary);
+  const stateSelection = source.indexOf('const reconstructedGraphStateSelection =', canary);
+  const g2 = source.indexOf('reconstructedGraphCandidate = composeReconstructedGraphNativeCandidate', stateSelection);
   const candidateFamily = source.indexOf('graphFamilyCandidate = composeNativeGraphFamilyChannel', g2);
   const centralFusion = source.indexOf('nativeRetrievalFusion = fuseNativeRetrievalGears', candidateFamily);
   const earlyExit = source.indexOf("markStage('early_exit_decision')", centralFusion);
-  const postGraphAdmission = source.indexOf('const postGraphAdmission = await admitNativeRecallCandidates', earlyExit);
+  const postGraphAdmission = source.indexOf('const postGraphAdmission = await contentStateOccurrenceAdmission.admit', earlyExit);
   const refusion = source.indexOf('nativeRetrievalFusion = fuseNativeRetrievalGears', postGraphAdmission);
   const epistemic = source.indexOf("markStage('epistemic_trust_selection')", refusion);
-  const magmaClosure = source.indexOf("graphId: 'magma'", epistemic);
-  const g2Closure = source.indexOf("graphId: 'reconstructed_graph'", magmaClosure);
-  const disclosure = source.indexOf('const disclosureMemories = reconstructedGraphSecurity.memories', g2Closure);
-  const receipt = source.indexOf('calibratedRecallResponse.recall_receipt = await finalizeNativeRecall', disclosure);
+  const finalClosure = source.indexOf('const finalSecurityClosure = await governCanaryRecallFinalClosure({', epistemic);
+  const disclosure = source.indexOf('const disclosureMemories = finalSecurityClosure.memories', finalClosure);
+  const receipt = source.indexOf('calibratedRecallResponse = await calibrateAndFinalizeNativeRecallReturn', disclosure);
 
-  assert.ok(admission >= 0);
-  assert.ok(magma > admission);
-  assert.ok(baselineFamily > magma);
-  assert.ok(baselineFusion > baselineFamily);
+  assert.ok(session >= 0);
+  assert.ok(admission > session);
+  assert.ok(dormant > admission);
+  assert.ok(baselineFusion > dormant);
   assert.ok(canary > baselineFusion);
-  assert.ok(g2 > canary);
+  assert.ok(stateSelection > canary);
+  assert.ok(g2 > stateSelection);
   assert.ok(candidateFamily > g2);
   assert.ok(centralFusion > candidateFamily);
   assert.ok(earlyExit > centralFusion);
   assert.ok(postGraphAdmission > earlyExit);
   assert.ok(refusion > postGraphAdmission);
   assert.ok(epistemic > refusion);
-  assert.ok(magmaClosure > epistemic);
-  assert.ok(g2Closure > magmaClosure);
-  assert.ok(disclosure > g2Closure);
+  assert.ok(finalClosure > epistemic);
+  assert.ok(disclosure > finalClosure);
   assert.ok(receipt > disclosure);
   assert.match(source.slice(candidateFamily, centralFusion), /reconstructedGraphGear: reconstructedGraphCandidate/);
-  assert.match(source.slice(refusion - 300, refusion + 300), /magmaGear: graphFamilyCandidate/);
+  assert.match(source.slice(stateSelection, g2 + 500), /contentStateSelectionDecision: reconstructedGraphStateSelection\.decision/);
+  assert.match(source.slice(stateSelection, g2 + 500), /requireContentStateSelection: true/);
+  assert.match(source.slice(refusion - 300, refusion + 300), /graphFamilyGear: graphFamilyCandidate/);
+  assert.match(source.slice(finalClosure, disclosure), /reconstructed_graph_native_candidate: reconstructedGraphCandidate\?\.decision/);
+  assert.match(source.slice(finalClosure, disclosure), /graph_family_channel: graphFamilyCandidate\?\.decision/);
+  assert.match(source.slice(finalClosure, disclosure), /magma_dormancy: MAGMA_DORMANT_RUNTIME_DECISION/);
+  assert.doesNotMatch(source, /magmaCandidate\s*=\s*await composeMagmaNativeCandidate/);
   assert.doesNotMatch(source, /graph-family-bounded-fusion\.js/);
   assert.doesNotMatch(source, /RECONSTRUCTED_GRAPH_RETRIEVAL_POLICY|process\.env\.RECONSTRUCTED/);
 });
@@ -62,9 +68,11 @@ test('output calibration preserves G2 and graph-family evidence without changing
     decision: { decision_sha256: 'c'.repeat(64) },
   };
   const closure = {
-    graph_id: 'reconstructed_graph',
-    graph_decision_sha256: 'c'.repeat(64),
-    canonical_memory_changed: false,
+    schema: 'hom-aimos/canary-recall-final-closure/v2-epistemic-scope',
+    decision_sha256: 'c'.repeat(64),
+    classification_map_root_sha256: 'd'.repeat(64),
+    one_request_local_classification_map: true,
+    canonical_memory_mutated: false,
     retention_changed: false,
     saber_runtime_authority: false,
   };
@@ -77,13 +85,13 @@ test('output calibration preserves G2 and graph-family evidence without changing
       recall_meta: {
         graph_family_retrieval: graphFamily,
         reconstructed_graph_retrieval: reconstructed,
-        reconstructed_graph_security_closure: closure,
+        recall_security_closure: closure,
       },
     },
   });
 
   assert.deepEqual(calibrated.recall_meta.graph_family_retrieval, graphFamily);
   assert.deepEqual(calibrated.recall_meta.reconstructed_graph_retrieval, reconstructed);
-  assert.deepEqual(calibrated.recall_meta.reconstructed_graph_security_closure, closure);
+  assert.deepEqual(calibrated.recall_meta.recall_security_closure, closure);
   assert.equal(calibrated.memories[0].value, 'Evidence remains unchanged.');
 });

@@ -17,6 +17,7 @@ import {
   chmodSync,
   closeSync,
   createReadStream,
+  appendFileSync,
   existsSync,
   mkdirSync,
   openSync,
@@ -32,6 +33,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
+import net from 'node:net';
 import pg from 'pg';
 
 import { resolveAimosDatabaseUrl } from '../../services/core/runtime-config.js';
@@ -45,6 +47,16 @@ import {
   POISONEDRAG_MAX_ATTEMPTS,
   POISONEDRAG_PROTOCOL_ID,
 } from '../../eval/poisonedrag/harness.mjs';
+import {
+  createS7SuccessorCorpusClone,
+  s7SelectionPopulationFingerprint,
+  verifyS7SuccessorCorpusBinding,
+} from '../../eval/mutmem-v2/s7-successor-corpus.mjs';
+import {
+  readS7Json,
+  writeS7ImmutableJson,
+} from '../../eval/mutmem-v2/s7-artifact-custody.mjs';
+import { selfHash } from '../../eval/mutmem-v2/s7-protocol.mjs';
 
 const { Pool } = pg;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -57,6 +69,7 @@ const CANONICAL_BLIND_PROTOCOL = 'canonical-blind-v1';
 const TWIN_PRIME_G1P_PROTOCOL = 'twin-prime-g1p-v1';
 const TWIN_PRIME_G5_PROTOCOL = 'twin-prime-g5-v1';
 const MUTMEM_V2_S7_PROTOCOL = 'mutmem-v2-s7-v1';
+const MUTMEM_V2_S7_NATIVE_PROTOCOL = 'mutmem-v2-s7-native-v1';
 const TWIN_PRIME_G1P_CORPUS = path.join(ROOT, 'eval', 'data', 'twin-prime-g1p-canonical-v2');
 const TWIN_PRIME_G5_CONTRACT = path.join(ROOT, 'eval', 'twin-prime', 'tp-g5-contract-v6');
 const MUTMEM_V2_S7_CONTRACT = path.join(ROOT, 'eval', 'mutmem-v2', 's7-contract-v2');
@@ -88,6 +101,8 @@ export function parseArgs(argv) {
     modelOverrideExplicit: false,
     keychainAccount: null,
     predecessorRun: null,
+    successorSourceRun: null,
+    qualificationReceipt: null,
     keepScratchDb: false,
     resumeRun: null,
     outputRoot: path.join(ROOT, 'eval', 'public-results')
@@ -112,6 +127,8 @@ export function parseArgs(argv) {
     else if (arg === '--judge-provider' && next) { args.judgeProvider = next; args.modelOverrideExplicit = true; i += 1; }
     else if (arg === '--keychain-account' && next) { args.keychainAccount = String(next).trim(); i += 1; }
     else if (arg === '--predecessor-run' && next) { args.predecessorRun = String(next).trim().toLowerCase(); i += 1; }
+    else if (arg === '--successor-source-run' && next) { args.successorSourceRun = String(next).trim().toLowerCase(); i += 1; }
+    else if (arg === '--qualification-receipt' && next) { args.qualificationReceipt = path.resolve(next); i += 1; }
     else if (arg === '--output-root' && next) { args.outputRoot = path.resolve(next); i += 1; }
     else if (arg === '--resume-run' && next) { args.resumeRun = String(next).trim().toLowerCase(); i += 1; }
     else if (arg === '--full') args.full = true;
@@ -122,8 +139,8 @@ export function parseArgs(argv) {
     else if (arg === '--keep-scratch-db') args.keepScratchDb = true;
   }
   if (!Number.isInteger(args.sample) || args.sample < 1) throw new Error('--sample must be a positive integer');
-  if (![CANONICAL_BLIND_PROTOCOL, LOCOMO_OFFICIAL_PROTOCOL, POISONEDRAG_PROTOCOL_ID, TWIN_PRIME_G1P_PROTOCOL, TWIN_PRIME_G5_PROTOCOL, MUTMEM_V2_S7_PROTOCOL].includes(args.protocol)) {
-    throw new Error('--protocol must be canonical-blind-v1|locomo-upstream-qa-v1|poisonedrag-n100-v1|twin-prime-g1p-v1|twin-prime-g5-v1|mutmem-v2-s7-v1');
+  if (![CANONICAL_BLIND_PROTOCOL, LOCOMO_OFFICIAL_PROTOCOL, POISONEDRAG_PROTOCOL_ID, TWIN_PRIME_G1P_PROTOCOL, TWIN_PRIME_G5_PROTOCOL, MUTMEM_V2_S7_PROTOCOL, MUTMEM_V2_S7_NATIVE_PROTOCOL].includes(args.protocol)) {
+    throw new Error('--protocol must be canonical-blind-v1|locomo-upstream-qa-v1|poisonedrag-n100-v1|twin-prime-g1p-v1|twin-prime-g5-v1|mutmem-v2-s7-v1|mutmem-v2-s7-native-v1');
   }
   if (args.protocol === LOCOMO_OFFICIAL_PROTOCOL) {
     if (args.benchmark !== 'locomo') throw new Error('locomo-upstream-qa-v1 requires --benchmark locomo');
@@ -190,6 +207,37 @@ export function parseArgs(argv) {
     if (args.limitExplicit && args.limit !== 20) throw new Error('mutmem-v2-s7-v1 requires --limit 20');
     if (!args.keychainAccount) throw new Error('mutmem-v2-s7-v1 requires --keychain-account');
     args.limit = 20;
+  }
+  if (args.protocol === MUTMEM_V2_S7_NATIVE_PROTOCOL) {
+    if (args.benchmark !== 'both') throw new Error('mutmem-v2-s7-native-v1 requires --benchmark both');
+    if (args.historicalV1 || args.lifecycleProof || args.cognitive || args.full || args.smoke) {
+      throw new Error('mutmem-v2-s7-native-v1 conflicts with historical/lifecycle/cognitive/full/smoke modes');
+    }
+    if (args.gate !== 'b5') {
+      throw new Error('mutmem-v2-s7-native-v1 requires --gate b5');
+    }
+    if (!/^\d{14}_[0-9a-f]{6}$/.test(String(args.predecessorRun || ''))) {
+      throw new Error('mutmem-v2-s7-native-v1 requires --predecessor-run <completed historical Gate50 run id>');
+    }
+    if (args.sampleExplicit) throw new Error('mutmem-v2-s7-native-v1 population is fixed by the frozen S7 contract');
+    if (args.modelOverrideExplicit) throw new Error('mutmem-v2-s7-native-v1 model roles are fixed to GPT-5.5 and GPT-5.6 Terra');
+    if (args.limitExplicit && args.limit !== 20) throw new Error('mutmem-v2-s7-native-v1 requires --limit 20');
+    if (!args.keychainAccount) throw new Error('mutmem-v2-s7-native-v1 requires --keychain-account');
+    if ((args.successorSourceRun === null) !== (args.qualificationReceipt === null)) {
+      throw new Error('mutmem-v2-s7-native-v1 successor reuse requires both --successor-source-run and --qualification-receipt');
+    }
+    if (args.successorSourceRun !== null
+      && !/^\d{14}_[0-9a-f]{6}$/.test(args.successorSourceRun)) {
+      throw new Error('--successor-source-run must be a canonical run id');
+    }
+    if (args.successorSourceRun !== null && args.resumeRun === args.successorSourceRun) {
+      throw new Error('--successor-source-run cannot equal --resume-run');
+    }
+    args.limit = 20;
+  }
+  if (args.protocol !== MUTMEM_V2_S7_NATIVE_PROTOCOL
+    && (args.successorSourceRun !== null || args.qualificationReceipt !== null)) {
+    throw new Error('successor corpus reuse is mutmem-v2-s7-native-v1 only');
   }
   if (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 200) throw new Error('--limit must be 1..200');
   if (!Number.isInteger(args.port) || args.port < 1024 || args.port > 65535) throw new Error('--port must be 1024..65535');
@@ -409,7 +457,22 @@ async function runSignedScratchPurge(databaseName, receiptPath) {
 // events. Startup verifies the complete housekeeper event history before the
 // server reports ready, so recovery must allow that native proof to finish.
 // This is a fixed protocol-side bound, not ambient or ENV-owned authority.
-async function waitForHealth(baseUrl, child, timeoutMs = 1_800_000) {
+export async function assertLoopbackPortAvailable(port) {
+  await new Promise((resolve, reject) => {
+    const probe = net.createServer();
+    probe.unref();
+    probe.once('error', (error) => {
+      reject(new Error(error?.code === 'EADDRINUSE'
+        ? `scratch_port_already_owned:${port}`
+        : `scratch_port_probe_failed:${port}:${error?.code || error?.message || 'unknown'}`));
+    });
+    probe.listen({ host: '127.0.0.1', port, exclusive: true }, () => {
+      probe.close((error) => (error ? reject(error) : resolve()));
+    });
+  });
+}
+
+async function waitForHealth(baseUrl, child, expectedDatabaseName, timeoutMs = 1_800_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (child.exitCode != null) throw new Error(`scratch server exited with ${child.exitCode}`);
@@ -417,7 +480,9 @@ async function waitForHealth(baseUrl, child, timeoutMs = 1_800_000) {
     try {
       const response = await fetch(`${baseUrl}/healthz`, { signal: AbortSignal.timeout(1500) });
       body = await response.json();
-      if (response.ok && body.ready === true) return body;
+      if (response.ok && body.ready === true
+        && body.runtime?.database_name === expectedDatabaseName
+        && body.runtime?.benchmark_scratch === true) return body;
     } catch { /* server is still booting */ }
     if (body?.bootError) throw new Error(`scratch server background boot failed:${body.bootError}`);
     // Stay below the server's native 100-request/minute general limiter. A
@@ -790,6 +855,43 @@ export function canonicalRunConfiguration(args) {
       artifact_manifest_sha256: artifactManifest.artifact_manifest_sha256,
     };
   }
+  if (args.protocol === MUTMEM_V2_S7_NATIVE_PROTOCOL) {
+    const selectionContractFile = path.join(MUTMEM_V2_S7_CONTRACT, 'selection-contract.json');
+    const artifactManifestFile = path.join(MUTMEM_V2_S7_CONTRACT, 'artifact-manifest.json');
+    const selectionContract = JSON.parse(readFileSync(selectionContractFile, 'utf8'));
+    const artifactManifest = JSON.parse(readFileSync(artifactManifestFile, 'utf8'));
+    return {
+      protocol: args.protocol,
+      benchmark: 'both',
+      gate: 'b5',
+      gate_name: 'gate50',
+      utility_questions: 50,
+      utility_arms: ['N1'],
+      historical_predecessor_gate50_run_id: args.predecessorRun,
+      successor_source_run_id: args.successorSourceRun,
+      successor_corpus_mode: args.successorSourceRun
+        ? 'exact_post_replay_pre_poison_database_clone'
+        : 'native_session_replay',
+      qualification_receipt_file_sha256: args.qualificationReceipt
+        ? sha256File(args.qualificationReceipt) : null,
+      poison_targets: 5,
+      poison_arms: ['P0', 'P1'],
+      recall_depth_k: 20,
+      poison_disclosure_k: 5,
+      generator: 'codex:gpt-5.5',
+      generator_reasoning: 'medium',
+      judge: 'codex:gpt-5.6-terra',
+      judge_reasoning: 'high',
+      phase_retries: 6,
+      signed_recall_governor: 'hom.aimos.mutmem-v2-s7-signed-envelope-governor/v1',
+      effective_policy_authority: 'none_permanent_native_gearbox',
+      scratch_only: true,
+      canonical_policy_unchanged: true,
+      signed_purge_on_success: false,
+      selection_contract_sha256: selectionContract.selection_contract_sha256,
+      artifact_manifest_sha256: artifactManifest.artifact_manifest_sha256,
+    };
+  }
   if (args.protocol === MUTMEM_V2_S7_PROTOCOL) {
     const selectionContractFile = path.join(MUTMEM_V2_S7_CONTRACT, 'selection-contract.json');
     const artifactManifestFile = path.join(MUTMEM_V2_S7_CONTRACT, 'artifact-manifest.json');
@@ -1036,10 +1138,83 @@ function verifiedS7ReplaySummary(
   return null;
 }
 
+function bindS7SuccessorReplayReuse(args, context, gate) {
+  const binding = verifyS7SuccessorCorpusBinding({
+    root: ROOT,
+    outputDir: context.outputDir,
+    targetRun: context.runId,
+    targetDatabase: context.databaseName,
+    sourceRun: args.successorSourceRun,
+    qualificationFile: args.qualificationReceipt,
+  });
+  const sourceDir = path.join(args.outputRoot, args.successorSourceRun);
+  const currentSelectionFile = path.join(
+    context.outputDir, 'mutmem-v2-s7', gate, 'selection.json',
+  );
+  const sourceSelectionFile = path.join(
+    sourceDir, 'mutmem-v2-s7', gate, 'selection.json',
+  );
+  const currentPopulation = s7SelectionPopulationFingerprint(
+    readS7Json(currentSelectionFile, 20_000_000),
+  );
+  const sourcePopulation = s7SelectionPopulationFingerprint(
+    readS7Json(sourceSelectionFile, 20_000_000),
+  );
+  if (currentPopulation !== sourcePopulation
+    || sourcePopulation !== binding.binding.source_selection_population_sha256) {
+    throw new Error('mutmem_v2_s7_successor_selection_population_mismatch');
+  }
+  const replay = {};
+  for (const benchmark of ['locomo', 'longmemeval']) {
+    const retained = verifiedS7ReplaySummary(
+      sourceDir,
+      args.successorSourceRun,
+      `aimos_benchmark_${args.successorSourceRun}`,
+      benchmark,
+      path.join(sourceDir, `selection-${benchmark}.json`),
+      path.join(CORPUS_ROOT_FOR_S7(), `${benchmark}-sessions.json`),
+    );
+    if (!retained) {
+      throw new Error(`mutmem_v2_s7_successor_replay_summary_invalid:${benchmark}`);
+    }
+    replay[benchmark] = {
+      source_summary_file: path.relative(sourceDir, retained.file),
+      source_summary_file_sha256: sha256File(retained.file),
+      source_summary_sha256: retained.summary.summary_sha256,
+      completed_sessions: retained.summary.completed_sessions,
+      failed_sessions: retained.summary.failed_sessions,
+    };
+  }
+  const body = {
+    schema: 'hom.aimos.mutmem-v2-s7-successor-replay-reuse/v1',
+    target_run: context.runId,
+    target_database: context.databaseName,
+    source_run: args.successorSourceRun,
+    source_database: `aimos_benchmark_${args.successorSourceRun}`,
+    successor_corpus_binding_sha256: binding.binding.binding_sha256,
+    qualification_receipt_sha256: binding.binding.qualification.receipt_sha256,
+    selection_population_sha256: currentPopulation,
+    replay,
+    exact_database_clone_verified_before_server_start: true,
+    public_session_population_unchanged: true,
+    session_replay_skipped: true,
+    recall_authorized: false,
+    model_execution_authorized: false,
+    automatic_policy_activation: false,
+  };
+  const artifact = { ...body, binding_sha256: selfHash(body, 'binding_sha256') };
+  const file = path.join(
+    context.outputDir, 'mutmem-v2-s7', gate, 'successor-replay-reuse.json',
+  );
+  writeS7ImmutableJson(file, artifact);
+  return Object.freeze({ file, artifact });
+}
+
 async function runMutMemV2S7(args, context) {
   const logDir = path.join(context.outputDir, 'logs');
   mkdirSync(logDir, { recursive: true, mode: 0o700 });
   const gate = args.gate === 'b5' ? 'gate50' : 'gate10';
+  const currentNative = args.protocol === MUTMEM_V2_S7_NATIVE_PROTOCOL;
   const questionCount = gate === 'gate50' ? 50 : 10;
   const predecessorArgs = gate === 'gate50'
     ? ['--predecessor-run', args.predecessorRun]
@@ -1050,6 +1225,7 @@ async function runMutMemV2S7(args, context) {
     '--run-dir', context.outputDir,
     '--gate', gate,
     ...predecessorArgs,
+    ...(currentNative ? ['--current-native'] : []),
   ];
 
   context.onPhase?.(`mutmem-v2-s7-${gate}-prepare`);
@@ -1058,10 +1234,22 @@ async function runMutMemV2S7(args, context) {
     '--run-id', context.runId,
     '--run-dir', context.outputDir,
     '--gate', gate,
+    ...(currentNative ? ['--current-native'] : []),
   ], path.join(logDir, `mutmem-v2-s7-${gate}-prepare.log`));
 
   const modelPreflight = await runModelPreflight(context, logDir, 'gpt-5.5');
-  for (const benchmark of ['locomo', 'longmemeval']) {
+  const successorReplay = args.successorSourceRun
+    ? bindS7SuccessorReplayReuse(args, context, gate)
+    : null;
+  if (successorReplay) {
+    console.log(JSON.stringify({
+      event: 'mutmem_v2_s7_successor_replay_reused',
+      source_run: args.successorSourceRun,
+      binding_sha256: successorReplay.artifact.binding_sha256,
+      session_replay_skipped: true,
+    }));
+  }
+  for (const benchmark of successorReplay ? [] : ['locomo', 'longmemeval']) {
     const selectionFile = path.join(context.outputDir, `selection-${benchmark}.json`);
     const sessionsFile = path.join(CORPUS_ROOT_FOR_S7(), `${benchmark}-sessions.json`);
     const retainedReplay = verifiedS7ReplaySummary(
@@ -1138,18 +1326,25 @@ async function runMutMemV2S7(args, context) {
     throw new Error(`mutmem_v2_s7_${gate}_summary_missing`);
   }
   const summary = JSON.parse(readFileSync(summaryFile, 'utf8'));
-  const terminalStates = gate === 'gate10'
+  const terminalStates = currentNative
+    ? ['PASS_CURRENT_NATIVE_GATE50_AWAIT_OPERATOR_DECISION',
+        'STOP_CURRENT_NATIVE_GATE50', 'FAIL_SECURITY_GATE', 'INDETERMINATE_POPULATION']
+    : gate === 'gate10'
     ? ['PASS_GATE10_AWAIT_OPERATOR_DECISION', 'STOP_UTILITY_REGRESSION',
         'FAIL_SECURITY_GATE', 'INDETERMINATE_POPULATION']
     : ['PASS_GATE50_AWAIT_OPERATOR_DECISION', 'STOP_GATE50_UTILITY_REGRESSION',
         'FAIL_SECURITY_GATE', 'INDETERMINATE_POPULATION'];
-  if (summary?.schema !== `hom.aimos.mutmem-v2-s7-${gate}-summary/v1`
+  const expectedSchema = currentNative
+    ? 'hom.aimos.mutmem-v2-s7-current-native-gate50-summary/v1'
+    : `hom.aimos.mutmem-v2-s7-${gate}-summary/v1`;
+  if (summary?.schema !== expectedSchema
     || summary.run_id !== context.runId
     || summary.gate !== gate
-    || summary.utility?.by_arm?.M0?.questions !== questionCount
-    || summary.utility?.by_arm?.M1?.questions !== questionCount
-    || !summary.utility?.by_arm?.M0
-    || !summary.utility?.by_arm?.M1
+    || (currentNative
+      ? summary.utility?.by_arm?.current_native_n1?.questions !== questionCount
+        || summary.utility?.by_arm?.historical_gate50_m1?.questions !== questionCount
+      : summary.utility?.by_arm?.M0?.questions !== questionCount
+        || summary.utility?.by_arm?.M1?.questions !== questionCount)
     || !terminalStates.includes(summary.decision?.terminal_state)
     || !/^[0-9a-f]{64}$/.test(String(summary.summary_sha256 || ''))) {
     throw new Error(`mutmem_v2_s7_${gate}_summary_invalid`);
@@ -1274,6 +1469,7 @@ async function main() {
   const outputDir = path.join(args.outputRoot, runId);
   const baseUrl = `http://127.0.0.1:${args.port}`;
   const resuming = Boolean(args.resumeRun);
+  await assertLoopbackPortAvailable(args.port);
   if (resuming) {
     if (!existsSync(outputDir) || statSync(outputDir).isSymbolicLink()) throw new Error('resume_run_directory_missing_or_invalid');
   } else {
@@ -1323,7 +1519,7 @@ async function main() {
   if (currentCanonicalFootprint.benchmark_rows !== 0) {
     throw new Error('canonical AIMOS already contains benchmark memories; run the authorized cleanup ceremony before benchmarking');
   }
-  const datasets = args.protocol === MUTMEM_V2_S7_PROTOCOL
+  const datasets = [MUTMEM_V2_S7_PROTOCOL, MUTMEM_V2_S7_NATIVE_PROTOCOL].includes(args.protocol)
     ? {
         canonical_corpus_manifest: {
           path: path.join(ROOT, 'eval', 'data', 'canonical', 'corpus-manifest.json'),
@@ -1451,6 +1647,7 @@ async function main() {
   const passes = {};
   let health = null;
   let baseline = resumeManifest?.baseline || null;
+  let successorCorpus = resumeManifest?.successor_corpus || null;
   let resumable = false;
   const resumeScopeArgs = args.full
     ? '--full'
@@ -1465,19 +1662,69 @@ async function main() {
       run_id: runId,
       database_name: databaseName,
       state: resuming ? 'resuming' : 'initializing',
-      phase: resuming ? 'scratch-server-start' : 'genesis-install',
+      phase: resuming
+        ? 'scratch-server-start'
+        : args.successorSourceRun
+          ? 'successor-corpus-clone'
+          : 'genesis-install',
       resumable: resuming,
     });
     if (resuming) {
       if (!await databaseExists(databaseName)) throw new Error('resume_scratch_database_missing');
       scratchCreated = true;
+      if (args.successorSourceRun) {
+        const verified = verifyS7SuccessorCorpusBinding({
+          root: ROOT,
+          outputDir,
+          targetRun: runId.toLowerCase(),
+          targetDatabase: databaseName,
+          sourceRun: args.successorSourceRun,
+          qualificationFile: args.qualificationReceipt,
+        });
+        if (!successorCorpus
+          || successorCorpus.binding_sha256 !== verified.binding.binding_sha256
+          || successorCorpus.file_sha256 !== verified.file_sha256) {
+          throw new Error('mutmem_v2_s7_successor_resume_manifest_binding_mismatch');
+        }
+      }
       resumable = Boolean(args.keepScratchDb
         && existsSync(path.join(outputDir, 'run-manifest.json')));
     } else {
-      scratchCreated = true;
-      await spawnLogged(process.execPath, [
-        'scripts/genesis-install.mjs', '--aimos-db', databaseName, '--aimos-port', String(args.port)
-      ], installerLog);
+      if (args.successorSourceRun) {
+        let clone;
+        try {
+          clone = await createS7SuccessorCorpusClone({
+            root: ROOT,
+            outputRoot: args.outputRoot,
+            outputDir,
+            targetRun: runId.toLowerCase(),
+            targetDatabase: databaseName,
+            sourceRun: args.successorSourceRun,
+            qualificationFile: args.qualificationReceipt,
+          });
+        } finally {
+          scratchCreated = await databaseExists(databaseName);
+        }
+        successorCorpus = {
+          schema: clone.binding.schema,
+          file: path.relative(outputDir, clone.file),
+          file_sha256: clone.file_sha256,
+          binding_sha256: clone.binding.binding_sha256,
+          source_run: clone.binding.source_run,
+          source_database: clone.binding.source_database,
+          source_selection_population_sha256:
+            clone.binding.source_selection_population_sha256,
+          qualification_receipt_sha256:
+            clone.binding.qualification.receipt_sha256,
+          source_closure_sha256:
+            clone.binding.qualification.source_closure_sha256,
+        };
+      } else {
+        scratchCreated = true;
+        await spawnLogged(process.execPath, [
+          'scripts/genesis-install.mjs', '--aimos-db', databaseName, '--aimos-port', String(args.port)
+        ], installerLog);
+      }
       baseline = await scratchProof(databaseName);
       writeRunManifest(outputDir, {
         run_id: runId,
@@ -1486,6 +1733,7 @@ async function main() {
         configuration,
         datasets,
         baseline,
+        ...(successorCorpus ? { successor_corpus: successorCorpus } : {}),
         canonical_before: canonicalBefore,
       });
       resumable = Boolean(args.keepScratchDb
@@ -1494,7 +1742,7 @@ async function main() {
     server = spawnLogged(process.execPath, [
       'server.js', '--aimos-db', databaseName, '--aimos-port', String(args.port)
     ], serverLog, { finite: false });
-    health = await waitForHealth(baseUrl, server);
+    health = await waitForHealth(baseUrl, server, databaseName);
     resumable = Boolean(args.keepScratchDb
       && scratchCreated
       && !scratchPurged
@@ -1523,7 +1771,7 @@ async function main() {
       server = spawnLogged(process.execPath, [
         'server.js', '--aimos-db', databaseName, '--aimos-port', String(args.port)
       ], serverLog, { finite: false });
-      health = await waitForHealth(baseUrl, server);
+      health = await waitForHealth(baseUrl, server, databaseName);
 
       await spawnLogged(process.execPath, [
         'scripts/benchmark/prove-session-lifecycle.mjs',
@@ -1611,7 +1859,7 @@ async function main() {
           resumable,
         }),
       });
-    } else if (args.protocol === MUTMEM_V2_S7_PROTOCOL) {
+    } else if ([MUTMEM_V2_S7_PROTOCOL, MUTMEM_V2_S7_NATIVE_PROTOCOL].includes(args.protocol)) {
       passes.mutmem_v2_s7 = await runMutMemV2S7(args, {
         runId: runId.toLowerCase(),
         databaseName,
@@ -1692,6 +1940,8 @@ async function main() {
                 ? 'twin-prime-g5'
                 : args.protocol === MUTMEM_V2_S7_PROTOCOL
                   ? 'mutmem-v2-s7'
+                  : args.protocol === MUTMEM_V2_S7_NATIVE_PROTOCOL
+                    ? 'mutmem-v2-s7-current-native'
               : 'canonical-single-query',
       protocol: args.protocol,
       benchmark: args.benchmark,
@@ -1702,7 +1952,9 @@ async function main() {
           : args.protocol === TWIN_PRIME_G5_PROTOCOL
             ? 'gate10:10-questions:four-arms'
             : args.protocol === MUTMEM_V2_S7_PROTOCOL
-              ? 'gate10:10-utility-questions:two-arms:5-poison-targets:two-policies'
+              ? `${args.gate === 'b5' ? 'gate50:50' : 'gate10:10'}-utility-questions:two-arms:5-poison-targets:two-policies`
+              : args.protocol === MUTMEM_V2_S7_NATIVE_PROTOCOL
+                ? `gate50:50-current-native:5-poison-targets:source-${args.successorSourceRun ? 'bound-clone' : 'replay'}`
           : args.full ? 'full' : (args.gate || (args.smoke ? `smoke:${args.sample}` : `sample:${args.sample}`)),
       recall_depth_k: args.limit,
       cognitive: args.lifecycleProof
@@ -1719,10 +1971,11 @@ async function main() {
                 ? false
                 : args.protocol === TWIN_PRIME_G5_PROTOCOL
                   ? { generator: 'codex:gpt-5.5', generator_reasoning: 'medium', judge: 'codex:gpt-5.6-terra', judge_reasoning: 'high' }
-                  : args.protocol === MUTMEM_V2_S7_PROTOCOL
+                  : [MUTMEM_V2_S7_PROTOCOL, MUTMEM_V2_S7_NATIVE_PROTOCOL].includes(args.protocol)
                     ? { generator: 'codex:gpt-5.5', generator_reasoning: 'medium', judge: 'codex:gpt-5.6-terra', judge_reasoning: 'high' }
                 : { generator: 'codex:gpt-5.4', judge: 'codex:gpt-5.6-terra', judge_reasoning: 'high' },
       datasets,
+      successor_corpus: successorCorpus,
       scratch: {
         database_name: databaseName,
         port: args.port,
@@ -1740,7 +1993,7 @@ async function main() {
     writeFileSync(path.join(outputDir, 'isolation-proof.json'), `${JSON.stringify(isolationProof, null, 2)}\n`);
     writeFileSync(path.join(outputDir, 'benchmark-summary.json'), `${JSON.stringify({ run_id: runId, mode: isolationProof.mode, benchmark: args.benchmark, scope: isolationProof.scope, recall_depth_k: args.limit, passes }, null, 2)}\n`);
     writeFileSync(path.join(outputDir, 'reproduce-command.txt'),
-      `node scripts/benchmark/run-isolated.mjs${args.lifecycleProof ? ' --lifecycle-proof' : args.full ? ' --full' : args.gate ? ` --gate ${args.gate}` : ` --sample ${args.sample}`}${args.historicalV1 ? ' --historical-v1' : ''}${args.cognitive ? ' --cognitive' : ''} --benchmark ${args.benchmark} --protocol ${args.protocol} --port ${args.port} --limit ${args.limit}${args.keychainAccount ? ` --keychain-account ${args.keychainAccount}` : ''}${args.predecessorRun ? ` --predecessor-run ${args.predecessorRun}` : ''}${args.protocol === MUTMEM_V2_S7_PROTOCOL ? ' --keep-scratch-db' : ''}\n`);
+      `node scripts/benchmark/run-isolated.mjs${args.lifecycleProof ? ' --lifecycle-proof' : args.full ? ' --full' : args.gate ? ` --gate ${args.gate}` : ` --sample ${args.sample}`}${args.historicalV1 ? ' --historical-v1' : ''}${args.cognitive ? ' --cognitive' : ''} --benchmark ${args.benchmark} --protocol ${args.protocol} --port ${args.port} --limit ${args.limit}${args.keychainAccount ? ` --keychain-account ${args.keychainAccount}` : ''}${args.predecessorRun ? ` --predecessor-run ${args.predecessorRun}` : ''}${args.successorSourceRun ? ` --successor-source-run ${args.successorSourceRun}` : ''}${args.qualificationReceipt ? ` --qualification-receipt ${args.qualificationReceipt}` : ''}${args.keepScratchDb ? ' --keep-scratch-db' : ''}\n`);
     writeFileSync(path.join(outputDir, 'artifact-hashes.json'), `${JSON.stringify(await artifactHashes(outputDir), null, 2)}\n`);
     writeRunStatus(outputDir, {
       run_id: runId,
@@ -1751,6 +2004,28 @@ async function main() {
     });
     console.log(JSON.stringify({ output_dir: outputDir, isolation: isolationProof, passes }, null, 2));
   } catch (error) {
+    let observedPhase = 'unknown';
+    try {
+      observedPhase = JSON.parse(readFileSync(path.join(outputDir, 'run-status.json'), 'utf8')).phase
+        || observedPhase;
+    } catch { /* status may not exist when failure precedes run creation */ }
+    appendFileSync(path.join(outputDir, 'diagnostics.jsonl'), `${JSON.stringify({
+      schema: 'hom.aimos.benchmark-diagnostic/v1',
+      observed_at: new Date().toISOString(),
+      run_id: runId,
+      phase: observedPhase,
+      protocol: args.protocol,
+      database_name: databaseName,
+      loopback_port: args.port,
+      server_pid: server?.pid || null,
+      server_exit_code: server?.exitCode ?? null,
+      health_database_name: health?.runtime?.database_name || null,
+      health_ready: health?.ready === true,
+      error_name: String(error?.name || 'Error').slice(0, 128),
+      error_message: String(error?.message || error || 'unknown_error').slice(0, 2000),
+      stack: String(error?.stack || '').split('\n').slice(0, 12),
+      sensitive_payloads_retained_elsewhere: false,
+    })}\n`, { mode: 0o600 });
     writeRunStatus(outputDir, {
       run_id: runId,
       database_name: databaseName,
@@ -1762,7 +2037,7 @@ async function main() {
         message: String(error?.message || error || 'unknown_error').slice(0, 2000),
       },
       resume_command: resumable
-        ? `node scripts/benchmark/run-isolated.mjs --resume-run ${runId} ${resumeScopeArgs} --benchmark ${args.benchmark} --protocol ${args.protocol} --port ${args.port} --limit ${args.limit}${args.keychainAccount ? ` --keychain-account ${args.keychainAccount}` : ''}${args.predecessorRun ? ` --predecessor-run ${args.predecessorRun}` : ''} --keep-scratch-db`
+        ? `node scripts/benchmark/run-isolated.mjs --resume-run ${runId} ${resumeScopeArgs} --benchmark ${args.benchmark} --protocol ${args.protocol} --port ${args.port} --limit ${args.limit}${args.keychainAccount ? ` --keychain-account ${args.keychainAccount}` : ''}${args.predecessorRun ? ` --predecessor-run ${args.predecessorRun}` : ''}${args.successorSourceRun ? ` --successor-source-run ${args.successorSourceRun}` : ''}${args.qualificationReceipt ? ` --qualification-receipt ${args.qualificationReceipt}` : ''} --keep-scratch-db`
         : null,
     });
     throw error;

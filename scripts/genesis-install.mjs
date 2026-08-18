@@ -431,11 +431,18 @@ export async function phaseA6GenesisGuideIngestion({
   manifestVerification: suppliedManifest = null,
 } = {}) {
   logPhase('A6 — Genesis Guide ingestion via real /aimos/save HTTP (no auth-gate bypass)');
-  const [{ default: express }, { authGate }, { signAsHousekeeper }, { verifyGenesisManifest }] = await Promise.all([
+  const [
+    { default: express },
+    { authGate },
+    { signAsHousekeeper },
+    { genesisGuideMemoryType, genesisGuideRequestBody, verifyGenesisManifest },
+    { canonicalJson },
+  ] = await Promise.all([
     import('express'),
     import('../services/security/auth-gate.js'),
     import('../services/security/housekeeper-signer.js'),
     import('./verify-genesis-manifest.mjs'),
+    import('../services/security/protocol/canonical-json.js'),
   ]);
 
   console.log('Spinning up genesis-mode Express server (auth-gate + /aimos router, no background services).');
@@ -495,6 +502,81 @@ export async function phaseA6GenesisGuideIngestion({
   const failedFiles = [];
   let firstFailureBody = null;
 
+  const guideMemoryType = genesisGuideMemoryType;
+  const guideRequestBody = (fileRecord, content, key, _memoryType, signedTs) => (
+    genesisGuideRequestBody({
+      manifest: manifestVerification,
+      fileRecord,
+      content,
+      key,
+      signedTs,
+    })
+  );
+  const findManifestBoundGuideMemory = async (fileRecord, content, key, memoryType) => {
+    const candidates = await targetPool.query(
+      `SELECT m.id::text, m.scope, m.memory_type,
+              encode(m.content_hash,'hex') AS live_content_hash,
+              p.event_type, p.sig_form_version, p.body_json,
+              encode(receipt.request_hash,'hex') AS request_hash,
+              encode(receipt.mutation_hash,'hex') AS request_mutation_hash,
+              receipt.ts_signed AS request_ts_signed,
+              receipt.signed_method AS request_method,
+              receipt.signed_path AS request_path,
+              receipt.actor_agent_id AS request_actor,
+              admission.id::text AS admission_event_id,
+              admission.operation AS admission_operation,
+              admission.metadata AS admission_metadata
+         FROM aimos_memories m
+         JOIN aimos_memory_provenance p ON p.memory_id=m.id
+         LEFT JOIN aimos_request_receipts receipt
+           ON encode(receipt.mutation_hash,'hex')
+                = p.body_json->>'request_receipt_mutation_hash_hex'
+         LEFT JOIN aimos_events admission
+           ON admission.id::text=p.body_json->>'authorization_event_id'
+        WHERE m.company_id='hom' AND m.key=$1 AND m.value=$2
+          AND m.source='guide:genesis-install'
+          AND EXISTS (
+            SELECT 1 FROM aimos_memory_provenance binding
+             WHERE binding.memory_id=m.id AND binding.event_type='BIND'
+          )`,
+      [key, content],
+    );
+    for (const row of candidates.rows) {
+      const body = row.body_json || {};
+      const direct = body.genesis_manifest_schema === manifestVerification.schema
+        && Number(body.genesis_manifest_version) === manifestVerification.version
+        && body.genesis_corpus_root === manifestVerification.corpusRoot
+        && body.genesis_file_path === fileRecord.path
+        && body.genesis_file_sha256 === fileRecord.sha256
+        && Number(body.genesis_file_bytes) === fileRecord.bytes;
+      let reassert = false;
+      if (row.event_type === 'SAVE_REASSERT'
+          && Number(row.sig_form_version) === 3
+          && row.request_ts_signed != null) {
+        const expectedRequestHash = crypto.createHash('sha256')
+          .update(Buffer.from(canonicalJson(
+            guideRequestBody(fileRecord, content, key, memoryType, row.request_ts_signed),
+          ), 'utf8'))
+          .digest('hex');
+        const admissionMetadata = row.admission_metadata || {};
+        reassert = body.schema === 'hom.aimos.memory-occurrence/v3'
+          && body.live_content_hash_hex === row.live_content_hash
+          && body.request_body_hash_hex === expectedRequestHash
+          && row.request_hash === expectedRequestHash
+          && body.request_receipt_mutation_hash_hex === row.request_mutation_hash
+          && row.request_method === 'POST'
+          && row.request_path === '/aimos/save'
+          && row.request_actor === 'housekeeper'
+          && row.admission_operation === 'request_admission_verified'
+          && row.admission_event_id === body.authorization_event_id
+          && admissionMetadata.request_receipt_mutation_hash === row.request_mutation_hash
+          && admissionMetadata.request_hash === expectedRequestHash;
+      }
+      if (direct || reassert) return row;
+    }
+    return null;
+  };
+
   try {
     for (const fileRecord of files) {
       const file = path.basename(fileRecord.path);
@@ -503,66 +585,20 @@ export async function phaseA6GenesisGuideIngestion({
 
       const base = file.replace(/\.md$/, '');
       const key = `guide:housekeeper:${base}`;
-
-      const alreadyIngested = await targetPool.query(
-        `SELECT m.id FROM aimos_memories m
-          WHERE m.company_id = 'hom' AND m.key = $1 AND m.value = $2
-            AND m.source = 'guide:genesis-install'
-            AND EXISTS (
-              SELECT 1
-                FROM aimos_memory_provenance p
-               WHERE p.memory_id = m.id
-                 AND p.body_json->>'genesis_manifest_schema' = $3
-                 AND p.body_json->>'genesis_manifest_version' = $4
-                 AND p.body_json->>'genesis_corpus_root' = $5
-                 AND p.body_json->>'genesis_file_sha256' = $6
-            )
-          ORDER BY created_at DESC LIMIT 1`,
-        [
-          key,
-          content,
-          manifestVerification.schema,
-          String(manifestVerification.version),
-          manifestVerification.corpusRoot,
-          fileRecord.sha256,
-        ]
+      const memoryType = guideMemoryType(content);
+      const alreadyIngested = await findManifestBoundGuideMemory(
+        fileRecord, content, key, memoryType,
       );
-      if (alreadyIngested.rows.length > 0) {
+      if (alreadyIngested) {
         ingested++;
-        console.log(`[A6] ${file} → already present (memory_id=${alreadyIngested.rows[0].id.slice(0, 8)}…, append-only idempotence)`);
+        console.log(`[A6] ${file} → already present (memory_id=${alreadyIngested.id.slice(0, 8)}…, append-only idempotence)`);
         continue;
-      }
-
-      // Deterministic name-aware recall check.
-      const firstH1 = (content.match(/^#\s*(.+)$/m) || [])[1] || '';
-      let memoryType = 'book_extract';
-      if (/guide|manual|how to|connect|llm|agent/i.test(firstH1)) {
-        memoryType = 'procedural_seed';
-      } else if (/ledger|knowledge|baseline/i.test(firstH1)) {
-        memoryType = 'book_extract';
       }
 
       // Body WITHOUT ts_signed — signAsHousekeeper sets it before signing.
       // is_genesis is retained as signed audit metadata. Authority comes from
       // the verified system-self certificate; this body flag never grants it.
-      const body = {
-        company_id: 'hom',
-        agent_id: 'housekeeper',
-        key,
-        value: content,
-        memory_type: memoryType,
-        source: 'guide:genesis-install',
-        memory_tier: 'long-term',
-        scope: 'system',
-        clearance_level: 10,
-        is_genesis: true,
-        genesis_manifest_schema: manifestVerification.schema,
-        genesis_manifest_version: manifestVerification.version,
-        genesis_corpus_root: manifestVerification.corpusRoot,
-        genesis_file_path: fileRecord.path,
-        genesis_file_sha256: fileRecord.sha256,
-        genesis_file_bytes: fileRecord.bytes
-      };
+      const body = guideRequestBody(fileRecord, content, key, memoryType, null);
 
       try {
         const signed = await signAsHousekeeper(body, { method: 'POST', path: '/aimos/save' });
@@ -624,36 +660,28 @@ export async function phaseA6GenesisGuideIngestion({
     throw new Error(`A6 genesis Guide ingestion failed: ${failed}/${files.length} Guide files did not persist.`);
   }
 
-  // Self-check straight from the database: the corpus must actually contain at
-  // least one row per Guide file, else the architecture would fire blank.
-  const expectedKeys = files.map((record) => `guide:housekeeper:${path.basename(record.path, '.md')}`);
-  const countRes = await targetPool.query(
-    `SELECT count(DISTINCT m.key)::int AS n,
-            count(DISTINCT m.id) FILTER (
-              WHERE m.scope = 'quarantine' OR m.memory_type = 'quarantine'
-            )::int AS quarantined
-       FROM aimos_memories m
-      WHERE m.company_id = 'hom'
-        AND m.source = 'guide:genesis-install'
-        AND m.key = ANY($1::text[])
-        AND EXISTS (
-          SELECT 1
-            FROM aimos_memory_provenance p
-           WHERE p.memory_id = m.id
-             AND p.body_json->>'genesis_manifest_schema' = $2
-             AND p.body_json->>'genesis_manifest_version' = $3
-             AND p.body_json->>'genesis_corpus_root' = $4
-        )
-        AND EXISTS (
-          SELECT 1
-            FROM aimos_memory_provenance binding
-           WHERE binding.memory_id = m.id
-             AND binding.event_type = 'BIND'
-        )`,
-    [expectedKeys, manifestVerification.schema, String(manifestVerification.version), manifestVerification.corpusRoot]
-  );
-  const corpusCount = countRes.rows?.[0]?.n ?? 0;
-  const quarantinedCount = countRes.rows?.[0]?.quarantined ?? 0;
+  // Self-check straight from the database. A changed Guide creates a new SAVE
+  // state; a byte-identical Guide creates a signed v3 SAVE_REASSERT occurrence
+  // on its existing state. Both must bind the exact manifest request through
+  // the durable request receipt and request-admission event.
+  let corpusCount = 0;
+  let quarantinedCount = 0;
+  for (const fileRecord of files) {
+    const content = fs.readFileSync(fileRecord.absolutePath, 'utf8');
+    const file = path.basename(fileRecord.path);
+    const key = `guide:housekeeper:${file.replace(/\.md$/, '')}`;
+    const matched = await findManifestBoundGuideMemory(
+      fileRecord,
+      content,
+      key,
+      guideMemoryType(content),
+    );
+    if (!matched) continue;
+    corpusCount += 1;
+    if (matched.scope === 'quarantine' || matched.memory_type === 'quarantine') {
+      quarantinedCount += 1;
+    }
+  }
   console.log(`[A6] DB self-check: ${corpusCount}/${files.length} manifest-bound Guide memories present.`);
   if (corpusCount < files.length) {
     console.error(`[A6] FAILED — found ${corpusCount}/${files.length} manifest-bound Guide seed rows.`);

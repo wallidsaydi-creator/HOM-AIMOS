@@ -1,6 +1,9 @@
 /**
  * multi-stage-retrieval.js — Reciprocal Rank Fusion + confidence-gated recall
- * Source: Auralink SDC (RRF, 95.2% Recall@5)
+ * Method authorities:
+ * - Cormack et al. (2009), Reciprocal Rank Fusion.
+ * - Gao et al. (2022), HyDE, used here only as a deterministic prompt-embedding
+ *   adaptation. The paper's LLM-generated hypothetical document is not claimed.
  *
  * Epistemology validation (Batch 10.7 Lane 7, Phase 3.6):
  *   Concentration of measure proves that in 768d space, cosine distance is
@@ -48,7 +51,20 @@ export const W_VEC = 0.55;
 export const W_TXT = 0.25;
 export const W_INFINI = 0.20;
 export const RRF_K = 60; // Reciprocal Rank Fusion constant (Auralink SDC)
-const S_VEC_MIN = 0.72; // Minimum vector similarity threshold
+export const MULTI_STAGE_RETRIEVAL_CONTRACT = Object.freeze({
+  schema: 'hom-aimos/multi-stage-retrieval/v2-admitted-rescue',
+  rrf_authority: 'Cormack_et_al_2009',
+  hyde_authority: 'Gao_et_al_2022_arXiv_2212.10496',
+  hyde_implementation: 'deterministic_hypothetical_prompt_embedding_adaptation',
+  full_hyde_paper_implementation: false,
+  requires_request_scoped_admission: true,
+  proposal_multiplier: 3,
+  maximum_result_limit: 10,
+  time_complexity: 'O(database_top_k + admitted_candidates_squared_for_mmr)',
+  environment_authority: false,
+  disclosure_authority: false,
+  mutation_authority: false,
+});
 const WAVE5_ONTOLOGY_RECALL_AUTHORITIES = [
   'Ontology-Aware Design Patterns for Clinical AI Systems: Translating Reification Theory into Software Architecture',
   'ELISA: An Interpretable Hybrid Generative AI Agent for Expression-Grounded Discovery in Single-Cell Genomics',
@@ -71,28 +87,108 @@ export function getScaleAdaptiveRRFWeights(memoryCount) {
   };
 }
 
-export async function hydeExpand(queryText) {
+export async function hydeExpand(queryText, { embeddingFn = getEmbedding } = {}) {
   const hypothetical = `A document that answers this question would say: ${queryText}`;
-  return getEmbedding(hypothetical);
+  return embeddingFn(hypothetical);
 }
 
-export async function interactionBoost(results, companyId = AIMOS_COMPANY_ID) {
+function buildScopedSearch({
+  leadingValue,
+  companyId,
+  clearanceLevel,
+  requestingAgent,
+  allowedDataClasses,
+  memoryTypeFilter = '',
+  sourceFilter = '',
+  sessionLikePattern = '',
+}) {
+  if (!requestingAgent || !Array.isArray(allowedDataClasses) || allowedDataClasses.length === 0) {
+    throw new Error('multi_stage_retrieval_scope_required');
+  }
+  const params = [leadingValue, companyId, clearanceLevel, requestingAgent, allowedDataClasses];
+  const clauses = [
+    'company_id = $2',
+    'clearance_level <= $3',
+    '(clearance_level > 2 OR agent_id = $4 OR agent_id IS NULL)',
+    "COALESCE(data_class, 'public') = ANY($5::text[])",
+  ];
+  if (memoryTypeFilter) {
+    params.push(memoryTypeFilter);
+    clauses.push(`memory_type = $${params.length}`);
+  }
+  if (sourceFilter) {
+    params.push(sourceFilter);
+    clauses.push(`source = $${params.length}`);
+  }
+  if (sessionLikePattern) {
+    params.push(sessionLikePattern);
+    clauses.push(`key LIKE $${params.length} ESCAPE '\\'`);
+  }
+  return { params, clauses };
+}
+
+const MEMORY_FIELDS = `id, key, value, scope, memory_type, clearance_level,
+  created_at, credit_score, memory_tier, data_class, source, access_count,
+  last_accessed_at, last_verified_at, verified_by, verification_basis,
+  freshness_state, retrieval_weight`;
+
+async function admitRankedChannels(denseResults, sparseResults, admitEvidenceFn) {
+  if (typeof admitEvidenceFn !== 'function') {
+    throw new Error('multi_stage_retrieval_admission_owner_required');
+  }
+  const proposals = new Map();
+  for (const row of [...denseResults, ...sparseResults]) {
+    const id = String(row?.id || '');
+    if (id && !proposals.has(id)) proposals.set(id, row);
+  }
+  if (!proposals.size) return { denseResults: [], sparseResults: [] };
+  const admitted = await admitEvidenceFn([...proposals.values()]);
+  const admittedById = new Map((admitted?.memories || []).map((memory) => [String(memory.id), memory]));
+  const hydrate = (rows) => rows
+    .filter((row) => admittedById.has(String(row.id)))
+    .map((row) => ({ ...admittedById.get(String(row.id)), ...row,
+      provenance_proof: admittedById.get(String(row.id)).provenance_proof }));
+  return { denseResults: hydrate(denseResults), sparseResults: hydrate(sparseResults) };
+}
+
+export async function interactionBoost(results, options = {}) {
   if (results.length === 0) return results;
 
   const keys = results.map(r => r.key).filter(Boolean);
   if (keys.length === 0) return results;
-
+  const {
+    companyId = AIMOS_COMPANY_ID,
+    clearanceLevel,
+    requestingAgent,
+    allowedDataClasses,
+    sourceFilter = '',
+    sessionLikePattern = '',
+    queryFn = query,
+  } = options;
+  const params = [companyId, clearanceLevel, requestingAgent, allowedDataClasses, keys.map((key) => `%${key}%`)];
+  const clauses = [
+    'company_id = $1',
+    'clearance_level <= $2',
+    '(clearance_level > 2 OR agent_id = $3 OR agent_id IS NULL)',
+    "COALESCE(data_class, 'public') = ANY($4::text[])",
+    "memory_type = 'event_log'",
+    'value ILIKE ANY($5::text[])',
+  ];
+  if (sourceFilter) {
+    params.push(sourceFilter);
+    clauses.push(`source = $${params.length}`);
+  }
+  if (sessionLikePattern) {
+    params.push(sessionLikePattern);
+    clauses.push(`key LIKE $${params.length} ESCAPE '\\'`);
+  }
   const sql = `SELECT DISTINCT value FROM aimos_memories
-    WHERE company_id = $1
-      AND memory_type = 'event_log'
-      AND value ILIKE ANY(ARRAY[${keys.map((_, i) => `$${i + 2}`).join(', ')}])
+    WHERE ${clauses.join(' AND ')}
+    ORDER BY value ASC
     LIMIT 200`;
 
-  const likePatterns = keys.map(k => `%${k}%`);
-  const params = [companyId, ...likePatterns];
-
   try {
-    const res = await query(sql, params);
+    const res = await queryFn(sql, params);
     const recentInteractionText = res.rows.map(r => r.value).join(' ');
 
     return results.map(r => {
@@ -101,8 +197,9 @@ export async function interactionBoost(results, companyId = AIMOS_COMPANY_ID) {
       }
       return r;
     });
-  } catch {
+  } catch (error) {
     // If interaction lookup fails, return results unchanged
+    console.warn('[multi-stage-retrieval] interaction boost skipped:', error.message);
     return results;
   }
 }
@@ -112,29 +209,59 @@ export async function multiStageRecall(queryText, options = {}) {
     limit = 10,
     minConfidence = 0.3,
     clearanceLevel = 3,
-    memoryTypeFilter,
+    memoryTypeFilter = '',
+    sourceFilter = '',
+    sessionLikePattern = '',
+    requestingAgent,
+    allowedDataClasses,
     companyId = AIMOS_COMPANY_ID,
-    memoryCount: suppliedMemoryCount
+    memoryCount: suppliedMemoryCount,
+    admitEvidenceFn,
+    queryFn = query,
+    embeddingFn = getEmbedding,
+    memoryCountFn = getMemoryCount,
   } = options;
-  const embedding = await getEmbedding(queryText);
-  const memoryCount = suppliedMemoryCount ?? await getMemoryCount(companyId);
+  const boundedLimit = Math.min(Math.max(Number(limit) || 1, 1), MULTI_STAGE_RETRIEVAL_CONTRACT.maximum_result_limit);
+  const proposalLimit = boundedLimit * MULTI_STAGE_RETRIEVAL_CONTRACT.proposal_multiplier;
+  const scope = {
+    companyId,
+    clearanceLevel,
+    requestingAgent,
+    allowedDataClasses,
+    memoryTypeFilter,
+    sourceFilter,
+    sessionLikePattern,
+    queryFn,
+  };
+  const embedding = await embeddingFn(queryText);
+  const memoryCount = suppliedMemoryCount ?? await memoryCountFn(companyId);
 
-  let denseResults = await denseSearch(embedding, limit * 3, clearanceLevel, memoryTypeFilter, companyId);
-  const sparseResults = await sparseSearch(queryText, limit * 3, clearanceLevel, memoryTypeFilter, companyId);
+  let denseResults = await denseSearch(embedding, proposalLimit, scope);
+  let sparseResults = await sparseSearch(queryText, proposalLimit, scope);
+  ({ denseResults, sparseResults } = await admitRankedChannels(
+    denseResults,
+    sparseResults,
+    admitEvidenceFn,
+  ));
 
-  // HyDE fallback: if dense search returns fewer than 3 results above S_VEC_MIN, retry with hypothetical embedding
-  const denseAboveThreshold = denseResults.filter(r => parseFloat(r.similarity) >= S_VEC_MIN);
-  if (denseAboveThreshold.length < 3) {
-    const hydeEmbedding = await hydeExpand(queryText);
-    const hydeResults = await denseSearch(hydeEmbedding, limit * 3, clearanceLevel, memoryTypeFilter, companyId);
-    // Merge and deduplicate by ID, keeping original results first
-    const seenIds = new Set(denseResults.map(r => r.id));
-    for (const r of hydeResults) {
-      if (!seenIds.has(r.id)) {
-        seenIds.add(r.id);
-        denseResults.push(r);
-      }
+  // The caller has already established low confidence. Execute the bounded
+  // deterministic hypothetical expansion on every invocation; no corpus-wide
+  // absolute cosine threshold is valid for rank fusion or required by HyDE.
+  const hydeEmbedding = await hydeExpand(queryText, { embeddingFn });
+  const proposedHydeResults = await denseSearch(hydeEmbedding, proposalLimit, scope);
+  const admittedHyde = await admitRankedChannels(proposedHydeResults, [], admitEvidenceFn);
+  const denseById = new Map(denseResults.map((row) => [String(row.id), row]));
+  for (const row of admittedHyde.denseResults) {
+    const id = String(row.id);
+    const existing = denseById.get(id);
+    if (existing) {
+      existing.dense_rank = Math.min(Number(existing.dense_rank), Number(row.dense_rank));
+      existing.hypothetical_similarity = Number(row.similarity);
+      continue;
     }
+    const candidate = { ...row, hypothetical_similarity: Number(row.similarity) };
+    denseById.set(id, candidate);
+    denseResults.push(candidate);
   }
 
   const fused = reciprocalRankFusion(denseResults, sparseResults, RRF_K, [], { memoryCount });
@@ -144,36 +271,45 @@ export async function multiStageRecall(queryText, options = {}) {
   }));
 
   // Interaction boost: boost scores for memories referenced in recent interactions
-  const boosted = await interactionBoost(weighted, companyId);
+  const boosted = await interactionBoost(weighted, scope);
 
   const deduped = mmrDeduplicate(boosted, 0.85);
   const gated = deduped.filter(r => r.rrf_score >= minConfidence);
   const contextLimit = estimateContextNeed(queryText, gated.length);
 
-  return gated.slice(0, Math.min(limit, contextLimit));
+  return gated.slice(0, Math.min(boundedLimit, contextLimit)).map((row) => ({
+    ...row,
+    hyde_adaptation: MULTI_STAGE_RETRIEVAL_CONTRACT.hyde_implementation,
+    hypothetical_expansion_used: true,
+  }));
 }
 
-async function denseSearch(embedding, limit, clearance, typeFilter, companyId) {
+async function denseSearch(embedding, limit, options) {
   const embStr = `[${embedding.join(',')}]`;
-  const sql = typeFilter
-    ? `SELECT id, key, value, retrieval_weight, 1 - (embedding <=> $1::vector) as similarity, memory_type, clearance_level, ts_created FROM aimos_memories WHERE company_id = $2 AND clearance_level <= $3 AND memory_type = $4 ORDER BY embedding <=> $1::vector LIMIT $5`
-    : `SELECT id, key, value, retrieval_weight, 1 - (embedding <=> $1::vector) as similarity, memory_type, clearance_level, ts_created FROM aimos_memories WHERE company_id = $2 AND clearance_level <= $3 ORDER BY embedding <=> $1::vector LIMIT $4`;
-  const params = typeFilter
-    ? [embStr, companyId, clearance, typeFilter, limit]
-    : [embStr, companyId, clearance, limit];
-  const res = await query(sql, params);
-  return res.rows.map((r, i) => ({ ...r, dense_rank: i + 1, source: 'dense' }));
+  const scoped = buildScopedSearch({ leadingValue: embStr, ...options });
+  scoped.params.push(limit);
+  const sql = `SELECT ${MEMORY_FIELDS},
+      1 - (embedding <=> $1::vector) AS similarity
+    FROM aimos_memories
+    WHERE ${scoped.clauses.join(' AND ')} AND embedding IS NOT NULL
+    ORDER BY embedding <=> $1::vector, id ASC
+    LIMIT $${scoped.params.length}`;
+  const res = await options.queryFn(sql, scoped.params);
+  return res.rows.map((row, index) => ({ ...row, dense_rank: index + 1, retrieval_channel: 'dense' }));
 }
 
-async function sparseSearch(queryText, limit, clearance, typeFilter, companyId) {
-  const sql = typeFilter
-    ? `SELECT id, key, value, retrieval_weight, ts_rank_cd(search_vector, plainto_tsquery('english', $1)) as bm25_score, memory_type, clearance_level, ts_created FROM aimos_memories WHERE company_id = $2 AND clearance_level <= $3 AND search_vector @@ plainto_tsquery('english', $1) AND memory_type = $4 ORDER BY bm25_score DESC LIMIT $5`
-    : `SELECT id, key, value, retrieval_weight, ts_rank_cd(search_vector, plainto_tsquery('english', $1)) as bm25_score, memory_type, clearance_level, ts_created FROM aimos_memories WHERE company_id = $2 AND clearance_level <= $3 AND search_vector @@ plainto_tsquery('english', $1) ORDER BY bm25_score DESC LIMIT $4`;
-  const params = typeFilter
-    ? [queryText, companyId, clearance, typeFilter, limit]
-    : [queryText, companyId, clearance, limit];
-  const res = await query(sql, params);
-  return res.rows.map((r, i) => ({ ...r, sparse_rank: i + 1, source: 'sparse' }));
+async function sparseSearch(queryText, limit, options) {
+  const scoped = buildScopedSearch({ leadingValue: queryText, ...options });
+  scoped.params.push(limit);
+  const sql = `SELECT ${MEMORY_FIELDS},
+      ts_rank_cd(search_vector, plainto_tsquery('english', $1)) AS bm25_score
+    FROM aimos_memories
+    WHERE ${scoped.clauses.join(' AND ')}
+      AND search_vector @@ plainto_tsquery('english', $1)
+    ORDER BY bm25_score DESC, id ASC
+    LIMIT $${scoped.params.length}`;
+  const res = await options.queryFn(sql, scoped.params);
+  return res.rows.map((row, index) => ({ ...row, sparse_rank: index + 1, retrieval_channel: 'sparse' }));
 }
 
 /**
@@ -194,7 +330,7 @@ export function reciprocalRankFusion(denseResults, sparseResults, k = 60, infini
   const maxRrfMass = activeWeight / (k + 1);
 
   for (const r of denseResults) {
-    if (parseFloat(r.similarity) < S_VEC_MIN) continue;
+    if (!Number.isFinite(Number(r.similarity))) continue;
     if (!scores.has(r.id)) scores.set(r.id, { ...r, rrf_score: 0 });
     scores.get(r.id).rrf_score += weights.W_VEC / (k + r.dense_rank);
   }
@@ -220,7 +356,7 @@ export function reciprocalRankFusion(denseResults, sparseResults, k = 60, infini
       rrf_score: maxRrfMass > 0 ? Math.min(1, result.rrf_score / maxRrfMass) : 0,
       rrf_weights: weights
     }))
-    .sort((a, b) => b.rrf_score - a.rrf_score);
+    .sort((a, b) => b.rrf_score - a.rrf_score || String(a.id).localeCompare(String(b.id)));
 }
 
 export function mmrDeduplicate(results, threshold = 0.85) {

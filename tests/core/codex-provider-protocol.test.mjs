@@ -158,5 +158,65 @@ test('Codex SSE parser returns text plus sanitized response and usage evidence',
       cachedInputTokens: 11,
       reasoningOutputTokens: 4,
     },
+    diagnostics: {
+      rawBytes: Buffer.byteLength(raw, 'utf8'),
+      dataLineCount: 4,
+      parsedEventCount: 3,
+      malformedDataCount: 0,
+      eventTypes: ['response.completed', 'response.output_text.delta'],
+      terminalEventType: 'response.completed',
+      terminalErrorCode: null,
+      terminalErrorType: null,
+      incompleteReason: null,
+    },
   });
+});
+
+test('Codex SSE parser accepts output_text.done without delta events', () => {
+  const raw = [
+    'data: {"type":"response.output_text.done","text":"{\\"role\\":\\"generator_preflight\\"}"}',
+    '',
+    'data: {"type":"response.completed","response":{"id":"resp_done","model":"gpt-5.5","status":"completed","usage":{"input_tokens":20,"output_tokens":7,"total_tokens":27}}}',
+    '',
+    'data: [DONE]',
+    '',
+  ].join('\n');
+
+  const result = parseCodexSseResponse(raw);
+  assert.equal(result.text, '{"role":"generator_preflight"}');
+  assert.equal(result.status, 'completed');
+  assert.deepEqual(result.diagnostics.eventTypes, [
+    'response.completed',
+    'response.output_text.done',
+  ]);
+});
+
+test('Codex SSE parser recovers text from the terminal completed response', () => {
+  const raw = [
+    'data: {"type":"response.completed","response":{"id":"resp_terminal","model":"gpt-5.6-terra","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\\"verdict\\":\\"supported\\"}"}]}],"usage":{"input_tokens":21,"output_tokens":8,"total_tokens":29}}}',
+    '',
+    'data: [DONE]',
+    '',
+  ].join('\n');
+
+  const result = parseCodexSseResponse(raw);
+  assert.equal(result.text, '{"verdict":"supported"}');
+  assert.equal(result.status, 'completed');
+  assert.equal(result.diagnostics.terminalEventType, 'response.completed');
+});
+
+test('Codex SSE parser retains safe failed-response diagnostics without content', () => {
+  const raw = [
+    'data: {"type":"response.failed","response":{"id":"resp_failed","model":"gpt-5.5","status":"failed","error":{"type":"server_error","code":"backend_error"}}}',
+    '',
+    'data: [DONE]',
+    '',
+  ].join('\n');
+
+  const result = parseCodexSseResponse(raw);
+  assert.equal(result.text, '');
+  assert.equal(result.status, 'failed');
+  assert.equal(result.diagnostics.terminalErrorType, 'server_error');
+  assert.equal(result.diagnostics.terminalErrorCode, 'backend_error');
+  assert.equal('message' in result.diagnostics, false);
 });

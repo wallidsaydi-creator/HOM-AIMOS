@@ -38,6 +38,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { loadAgentPrivkey, signPayload, signPayloadWithContext, getAgentCert, signRaw } from './agent-identity.js';
 import { cognitiveBaselineHash, cognitiveTransitionHash } from './protocol/mutmem-protocol.js';
+import { occurrenceSignatureMessageV3 } from './protocol/content-state-occurrence-v3.js';
 
 export const HOUSEKEEPER_SIGNER_CONSTANTS = Object.freeze({
   HOUSEKEEPER_AGENT_ID: 'housekeeper',
@@ -98,6 +99,31 @@ export function signCognitiveBaselineAsHousekeeper(baseline) {
   return Object.freeze({
     baselineHash,
     baselineSig: signRaw(loadHousekeeperPrivkey(), baselineHash),
+  });
+}
+
+/**
+ * Sign an already-computed R7 occurrence commitment under the current verified
+ * housekeeper epoch. The caller must bind the returned certificate metadata
+ * into the occurrence before computing the commitment; this function supplies
+ * only the detached Ed25519 signature over the frozen v3 signature domain.
+ */
+export async function signOccurrenceCommitmentAsHousekeeper(commitmentHex) {
+  const certString = await getHousekeeperCert();
+  const validFromIso = extractValidFromIso(certString);
+  const signature = signRaw(
+    loadHousekeeperPrivkey(),
+    occurrenceSignatureMessageV3(commitmentHex),
+  );
+  if (!Buffer.isBuffer(signature) || signature.length !== 64) {
+    throw new Error('housekeeper_occurrence_signature_invalid');
+  }
+  return Object.freeze({
+    sigBytes: signature,
+    certString,
+    validFromIso,
+    agentId: HOUSEKEEPER_SIGNER_CONSTANTS.HOUSEKEEPER_AGENT_ID,
+    identityTier: detectTierFromCert(certString),
   });
 }
 
@@ -221,6 +247,7 @@ export default {
   loadHousekeeperPrivkey,
   getHousekeeperCert,
   extractValidFromIso,
+  signOccurrenceCommitmentAsHousekeeper,
   signAsHousekeeper,
   clearHousekeeperCache
 };

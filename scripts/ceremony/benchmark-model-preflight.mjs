@@ -28,6 +28,7 @@ const JUDGE_MODEL = 'gpt-5.6-terra';
 const MIN_ACCESS_TOKEN_REMAINING_SECONDS = 24 * 60 * 60;
 const MAX_AUTH_FILE_BYTES = 64 * 1024;
 const MAX_MODELS_CACHE_BYTES = 2 * 1024 * 1024;
+const MAX_SMOKE_ATTEMPTS = 3;
 const execFileAsync = promisify(execFile);
 const MODEL_PRICING = Object.freeze({
   'gpt-5.4': Object.freeze({ input: 2.50, cached_input: 0.25, output: 15.00 }),
@@ -348,6 +349,7 @@ function safeCallEvidence({ role, requestedModel, reasoningEffort, prompt, schem
     output_sha256: canonicalSha256(output),
     validated_output: output,
     usage,
+    transport_diagnostics: response.diagnostics,
     api_equivalent_cost_usd: apiEquivalentCost(usage, requestedModel),
     credential_use: safeCredentialUseEvidence(response.credentialUseEvidence),
   };
@@ -390,30 +392,57 @@ async function writeExclusiveJson(outputPath, value) {
 }
 
 async function runSmokeCall({ role, model, reasoningEffort, prompt, schema, validate }) {
-  const startedAt = Date.now();
-  const response = await runProvider({
-    provider: 'codex',
-    model,
-    systemPrompt: 'Follow the strict response schema. Use only evidence explicitly supplied by the user.',
-    userPrompt: prompt,
-    reasoningEffort,
-    textVerbosity: 'low',
-    responseSchema: { name: `${role}_preflight`, schema },
-    returnMetadata: true,
-    useContext: { subjectAgentId: 'housekeeper' },
-  });
-  const output = parseStrictJson(response.text, role);
-  validate(output);
-  return safeCallEvidence({
-    role,
-    requestedModel: model,
-    reasoningEffort,
-    prompt,
-    schema,
-    response,
-    output,
-    latencyMs: Date.now() - startedAt,
-  });
+  for (let attempt = 1; attempt <= MAX_SMOKE_ATTEMPTS; attempt += 1) {
+    const startedAt = Date.now();
+    try {
+      const response = await runProvider({
+        provider: 'codex',
+        model,
+        systemPrompt: 'Follow the strict response schema. Use only evidence explicitly supplied by the user.',
+        userPrompt: prompt,
+        reasoningEffort,
+        textVerbosity: 'low',
+        responseSchema: { name: `${role}_preflight`, schema },
+        returnMetadata: true,
+        useContext: { subjectAgentId: 'housekeeper' },
+      });
+      const output = parseStrictJson(response.text, role);
+      validate(output);
+      if (attempt > 1) {
+        console.log(JSON.stringify({
+          event: 'benchmark_model_preflight_smoke_recovered',
+          role,
+          model,
+          attempt,
+        }));
+      }
+      return safeCallEvidence({
+        role,
+        requestedModel: model,
+        reasoningEffort,
+        prompt,
+        schema,
+        response,
+        output,
+        latencyMs: Date.now() - startedAt,
+      });
+    } catch (error) {
+      const message = String(error?.message || error);
+      const retryable = /Codex response was empty|Codex response ended with status incomplete|Codex error \((?:408|409|425|429|5\d\d)\)|fetch failed|AbortError|timeout|ECONNRESET|ETIMEDOUT/i.test(message);
+      console.error(JSON.stringify({
+        event: 'benchmark_model_preflight_smoke_failed',
+        role,
+        model,
+        attempt,
+        max_attempts: MAX_SMOKE_ATTEMPTS,
+        retryable,
+        error: message.slice(0, 1200),
+      }));
+      if (!retryable || attempt === MAX_SMOKE_ATTEMPTS) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 750 * attempt));
+    }
+  }
+  throw new Error(`${role}_preflight_attempts_exhausted`);
 }
 
 async function main() {

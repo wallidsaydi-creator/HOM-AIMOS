@@ -41,6 +41,7 @@ import { W_MIN, W_MAX } from '../learning/stdp-kernel.js';
 import { enforceEnergyBound } from '../governance/cohen-grossberg-energy-governor.js';
 import { governorConfigLedger } from '../governance/governor-config-ledger.js';
 import { commitGovernorMutation } from '../governance/governor-provenance.js';
+import { resolvePrincipalStateMutationTargets } from '../learning/mutation-composition/target-resolver.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -543,10 +544,18 @@ export async function amplifyConsolidated(memoryIds, gammaDampen = 1.0) {
   // retrieval-frequency projection. The signed proof and projection share one
   // restricted transaction, and prior/new weights reproduce every update.
   const res = await withTransaction(async (client) => {
+    const resolvedTargets = await resolvePrincipalStateMutationTargets({
+      memoryIds,
+      companyId: COMPANY,
+      client,
+      maximumIds: 500,
+    });
     // The runtime role has SELECT but deliberately no UPDATE privilege, which
     // also makes SELECT FOR UPDATE unavailable. Acquire the same certified
     // writer locks in deterministic UUID order before reading the batch.
-    const orderedMemoryIds = [...new Set(memoryIds.map(String))].sort();
+    const orderedMemoryIds = resolvedTargets.targets
+      .map((target) => target.representative_memory_id)
+      .sort();
     for (const memoryId of orderedMemoryIds) {
       await client.query(
         'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
@@ -582,6 +591,11 @@ export async function amplifyConsolidated(memoryIds, gammaDampen = 1.0) {
           confidence_gate: CONFIDENCE_GATE,
           canonical_content_changed: false,
           monotone_promotion: true,
+          principal_state_key: resolvedTargets.targets.find(
+            (target) => target.representative_memory_id === String(row.id),
+          )?.principal_state_key || null,
+          duplicate_occurrence_targets_collapsed:
+            memoryIds.length - resolvedTargets.targets.length,
         },
         client,
       });

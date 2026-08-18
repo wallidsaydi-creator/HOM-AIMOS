@@ -219,7 +219,7 @@ const MODEL_PROVIDER_IDS = new Set([
 
 export const TWIN_PRIME_POLICY_VERSION = 'hom-aimos/twin-prime-policy/v1';
 export const MAGMA_RETRIEVAL_POLICY_VERSION = 'hom-aimos/magma-retrieval-policy/v1';
-export const MAGMA_RETRIEVAL_CALIBRATION_VERSION = 'hom-aimos/magma-retrieval-calibration/v2';
+export const MAGMA_RETRIEVAL_CALIBRATION_VERSION = 'hom-aimos/magma-retrieval-calibration/v3';
 export const QUIM_RETRIEVAL_POLICY_VERSION = 'hom-aimos/quim-retrieval-policy/v1';
 export const CONCEPT_PPR_RETRIEVAL_POLICY_VERSION = 'hom-aimos/concept-ppr-retrieval-policy/v1';
 export const TWIN_PRIME_LAMBDA_GRID = Object.freeze([
@@ -295,7 +295,7 @@ const MAGMA_POLICY_KEYS = Object.freeze([
   'version', 'execution', 'max_depth', 'max_nodes', 'result_limit',
   'candidate_p95_ceiling_ms', 'proof_sha256', 'runner_sha256', 'cache', 'early_exit',
 ]);
-const MAGMA_EXECUTION_MODES = new Set(['shadow', 'enforce']);
+const MAGMA_EXECUTION_MODES = new Set(['dormant', 'shadow', 'enforce']);
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
@@ -466,8 +466,9 @@ export function validateMagmaRetrievalPolicy(value) {
 }
 
 const MAGMA_CALIBRATION_KEYS = Object.freeze([
-  'version', 'max_depth', 'max_nodes', 'result_limit', 'beam_width', 'rrf_k',
-  'candidate_p95_ceiling_ms', 'proof_sha256', 'runner_sha256',
+  'version', 'max_depth', 'max_nodes', 'result_limit', 'beam_width',
+  'anchor_pool_limit', 'rrf_k', 'candidate_p95_ceiling_ms',
+  'candidate_p95_minimum_samples', 'proof_sha256', 'runner_sha256',
 ]);
 
 export function validateMagmaRetrievalCalibration(value) {
@@ -505,11 +506,20 @@ export function validateMagmaRetrievalCalibration(value) {
   if (!Number.isInteger(parsed.beam_width) || parsed.beam_width < 1 || parsed.beam_width > 5) {
     return { ok: false, reason: 'magma_calibration_beam_width_out_of_bounds' };
   }
+  if (!Number.isInteger(parsed.anchor_pool_limit)
+      || parsed.anchor_pool_limit < parsed.beam_width
+      || parsed.anchor_pool_limit > 20
+      || parsed.anchor_pool_limit > parsed.max_nodes - parsed.result_limit) {
+    return { ok: false, reason: 'magma_calibration_anchor_pool_out_of_bounds' };
+  }
   if (parsed.rrf_k !== 60) {
     return { ok: false, reason: 'magma_calibration_rrf_k_changed' };
   }
   if (parsed.candidate_p95_ceiling_ms !== 250) {
     return { ok: false, reason: 'magma_calibration_latency_ceiling_changed' };
+  }
+  if (parsed.candidate_p95_minimum_samples !== 20) {
+    return { ok: false, reason: 'magma_calibration_latency_sample_changed' };
   }
   if (!SHA256_HEX_RE.test(String(parsed.proof_sha256 || ''))
       || !SHA256_HEX_RE.test(String(parsed.runner_sha256 || ''))) {
@@ -522,8 +532,10 @@ export function validateMagmaRetrievalCalibration(value) {
     max_nodes: parsed.max_nodes,
     result_limit: parsed.result_limit,
     beam_width: parsed.beam_width,
+    anchor_pool_limit: parsed.anchor_pool_limit,
     rrf_k: 60,
     candidate_p95_ceiling_ms: 250,
+    candidate_p95_minimum_samples: 20,
     proof_sha256: parsed.proof_sha256,
     runner_sha256: parsed.runner_sha256,
   };

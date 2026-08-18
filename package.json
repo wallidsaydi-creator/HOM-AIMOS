@@ -2,7 +2,7 @@
   "name": "aimos-backend",
   "version": "1.0.0",
   "private": true,
-  "description": "Cryptographically auditable persistent memory backend for agents",
+  "description": "Agent-security system built on cryptographically auditable persistent memory, native retrieval, Canary controls, and signed operational red-team evidence",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "scripts": {

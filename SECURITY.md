@@ -61,7 +61,7 @@ ownership is therefore split across explicit native boundaries:
 | Recall disclosure | Verifies provenance, authorization, label state, graph decision, calibration, and final receipt | A valid signature cannot make false content true |
 | Canary traversal | Detects the generated marker family at `PERSISTED`, `RELAYED`, `EXECUTED`, and `EXPOSED` | Does not detect arbitrary unmarked poison |
 | Cognitive mutation | Changes only bounded retrieval weight through a signed no-fork transition | Does not rewrite canonical memory content |
-| MAGMA graph selection | Permanently expands and ranks only admitted, principal-scoped evidence; signed configuration may only tighten bounded calibration | Owns candidate selection, not activation or final disclosure |
+| Governed graph-family selection | Reconstructed Graph G2 contributes one bounded, principal-scoped structural vote; MAGMA is retained dormant with zero execution or rank influence | Graph evidence owns neither candidate admission nor final disclosure |
 | SABER-inspired campaigns | Evaluates fixed attack/benign vectors and commits signed case/aggregate evidence | Diagnostic evaluation, not certified robustness |
 
 The current signed operational campaign completed 27 attack cases and 28

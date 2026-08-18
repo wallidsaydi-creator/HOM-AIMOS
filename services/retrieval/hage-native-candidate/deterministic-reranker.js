@@ -1,11 +1,11 @@
 /**
- * deterministic-reranker.js — bounded HAGE-inspired post-MAGMA candidate.
+ * deterministic-reranker.js — bounded dormant HAGE-inspired candidate.
  *
  * Paper authority: HAGE.pdf (source SHA-256
  * 867feac3e32d553c4f0815f9b760d5e7ede5515fcd4698e32003d597bc66b5f5).
  *
  * This is not a trained HAGE policy. It preserves the exact provenance-admitted
- * MAGMA candidate set and applies a deterministic, query-conditioned relational
+ * historical fixed-corpus candidate set and applies a deterministic, query-conditioned relational
  * rerank only. It owns no database, identity, signing, policy, checkpoint,
  * persistence, disclosure, Canary, epistemic, SABER, or environment authority.
  */
@@ -16,7 +16,7 @@ export const HAGE_D_CONTRACT = Object.freeze({
   schema: 'hom-aimos/hage-deterministic-reranker/v1',
   identity: 'HAGE-inspired deterministic proxy',
   paper_sha256: '867feac3e32d553c4f0815f9b760d5e7ede5515fcd4698e32003d597bc66b5f5',
-  upstream_owner: 'master-signed enforced MAGMA candidate',
+  upstream_owner: 'historical fixed-corpus candidate; no live upstream owner',
   maximum_nodes: 20,
   maximum_edges_per_node: 8,
   propagation_hops: 2,
@@ -253,4 +253,3 @@ export function rerankHageDeterministic({ queryText = '', queryEmbedding, memori
 function seenIn(values, target) {
   return values.includes(target);
 }
-

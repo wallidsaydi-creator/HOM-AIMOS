@@ -2080,6 +2080,10 @@ router.post('/save', async (req, res, next) => {
       live_content_hash: saved?.live_content_hash?.toString('hex') || null,
       save_mutation_hash: saved?.ledger_commit?.mutationHash?.toString('hex') || null,
       binding_mutation_hash: saved?.binding_commit?.mutationHash?.toString('hex') || null,
+      occurrence_reasserted: saved?.occurrence_reasserted === true,
+      occurrence_event_id: saved?.save_feedback?.occurrence_event_id || null,
+      occurrence_commitment: saved?.save_feedback?.occurrence_commitment || null,
+      retrieval_vote_added: saved?.occurrence_reasserted === true ? false : null,
       epistemic_label: saved?.epistemic_label || 'unverified',
       epistemic_confidence_milli: Number(saved?.epistemic_confidence_milli || 0),
       epistemic_classification_event_id: saved?.epistemic_classification_event_id || null,
@@ -3615,22 +3619,7 @@ router.post('/log-event', async (req, res, next) => {
   ].filter(Boolean).join('\n');
 
   try {
-    const requestAuthority = {
-      kind: 'verified_request',
-      body: req.body,
-      agentId: verifiedLogAgentId,
-      validFromIso: req.identityValidFromIso,
-      certString: req.identityCertString,
-      signedTs: req.identitySignedTs,
-      nonce: req.identityNonce,
-      sigBytes: req.identitySigBytes,
-      identityTier: req.identityTier,
-      claimedPrev: req.prevChainHash || null,
-      requestSigForm: req.identityRequestSigForm,
-      signedMethod: req.identitySignedMethod,
-      signedPath: req.identitySignedPath,
-      signedClaims: req.identitySignedClaims,
-    };
+    const requestAuthority = verifiedRequestAuthorityFromReq(req);
     const saved = await persistMemory({
       company_id: cid,
       agent_id: aid,
@@ -4326,6 +4315,10 @@ router.post('/mcp/tools/call', async (req, res, next) => {
         content_hash: saved?.live_content_hash?.toString('hex') || null,
         save_mutation_hash: saved?.ledger_commit?.mutationHash?.toString('hex') || null,
         binding_mutation_hash: saved?.binding_commit?.mutationHash?.toString('hex') || null,
+        occurrence_reasserted: saved?.occurrence_reasserted === true,
+        occurrence_event_id: saved?.save_feedback?.occurrence_event_id || null,
+        occurrence_commitment: saved?.save_feedback?.occurrence_commitment || null,
+        retrieval_vote_added: saved?.occurrence_reasserted === true ? false : null,
         epistemic_label: saved?.epistemic_label || 'unverified',
         epistemic_confidence_milli: Number(saved?.epistemic_confidence_milli || 0),
         epistemic_classification_event_id: saved?.epistemic_classification_event_id || null,

@@ -86,6 +86,34 @@ function normalizedSha256(value) {
   return /^[a-f0-9]{64}$/.test(text) ? text : null;
 }
 
+/**
+ * Exact evidence-eligibility predicate for the paper's System-1 route.
+ * Ineligible canonical memories remain retained and available to every other
+ * native gear; they simply contribute zero Mnemis evidence.
+ */
+export function isMnemisMarginalInputEligible(memory) {
+  const contentHash = [
+    memory?.content_hash,
+    memory?.provenance_proof?.live_content_hash,
+    memory?.provenance_proof?.content_hash,
+  ].map(normalizedSha256).find(Boolean);
+  const provenanceSha256 = [
+    memory?.provenance_sha256,
+    memory?.provenance_proof?.binding_event_mutation_hash,
+    memory?.provenance_proof?.binding_event_content_hash,
+    memory?.provenance_proof?.save_mutation_hash,
+  ].map(normalizedSha256).find(Boolean);
+  return Boolean(
+    memoryId(memory)
+    && String(memory?.value ?? memory?.text ?? '').trim()
+    && finiteEmbedding(memory?.embedding)
+    && contentHash
+    && provenanceSha256
+    && memory?.provenance_proof
+    && memory?.canary_admitted === true
+  );
+}
+
 function canonicalRecord(value) {
   if (Array.isArray(value)) return value.map(canonicalRecord);
   if (value && typeof value === 'object') {

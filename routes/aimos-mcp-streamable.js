@@ -523,6 +523,10 @@ async function executeAimosTool(name, args = {}, authContext = null, transportBi
         content_hash: saved?.live_content_hash?.toString('hex') || null,
         save_mutation_hash: saved?.ledger_commit?.mutationHash?.toString('hex') || null,
         binding_mutation_hash: saved?.binding_commit?.mutationHash?.toString('hex') || null,
+        occurrence_reasserted: saved?.occurrence_reasserted === true,
+        occurrence_event_id: saved?.save_feedback?.occurrence_event_id || null,
+        occurrence_commitment: saved?.save_feedback?.occurrence_commitment || null,
+        retrieval_vote_added: saved?.occurrence_reasserted === true ? false : null,
         quarantined: saved?.quarantined === true,
         security_decision_event_id: saved?.security_decision_event_id || securityReceipt.event_id,
       };

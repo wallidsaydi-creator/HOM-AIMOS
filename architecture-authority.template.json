@@ -1,8 +1,8 @@
 {
   "schema": "hom.architecture-authority/v1",
   "runtime_mode": "template",
-  "version": "0.12",
-  "updated": "2026-08-11",
+  "version": "0.13",
+  "updated": "2026-08-18",
   "owner": "hom-aimos",
   "canonical": true,
   "purpose": "Portable public HOM-AIMOS authority. Paths are relative to the repository root and are resolved by the Genesis installer. Runtime state, credentials, identities, permissions, and memories are ledgered; no environment or private predecessor-system file hierarchy is authoritative.",
@@ -16,8 +16,8 @@
   "genesis_corpus": {
     "manifest": "./Guide/GENESIS-MANIFEST.json",
     "schema": "hom.aimos.genesis-manifest/v1",
-    "version": 19,
-    "corpus_root": "dcbf73476b21690cecbda9d084e5784775f4e004af82f8877186e7f4df533bc7",
+    "version": 21,
+    "corpus_root": "6b12d400fe223026401feb73509d22269746935b7f2164b2d7d19a063cea9d70",
     "hash_algorithm": "sha256",
     "binding": "Every Guide genesis save signs this schema, version, corpus root, and its own file hash into provenance."
   },
@@ -87,8 +87,8 @@
     "authority_and_admission": "services/retrieval/native-recall.js",
     "central_native_fusion": "services/retrieval/native-retrieval-fusion.js",
     "bounded_graph_family_fusion": "services/retrieval/reconstructed-graph-additive/graph-family-bounded-fusion.js",
-    "native_magma_gear": "services/retrieval/magma-native-candidate.js",
-    "native_magma_reader": "services/retrieval/magma-native-reader.js",
+    "dormant_magma_research_candidate": "services/retrieval/magma-native-candidate.js",
+    "dormant_magma_research_reader": "services/retrieval/magma-native-reader.js",
     "native_reconstructed_graph_subgear": "services/retrieval/reconstructed-graph-native-candidate.js",
     "master_signed_authorization": "services/security/recall-authorization.js",
     "multi_stage_retrieval": "services/retrieval/multi-stage-retrieval.js",

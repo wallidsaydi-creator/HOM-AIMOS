@@ -66,13 +66,30 @@ function generateBulletId(category) {
  */
 export async function flagMemoryUsage(usedMemoryIds, flags, companyId = COMPANY) {
   const { helpful = [], harmful = [] } = flags;
+  const validate = (entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)
+        || typeof entry.memory_id !== 'string' || !entry.outcome_evidence) {
+      throw new Error('delta_writer_signed_occurrence_evidence_required');
+    }
+    return entry;
+  };
+  const helpfulEvidence = helpful.map(validate);
+  const harmfulEvidence = harmful.map(validate);
 
   // Outcome evidence is a signed, bounded cognitive mutation. It never uses
   // age-based decay and never edits content in place.
-  await Promise.allSettled(helpful.map((id) => applyRewardSignal(id, 1)));
-  await Promise.allSettled(harmful.map((id) => applyRewardSignal(id, -1)));
+  await Promise.all(helpfulEvidence.map((entry) => applyRewardSignal(
+    entry.memory_id,
+    1,
+    { outcomeEvidence: entry.outcome_evidence },
+  )));
+  await Promise.all(harmfulEvidence.map((entry) => applyRewardSignal(
+    entry.memory_id,
+    -1,
+    { outcomeEvidence: entry.outcome_evidence },
+  )));
 
-  return { helpfulFlagged: helpful.length, harmfulFlagged: harmful.length };
+  return { helpfulFlagged: helpfulEvidence.length, harmfulFlagged: harmfulEvidence.length };
 }
 
 /**

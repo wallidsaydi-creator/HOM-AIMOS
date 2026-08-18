@@ -7,6 +7,8 @@
 // reviewed at the fusion/graph boundaries. This service preserves their math.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { createHash } from 'node:crypto';
+
 import { query } from '../../db/connection.js';
 import { getEmbedding } from '../core/embeddings.js';
 import { logEvent } from '../observe/event-ledger.js';
@@ -16,7 +18,10 @@ import {
   getVerifiedCalibrationSnapshot,
 } from './recall-calibrator.js';
 import { rankByTrust } from '../learning/trust-score.js';
-import { conceptPprLookup } from './concept-ppr-native.js';
+import {
+  CONCEPT_PPR_MAX_REQUEST_STATES,
+  conceptPprLookup,
+} from './concept-ppr-native.js';
 import {
   SALIENCE_FREQUENCY_ALADDIN_CONTRACT,
   applySalienceFrequencyAnnotations,
@@ -29,16 +34,21 @@ import {
 } from './deep-recall-override.js';
 import { reinforceRetrievedPheromones } from '../temporal/retrieval-pheromone.js';
 import { detectEncodingStyle, rankByStyleMatch } from '../context/mnemonic-encoder.js';
-import { multiStageRecall } from './multi-stage-retrieval.js';
+import {
+  MULTI_STAGE_RETRIEVAL_CONTRACT,
+  multiStageRecall,
+} from './multi-stage-retrieval.js';
 import { checkContextSufficiency } from '../context/mvs-detector.js';
 import { semanticCache } from '../caching/semantic-cache.js';
 import { shouldEarlyExit, generateEarlyExitMetadata } from './adaptive-early-exit.js';
 import { quimLookup } from './quim-index.js';
 import { extractQueryEntityAnchors as extractEntities } from './query-entity-anchors.js';
 import {
-  admitNativeRecallCandidates,
   finalizeNativeRecall,
+  openNativeRecallAdmissionSession,
 } from './native-recall.js';
+import { createRequestScopedContentStateAdmission } from './content-state-occurrence/request-admission.js';
+import { createRequestEpistemicEvidenceScope } from './content-state-occurrence/evidence-scope.js';
 import { buildRecallEvaluation } from './recall-diagnostics.js';
 import { buildRecallDoctorCandidateTrace } from '../observe/recall-doctor-trace.js';
 import { buildSourceAttributedSynthesis } from './source-attributed-synthesis.js';
@@ -53,51 +63,78 @@ import {
 import { IDENTIFIER_RECALL_STATUS, lookupIdentifierCandidates } from './identifier-recall.js';
 import { RECALL_SPEED_CONFIG as SPEED_CONFIG } from './recall-runtime-config.js';
 import { sessionKeyLikePattern } from '../shared/session-scope.js';
+import { getMemoryCount } from '../shared/scale-baseline.js';
 import { calibrateEpistemicRecall } from './epistemic-trust-retrieval.js';
-import {
-  MAGMA_NATIVE_CALIBRATION_DEFAULTS,
-  composeMagmaNativeCandidate,
-} from './magma-native-candidate.js';
 import {
   RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT,
   composeReconstructedGraphNativeCandidate,
   composeNativeGraphFamilyChannel,
 } from './reconstructed-graph-native-candidate.js';
-import { fuseNativeRetrievalGears } from './native-retrieval-fusion.js';
+import {
+  NATIVE_RETRIEVAL_FUSION_CONTRACT,
+  fuseNativeRetrievalGears,
+} from './native-retrieval-fusion.js';
 import { systemConfigStore } from '../security/system-config-store.js';
 import {
-  validateMagmaRetrievalCalibration,
   validateTwinPrimeRetrievalPolicy,
 } from '../security/system-config-ledger.js';
-import { detectCanaries, scanRelayedMemory } from '../security/canary-tracker.js';
+import {
+  CANARY_CLEAN_SELECTION_RETURN_PATHS,
+  buildCanaryCleanSelectionBoundary,
+  createCanaryContentClassificationMap,
+  governCanaryCleanTopKSelection,
+  governCanaryMagmaGraphAdmission,
+  governCanaryRecallFinalClosure,
+} from '../security/canary-tracker.js';
+import { canonicalJson } from '../security/protocol/canonical-json.js';
 
-export function partitionGraphCanaryDisclosure(memories = []) {
+export function partitionGraphCanaryDisclosure(
+  memories = [],
+  classificationMap = createCanaryContentClassificationMap(),
+) {
   const admitted = [];
   const withheld = [];
-  const tokens = new Set();
+  const candidates = Array.isArray(memories) ? memories : [];
+  const classified = classificationMap.classifyMemories(candidates);
 
-  for (const memory of Array.isArray(memories) ? memories : []) {
-    const found = detectCanaries({
-      key: memory?.key ?? null,
-      value: memory?.value ?? null,
-    });
-    if (found.length === 0) {
+  for (let index = 0; index < candidates.length; index += 1) {
+    const memory = candidates[index];
+    if (!classified.records[index].canary_marker_present) {
       admitted.push(memory);
       continue;
     }
-    for (const token of found) tokens.add(token);
     withheld.push(memory);
   }
 
   return Object.freeze({
     admitted: Object.freeze([...admitted]),
     withheld: Object.freeze([...withheld]),
-    canary_tokens: Object.freeze([...tokens].sort()),
+    canary_tokens: classified.canary_tokens,
   });
 }
 
 export const NATIVE_GEARBOX_EVALUATION_EVIDENCE_SCHEMA =
   'hom-aimos/native-gearbox-evaluation-evidence/v1';
+
+const MAGMA_DORMANT_RUNTIME_BODY = Object.freeze({
+  schema: 'hom-aimos/magma-runtime-dormancy/v1',
+  architecture_role: 'dormant_research_only',
+  runtime_wired: false,
+  executed: false,
+  rank_contribution_count: 0,
+  discovery_count: 0,
+  candidate_set_authority: false,
+  disclosure_authority: false,
+  canonical_memory_mutated: false,
+  retention_changed: false,
+  reason: 'current_stack_failed_utility_and_latency_promotion_gates',
+});
+const MAGMA_DORMANT_RUNTIME_DECISION = Object.freeze({
+  ...MAGMA_DORMANT_RUNTIME_BODY,
+  decision_sha256: createHash('sha256')
+    .update(Buffer.from(canonicalJson(MAGMA_DORMANT_RUNTIME_BODY), 'utf8'))
+    .digest('hex'),
+});
 
 function snapshotNativeGearboxMemory(memory = {}) {
   return Object.freeze({
@@ -111,119 +148,6 @@ function snapshotNativeGearboxMemory(memory = {}) {
       ? Object.freeze({ ...memory.provenance_proof })
       : null,
     canary_admitted: true,
-  });
-}
-
-async function closeNativeRecallSecurityBoundary({
-  boundaryId,
-  boundaryOperation = 'recall_security_closure',
-  sourceAgentId,
-  memories,
-  companyId,
-  subjectAgentId,
-  recallAuthority,
-  epistemicReceipt,
-  epistemicDecisionHash,
-  graphDecision = null,
-}) {
-  if (!['identifier_exact', 'concept_gaama', 'magma', 'reconstructed_graph'].includes(boundaryId)) {
-    throw new Error('recall_security_closure:unsupported_boundary');
-  }
-  const candidates = Array.isArray(memories) ? memories : [];
-  const relay = await scanRelayedMemory(
-    candidates.map((memory) => ({
-      memory_id: memory?.id || memory?.memory_id || null,
-      key: memory?.key || null,
-      value: memory?.value || null,
-    })),
-    recallAuthority.requestReceiptId || epistemicDecisionHash,
-    {
-      sourceAgentId,
-      targetAgentId: subjectAgentId,
-      parentEventId: epistemicReceipt?.event_id || null,
-      authority: recallAuthority.requestAuthority || null,
-    },
-  );
-  const partition = partitionGraphCanaryDisclosure(candidates);
-  const graphSelectedIds = new Set((graphDecision?.selected_memory_ids || []).map((id) => String(id)));
-  const graphAnnotatedCount = candidates.filter((memory) => graphSelectedIds.size > 0
-    ? graphSelectedIds.has(String(memory?.id || memory?.memory_id || ''))
-    : boundaryId === 'magma'
-      ? Number.isFinite(Number(memory?.magma_score))
-        || memory?.native_fusion_gears?.includes('magma')
-      : boundaryId === 'concept_gaama'
-        && (memory?.source === 'concept_graph_ppr' || Number.isFinite(Number(memory?.ppr_score)))
-  ).length;
-  const receipt = await logEvent(
-    companyId,
-    subjectAgentId,
-    boundaryOperation,
-    epistemicDecisionHash,
-    {
-      boundary_id: boundaryId,
-      graph_id: boundaryOperation === 'graph_security_closure' ? boundaryId : null,
-      graph_decision_sha256: graphDecision?.decision_sha256 || null,
-      graph_edge_commitment_sha256: graphDecision?.edge_commitment_sha256 || null,
-      graph_selected_memory_ids: graphDecision?.selected_memory_ids
-        || graphDecision?.traversal_selected_memory_ids
-        || null,
-      candidate_count: candidates.length,
-      graph_annotated_count: graphAnnotatedCount,
-      canary_marker_count: partition.canary_tokens.length,
-      withheld_from_disclosure_count: partition.withheld.length,
-      disclosed_count: partition.admitted.length,
-      canary_stage: 'RELAYED',
-      canary_detection_event_ids: relay.events.map((event) => event.receipt?.event_id).filter(Boolean),
-      aladdin: {
-        canonical_memory_changed: false,
-        retention_changed: false,
-        deletion_performed: false,
-        suppression_performed: false,
-        disposition: partition.withheld.length > 0
-          ? 'retained_quarantine_withheld_from_response_only'
-          : 'retained_clean_disclosure',
-      },
-      saber: {
-        runtime_authority: false,
-        evaluation_status: 'separate_isolated_campaign_required',
-      },
-      reasoning: `${boundaryId} candidates passed signed epistemic selection, explicit Canary relay inspection, and Aladdin full-retention closure before disclosure.`,
-      source_knowledge: 'HOM-AIMOS native recall security closure: Canary traversal, SABER evaluation separation, and Aladdin retention',
-    },
-    epistemicReceipt?.event_id || null,
-    { authority: recallAuthority.requestAuthority || null, returnReceipt: true },
-  );
-
-  return Object.freeze({
-    memories: partition.admitted,
-    decision: Object.freeze({
-      boundary_id: boundaryId,
-      graph_id: boundaryOperation === 'graph_security_closure' ? boundaryId : null,
-      graph_decision_sha256: graphDecision?.decision_sha256 || null,
-      graph_edge_commitment_sha256: graphDecision?.edge_commitment_sha256 || null,
-      candidate_count: candidates.length,
-      graph_annotated_count: graphAnnotatedCount,
-      canary_marker_count: partition.canary_tokens.length,
-      withheld_from_disclosure_count: partition.withheld.length,
-      disclosed_count: partition.admitted.length,
-      canonical_memory_changed: false,
-      retention_changed: false,
-      saber_runtime_authority: false,
-      receipt: Object.freeze({
-        event_id: receipt.event_id,
-        ledger_seq: receipt.ledger_seq,
-        content_hash: receipt.content_hash,
-        mutation_hash: receipt.mutation_hash,
-      }),
-    }),
-  });
-}
-
-async function closeGraphSecurityBoundary(options) {
-  return closeNativeRecallSecurityBoundary({
-    ...options,
-    boundaryId: options.graphId,
-    boundaryOperation: 'graph_security_closure',
   });
 }
 
@@ -734,6 +658,40 @@ export function buildRecallRouteBreadthPolicy({ queryUnderstanding = {}, maxRows
   };
 }
 
+async function governContentStateEpistemicEvidenceScope({
+  decision,
+  companyId,
+  subjectAgentId,
+  requestAuthority,
+  parentEventId = null,
+} = {}) {
+  if (!decision || !/^[0-9a-f]{64}$/.test(String(decision.decision_sha256 || ''))) {
+    throw new Error('native_recall_content_state_evidence_scope_invalid');
+  }
+  const receipt = await logEvent(
+    companyId,
+    subjectAgentId,
+    'content_state_epistemic_scope_decision',
+    decision.decision_sha256,
+    {
+      reasoning: 'The verified signed classification chain determines occurrence/content eligibility before retrieval influence. Blocked evidence remains retained and committed without changing label history.',
+      source_knowledge: 'Migration 092 signed epistemic chain + typed evidence assertions + HOM-AIMOS R6 content-state scope',
+      ...decision,
+    },
+    parentEventId,
+    { authority: requestAuthority, returnReceipt: true },
+  );
+  return Object.freeze({
+    decision,
+    receipt: Object.freeze({
+      event_id: receipt.event_id,
+      ledger_seq: receipt.ledger_seq,
+      content_hash: receipt.content_hash,
+      mutation_hash: receipt.mutation_hash,
+    }),
+  });
+}
+
 async function selectAndLedgerEpistemicRecall({
   memories,
   queryText,
@@ -748,12 +706,38 @@ async function selectAndLedgerEpistemicRecall({
   signedRequestTimeMs = null,
   parentEventId = null,
   requestAuthority = null,
+  queryFn = query,
+  canaryCleanSelectionBoundary = null,
+  canaryClassificationMap,
+  contentStateEvidenceScopeDecision,
+  returnPath,
 }) {
-  const memoryIds = [...new Set((Array.isArray(memories) ? memories : [])
+  if (!CANARY_CLEAN_SELECTION_RETURN_PATHS.includes(String(returnPath || '').trim())) {
+    throw new Error('native_recall_canary_clean_selection_return_path_invalid');
+  }
+  const sourceMemories = Array.isArray(memories) ? memories : [];
+  if (!canaryClassificationMap?.classifyMemories || !canaryClassificationMap?.snapshot) {
+    throw new Error('native_recall_canary_classification_map_required');
+  }
+  const initialCanaryBoundary = canaryCleanSelectionBoundary
+    || buildCanaryCleanSelectionBoundary(
+      sourceMemories,
+      limit,
+      { classificationMap: canaryClassificationMap },
+    );
+  const sourceIds = sourceMemories.map((memory) => String(memory?.id || memory?.memory_id || '').trim().toLowerCase());
+  const boundaryIds = initialCanaryBoundary?.boundary?.records
+    ?.map((record) => String(record?.memory_id || '').trim().toLowerCase()) || [];
+  if (sourceIds.length !== boundaryIds.length
+    || sourceIds.some((memoryId, index) => memoryId !== boundaryIds[index])) {
+    throw new Error('native_recall_canary_clean_selection_population_mismatch');
+  }
+  const selectionMemories = initialCanaryBoundary.clean_eligible_memories;
+  const memoryIds = [...new Set(selectionMemories
     .map((memory) => String(memory?.id || memory?.memory_id || ''))
     .filter((id) => /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id)))];
   const projections = memoryIds.length
-    ? await query(
+    ? await queryFn(
         `SELECT id::text AS memory_id,
                 current_epistemic_label,
                 current_epistemic_confidence_milli,
@@ -765,10 +749,14 @@ async function selectAndLedgerEpistemicRecall({
         [companyId, memoryIds],
       )
     : { rows: [] };
+  if ((projections.rows || []).length !== memoryIds.length
+      || new Set((projections.rows || []).map((row) => String(row.memory_id))).size !== memoryIds.length) {
+    throw new Error('native_recall_epistemic_projection_missing');
+  }
   const projectionByMemoryId = new Map(
     projections.rows.map((row) => [String(row.memory_id), row]),
   );
-  const memoriesWithEpistemicProjection = (Array.isArray(memories) ? memories : []).map((memory) => {
+  const memoriesWithEpistemicProjection = selectionMemories.map((memory) => {
     const memoryId = String(memory?.id || memory?.memory_id || '');
     const projection = projectionByMemoryId.get(memoryId);
     return projection ? {
@@ -798,6 +786,43 @@ async function selectAndLedgerEpistemicRecall({
       },
     } : {}),
   });
+  const epistemicDecisionByMemoryId = new Map(calibrated.decision.decisions.map(
+    (decision) => [String(decision.memory_id), decision],
+  ));
+  const securityAnnotatedMemories = sourceMemories.map((memory) => {
+    const memoryId = String(memory?.id || memory?.memory_id || '');
+    const decision = epistemicDecisionByMemoryId.get(memoryId);
+    return decision ? {
+      ...memory,
+      epistemic_state: decision.epistemic_state,
+      epistemic_score: decision.epistemic_score,
+      evidence_handling: decision.evidence_handling,
+    } : memory;
+  });
+  const combinedSelectionBoundary = buildCanaryCleanSelectionBoundary(
+    securityAnnotatedMemories,
+    limit,
+    { classificationMap: canaryClassificationMap },
+  );
+  const evidenceScope = await governContentStateEpistemicEvidenceScope({
+    decision: contentStateEvidenceScopeDecision,
+    companyId,
+    subjectAgentId,
+    requestAuthority,
+    parentEventId,
+  });
+  const cleanSelection = await governCanaryCleanTopKSelection({
+    boundaryResult: combinedSelectionBoundary,
+    selectedMemories: calibrated.memories,
+    returnPath,
+    companyId,
+    subjectAgentId,
+    recallAuthority: {
+      actorAgentId: subjectAgentId,
+      requestAuthority,
+    },
+    parentEventId: evidenceScope.receipt.event_id,
+  });
   const receipt = await logEvent(
     companyId,
     subjectAgentId,
@@ -805,9 +830,15 @@ async function selectAndLedgerEpistemicRecall({
     calibrated.decision.query_sha256,
     {
       reasoning: 'Pre-disclosure epistemic calibration separates authenticated provenance from factual support and prevents redundant query-lure clusters from monopolizing the active evidence set.',
+      canary_clean_selection_return_path: cleanSelection.decision.return_path,
+      canary_clean_selection_decision_sha256: cleanSelection.decision.decision_sha256,
+      canary_clean_selection_event_id: cleanSelection.receipt.event_id,
+      retained_decision_set_sha256: cleanSelection.decision.retained_decision_set_sha256,
+      content_state_evidence_scope_decision_sha256: evidenceScope.decision.decision_sha256,
+      content_state_evidence_scope_event_id: evidenceScope.receipt.event_id,
       ...calibrated.decision,
     },
-    parentEventId,
+    cleanSelection?.receipt.event_id || parentEventId,
     { authority: requestAuthority, returnReceipt: true },
   );
   return {
@@ -819,6 +850,8 @@ async function selectAndLedgerEpistemicRecall({
       content_hash: receipt.content_hash,
       mutation_hash: receipt.mutation_hash,
     },
+    cleanSelection,
+    evidenceScope,
   };
 }
 
@@ -833,63 +866,99 @@ function verifiedTwinPrimePolicy() {
   });
 }
 
-function verifiedMagmaCalibration() {
-  const entry = systemConfigStore.readVerifiedConfig('MAGMA_RETRIEVAL_CALIBRATION');
-  if (!entry) {
-    return Object.freeze({
-      calibration: MAGMA_NATIVE_CALIBRATION_DEFAULTS,
-      mutationHash: null,
-      source: 'immutable_code_default',
-      rejectedSignedCalibrationReason: null,
-    });
-  }
-  const validated = validateMagmaRetrievalCalibration(entry.value);
-  if (!validated.ok) {
-    return Object.freeze({
-      calibration: MAGMA_NATIVE_CALIBRATION_DEFAULTS,
-      mutationHash: null,
-      source: 'immutable_code_default_after_rejected_signed_calibration',
-      rejectedSignedCalibrationReason: validated.reason,
-    });
-  }
+const NATIVE_FUSION_SEMANTIC_SHARE = 0.2;
+
+function canaryMagmaCompositionMetadata(composition) {
+  const decision = composition?.decision;
+  if (!decision) return null;
   return Object.freeze({
-    calibration: validated.calibration,
-    mutationHash: entry.mutation_hash,
-    source: 'master_signed_system_config',
-    rejectedSignedCalibrationReason: null,
+    schema: decision.schema,
+    decision_sha256: decision.decision_sha256,
+    graph_admission_equation: decision.graph_admission_equation,
+    guarded_transition_equation: decision.guarded_transition_equation,
+    input_count: decision.input_count,
+    graph_admitted_count: decision.graph_admitted_count,
+    retained_evidence_count: decision.retained_evidence_count,
+    canary_marked_memory_count: decision.canary_marked_memory_count,
+    canary_marker_count: decision.canary_marker_count,
+    quarantine_evidence_count: decision.quarantine_evidence_count,
+    retained_baseline_preserved: decision.retained_baseline_preserved,
+    canonical_memory_mutated: false,
+    retention_changed: false,
+    disclosure_authority: false,
+    receipt: composition.receipt || null,
   });
 }
 
-const NATIVE_FUSION_SEMANTIC_SHARE = 0.2;
-
-function magmaGearMetadata({ calibrationState, gear, runtimeMs, fusion, failure = null } = {}) {
-  const calibration = calibrationState.calibration;
+function canaryCleanSelectionMetadata(selection) {
+  const decision = selection?.decision;
+  if (!decision) return null;
   return Object.freeze({
-    architecture_role: 'permanent_native_retrieval_gear',
-    runtime_mode: null,
-    activation_authority: false,
-    candidate_set_authority: false,
-    calibration_source: calibrationState.source,
-    calibration_mutation_hash: calibrationState.mutationHash,
-    rejected_signed_calibration_reason: calibrationState.rejectedSignedCalibrationReason,
-    bounds: Object.freeze({
-      max_depth: calibration.max_depth,
-      max_nodes: calibration.max_nodes,
-      result_limit: calibration.result_limit,
-      beam_width: calibration.beam_width,
-      rrf_k: calibration.rrf_k,
-    }),
-    proof_sha256: calibration.proof_sha256 || null,
-    runner_sha256: calibration.runner_sha256 || null,
-    runtime_ms: runtimeMs,
-    runtime_breakdown_ms: gear?.runtime_breakdown_ms || null,
-    candidate_p95_ceiling_ms: calibration.candidate_p95_ceiling_ms,
-    within_single_call_ceiling: runtimeMs == null ? null : runtimeMs <= calibration.candidate_p95_ceiling_ms,
-    operational_status: failure ? 'degraded' : gear ? 'complete' : 'empty_candidate_set',
-    failure_code: failure,
-    decision: gear?.decision || null,
-    central_fusion_decision: fusion?.decision || null,
+    schema: decision.schema,
+    return_path: decision.return_path,
+    decision_sha256: decision.decision_sha256,
+    boundary_sha256: decision.boundary_sha256,
+    classification_map_root_sha256: decision.classification_map_root_sha256,
+    requested_top_k: decision.requested_top_k,
+    candidate_count: decision.candidate_count,
+    clean_eligible_count: decision.clean_eligible_count,
+    retained_evidence_count: decision.retained_evidence_count,
+    retained_epistemic_evidence_count: decision.retained_epistemic_evidence_count,
+    selected_clean_count: decision.selected_clean_count,
+    clean_backfill_count: decision.clean_backfill_count,
+    unfilled_clean_slot_count: decision.unfilled_clean_slot_count,
+    selected_clean_set_sha256: decision.selected_clean_set_sha256,
+    retained_decision_set_sha256: decision.retained_decision_set_sha256,
+    selected_top_k_subseteq_clean_eligible_evidence:
+      decision.selected_top_k_subseteq_clean_eligible_evidence,
+    clean_label_establishes_content_truth: false,
+    canonical_memory_mutated: false,
+    retention_changed: false,
+    receipt: selection.receipt || null,
   });
+}
+
+function canaryFinalClosureMetadata(closure) {
+  const decision = closure?.decision;
+  if (!decision) return null;
+  return Object.freeze({
+    schema: decision.schema,
+    return_path: decision.return_path,
+    decision_sha256: decision.decision_sha256,
+    classification_map_root_sha256: decision.classification_map_root_sha256,
+    unique_content_count: decision.unique_content_count,
+    content_scans_executed: decision.content_scans_executed,
+    classification_requests: decision.classification_requests,
+    classification_cache_hits: decision.classification_cache_hits,
+    content_rescans_executed: decision.content_rescans_executed,
+    clean_selection_decision_sha256: decision.clean_selection_decision_sha256,
+    retained_decision_set_sha256: decision.retained_decision_set_sha256,
+    epistemic_decision_sha256: decision.epistemic_decision_sha256,
+    content_state_evidence_scope_decision_sha256:
+      decision.content_state_evidence_scope_decision_sha256,
+    authorized_class_commitment_sha256:
+      decision.authorized_class_commitment_sha256,
+    state_view_root_sha256: decision.state_view_root_sha256,
+    occurrence_view_root_sha256: decision.occurrence_view_root_sha256,
+    retained_blocked_decision_set_sha256:
+      decision.retained_blocked_decision_set_sha256,
+    evidence_root_sha256s: decision.evidence_root_sha256s,
+    eligibility_exhaustion_reason: decision.eligibility_exhaustion_reason,
+    no_epistemic_exoneration: decision.no_epistemic_exoneration,
+    selected_clean_count: decision.selected_clean_count,
+    consumer_commitment_root_sha256: decision.consumer_commitment_root_sha256,
+    one_request_local_classification_map: decision.one_request_local_classification_map,
+    classification_map_independently_recomputable:
+      decision.classification_map_independently_recomputable,
+    final_closure_receipt_count: decision.final_closure_receipt_count,
+    canonical_memory_mutated: false,
+    retention_changed: false,
+    receipt: closure.receipt || null,
+  });
+}
+
+function magmaDormancyMetadata() {
+  return MAGMA_DORMANT_RUNTIME_DECISION;
 }
 
 function reconstructedGraphGearMetadata({
@@ -940,7 +1009,7 @@ function graphFamilyMetadata({ family, runtimeMs = null } = {}) {
     activation_authority: false,
     candidate_set_authority: false,
     disclosure_authority: false,
-    outer_channel_id: 'magma',
+    outer_channel_id: 'graph_family',
     outer_channel_count: family?.decision?.outer_channel_count || 0,
     subgear_count: family?.decision?.subgear_count || 0,
     runtime_ms: runtimeMs,
@@ -1207,12 +1276,323 @@ function calibrateRecallRouteBody({ queryText, body, runtimeBudget, responseLimi
   }
   return calibratedBody;
 }
+
+export const NATIVE_RECALL_RETURN_PROJECTION_CONTRACT = Object.freeze({
+  schema: 'hom-aimos/native-recall-return-projection/v1',
+  return_paths: CANARY_CLEAN_SELECTION_RETURN_PATHS,
+  output_identity_rule: 'ordered_unique_subset_of_final_clean_security_closure',
+  output_content_rule: 'live_content_hash_and_provenance_commitments_unchanged',
+  response_shaping_authority: false,
+  disclosure_expansion_authority: false,
+  mutation_authority: false,
+  deletion_authority: false,
+});
+
+function recallProjectionEvidence(memory = {}) {
+  const memoryId = String(memory?.id || memory?.memory_id || '').trim().toLowerCase();
+  const proof = memory?.provenance_proof;
+  const liveContentHash = String(proof?.live_content_hash || '').trim().toLowerCase();
+  const saveMutationHash = proof?.save_mutation_hash == null
+    ? null
+    : String(proof.save_mutation_hash).trim().toLowerCase();
+  const bindingMutationHash = String(proof?.binding_mutation_hash || '').trim().toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(memoryId)) {
+    throw new Error('native_recall_return_projection_memory_id_invalid');
+  }
+  if (!/^[0-9a-f]{64}$/.test(liveContentHash)) {
+    throw new Error('native_recall_return_projection_live_content_hash_invalid');
+  }
+  if (saveMutationHash != null && !/^[0-9a-f]{64}$/.test(saveMutationHash)) {
+    throw new Error('native_recall_return_projection_save_mutation_hash_invalid');
+  }
+  if (!/^[0-9a-f]{64}$/.test(bindingMutationHash)) {
+    throw new Error('native_recall_return_projection_binding_mutation_hash_invalid');
+  }
+  return Object.freeze({
+    memory_id: memoryId,
+    live_content_hash: liveContentHash,
+    save_mutation_hash: saveMutationHash,
+    binding_mutation_hash: bindingMutationHash,
+  });
+}
+
+export function buildNativeRecallReturnProjection({
+  returnPath,
+  securityClosure,
+  responseBody,
+  contentStateSelection = null,
+} = {}) {
+  const normalizedReturnPath = String(returnPath || '').trim();
+  if (!CANARY_CLEAN_SELECTION_RETURN_PATHS.includes(normalizedReturnPath)) {
+    throw new Error('native_recall_return_projection_path_invalid');
+  }
+  const selected = Array.isArray(securityClosure?.memories) ? securityClosure.memories : [];
+  const output = Array.isArray(responseBody?.memories) ? responseBody.memories : [];
+  const selectedEvidence = selected.map(recallProjectionEvidence);
+  const selectedById = new Map(selectedEvidence.map((entry) => [entry.memory_id, entry]));
+  if (selectedById.size !== selectedEvidence.length) {
+    throw new Error('native_recall_return_projection_selected_identity_duplicate');
+  }
+  const outputEvidence = output.map(recallProjectionEvidence);
+  const outputIds = new Set();
+  const outputStates = new Set();
+  for (const entry of outputEvidence) {
+    if (outputIds.has(entry.memory_id) || outputStates.has(entry.live_content_hash)) {
+      throw new Error('native_recall_return_projection_output_duplicate');
+    }
+    outputIds.add(entry.memory_id);
+    outputStates.add(entry.live_content_hash);
+    const source = selectedById.get(entry.memory_id);
+    if (!source || canonicalJson(source) !== canonicalJson(entry)) {
+      throw new Error('native_recall_return_projection_not_subset');
+    }
+  }
+  const securityClosureHash = String(securityClosure?.decision?.decision_sha256 || '').trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(securityClosureHash)) {
+    throw new Error('native_recall_return_projection_security_closure_invalid');
+  }
+  const stateDecisionHash = contentStateSelection == null
+    ? null
+    : String(contentStateSelection?.decision_sha256 || '').trim().toLowerCase();
+  if (stateDecisionHash != null && !/^[0-9a-f]{64}$/.test(stateDecisionHash)) {
+    throw new Error('native_recall_return_projection_state_decision_invalid');
+  }
+  const body = {
+    schema: NATIVE_RECALL_RETURN_PROJECTION_CONTRACT.schema,
+    return_path: normalizedReturnPath,
+    final_security_closure_sha256: securityClosureHash,
+    content_state_selection_sha256: stateDecisionHash,
+    selected_clean_count: selectedEvidence.length,
+    projected_output_count: outputEvidence.length,
+    projected_memory_ids: outputEvidence.map((entry) => entry.memory_id),
+    projected_live_content_hashes: outputEvidence.map((entry) => entry.live_content_hash),
+    ordered_unique_subset_of_final_clean_security_closure: true,
+    output_content_commitments_unchanged: true,
+    canonical_memory_mutated: false,
+    retention_changed: false,
+    disclosure_expansion_performed: false,
+  };
+  return Object.freeze({
+    ...body,
+    decision_sha256: createHash('sha256')
+      .update(Buffer.from(canonicalJson(body), 'utf8'))
+      .digest('hex'),
+  });
+}
+
+async function calibrateAndFinalizeNativeRecallReturn({
+  returnPath,
+  queryText,
+  body,
+  runtimeBudget,
+  responseLimit,
+  securityClosure,
+  contentStateSelection = null,
+  authority,
+  epistemicDecisionHash,
+} = {}) {
+  const calibrated = calibrateRecallRouteBody({
+    queryText,
+    body,
+    runtimeBudget,
+    responseLimit,
+  });
+  const projection = buildNativeRecallReturnProjection({
+    returnPath,
+    securityClosure,
+    responseBody: calibrated,
+    contentStateSelection,
+  });
+  calibrated.recall_meta = {
+    ...(calibrated.recall_meta || {}),
+    return_projection: projection,
+  };
+  calibrated.recall_receipt = await finalizeNativeRecall({
+    memories: calibrated.memories,
+    authority,
+    epistemicDecisionHash,
+    securityClosureDecisionHash: securityClosure.decision.decision_sha256,
+    returnProjectionDecision: projection,
+  });
+  return calibrated;
+}
+
+export const SEMANTIC_CACHE_HYDRATION_CONTRACT = Object.freeze({
+  schema: 'hom-aimos/semantic-cache-live-hydration/v1',
+  maximum_state_references: 200,
+  database_round_trips: 1,
+  ordered_identity_hydration: true,
+  exact_commitment_match_required: true,
+  stale_or_missing_reference: 'cache_miss_full_path',
+});
+
+export async function hydrateSemanticCacheStateReferences({
+  cacheEntry,
+  companyId,
+  queryFn,
+} = {}) {
+  const refs = Array.isArray(cacheEntry?.state_references) ? cacheEntry.state_references : [];
+  if (cacheEntry?.schema !== 'hom-aimos/semantic-cache-state-reference/v1'
+      || refs.length < 1 || refs.length > SEMANTIC_CACHE_HYDRATION_CONTRACT.maximum_state_references
+      || typeof queryFn !== 'function') {
+    return Object.freeze({ valid: false, reason: 'cache_reference_contract_invalid', memories: Object.freeze([]) });
+  }
+  const ids = refs.map((ref) => String(ref?.memory_id || '').trim().toLowerCase());
+  if (new Set(ids).size !== ids.length || ids.some((id) => !/^[0-9a-f-]{36}$/.test(id))) {
+    return Object.freeze({ valid: false, reason: 'cache_reference_identity_invalid', memories: Object.freeze([]) });
+  }
+  const result = await queryFn(
+    `SELECT id, key, value, agent_id, memory_type, scope, source, clearance_level,
+            retrieval_weight, created_at, updated_at, last_verified_at,
+            verified_by, verification_basis, freshness_state, data_class,
+            credit_score, memory_tier, valid_from, valid_until
+       FROM public.aimos_memories
+      WHERE company_id = $1
+        AND id = ANY($2::uuid[])
+      ORDER BY array_position($2::uuid[], id)`,
+    [companyId, ids],
+  );
+  if ((result.rows || []).length !== ids.length) {
+    return Object.freeze({ valid: false, reason: 'cache_reference_missing', memories: Object.freeze([]) });
+  }
+  return Object.freeze({
+    valid: true,
+    reason: null,
+    memories: Object.freeze(result.rows.map((row) => Object.freeze({ ...row }))),
+  });
+}
 function getMaxDataClassForClearance(clearanceLevel) {
   const cl = Number(clearanceLevel || 1);
   if (cl >= 10) return null; // all classes
   if (cl >= 7) return ['public', 'internal', 'confidential'];
   if (cl >= 4) return ['public', 'internal'];
   return ['public'];
+}
+
+function getAuthorizedRescueDataClasses(clearanceLevel, authorityCeiling) {
+  const order = ['public', 'internal', 'confidential', 'restricted'];
+  const authorityIndex = order.indexOf(String(authorityCeiling || ''));
+  if (authorityIndex < 0) throw new Error('recall_rescue_data_class_ceiling_invalid');
+  const clearanceClasses = getMaxDataClassForClearance(clearanceLevel) || order;
+  const clearanceSet = new Set(clearanceClasses);
+  return order.slice(0, authorityIndex + 1).filter((name) => clearanceSet.has(name));
+}
+
+const RECALL_GRAPH_LINK_MAX_SEEDS = 250;
+const RECALL_GRAPH_LINK_MAX_HOPS = 2;
+const RECALL_GRAPH_LINKS_PER_SEED = 8;
+const RECALL_GRAPH_LINK_NEIGHBORS_PER_EXPANSION = 8;
+const RECALL_GRAPH_LINK_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+export const RECALL_GRAPH_LINK_BATCH_CONTRACT = Object.freeze({
+  schema: 'hom-aimos/recall-graph-link-batch/v1',
+  maximum_seed_states: RECALL_GRAPH_LINK_MAX_SEEDS,
+  maximum_hops: RECALL_GRAPH_LINK_MAX_HOPS,
+  maximum_neighbors_per_expansion: RECALL_GRAPH_LINK_NEIGHBORS_PER_EXPANSION,
+  maximum_links_per_seed: RECALL_GRAPH_LINKS_PER_SEED,
+  database_round_trips: 1,
+  read_owner: 'shared_request_scoped_r4_session',
+  mutation_authority: false,
+});
+
+export async function readBatchedRecallGraphLinks({
+  companyId,
+  seedMemoryIds,
+  maxHops,
+  queryFn,
+} = {}) {
+  const company = String(companyId || '').trim();
+  const seedIds = [...new Set((Array.isArray(seedMemoryIds) ? seedMemoryIds : [])
+    .map((value) => String(value || '').trim().toLowerCase()))];
+  if (!company || typeof queryFn !== 'function') throw new Error('recall_graph_link_batch_inputs_invalid');
+  if (!seedIds.length) return Object.freeze({ linksBySeed: new Map(), decision: Object.freeze({
+    ...RECALL_GRAPH_LINK_BATCH_CONTRACT,
+    seed_count: 0,
+    row_count: 0,
+    applied_hops: 0,
+  }) });
+  if (seedIds.length > RECALL_GRAPH_LINK_MAX_SEEDS
+    || seedIds.some((id) => !RECALL_GRAPH_LINK_UUID.test(id))) {
+    throw new Error('recall_graph_link_batch_seed_bound_invalid');
+  }
+  const hops = Math.min(
+    Math.max(Math.floor(Number(maxHops) || 1), 1),
+    RECALL_GRAPH_LINK_MAX_HOPS,
+  );
+  const result = await queryFn(
+    `WITH RECURSIVE graph_walk(root_memory_id, memory_id, similarity, hop, path_ids) AS (
+       SELECT seed.root_memory_id, edge.target_memory_id, edge.similarity, 1,
+              ARRAY[seed.root_memory_id, edge.target_memory_id]::uuid[]
+         FROM unnest($2::uuid[]) AS seed(root_memory_id)
+         CROSS JOIN LATERAL (
+           SELECT cr.target_memory_id, cr.similarity
+             FROM memory_cross_refs cr
+            WHERE cr.company_id=$1 AND cr.source_memory_id=seed.root_memory_id
+            ORDER BY cr.similarity DESC NULLS LAST, cr.target_memory_id
+            LIMIT $4
+         ) edge
+       UNION ALL
+       SELECT gw.root_memory_id, edge.target_memory_id, edge.similarity, gw.hop + 1,
+              gw.path_ids || edge.target_memory_id
+         FROM graph_walk gw
+         CROSS JOIN LATERAL (
+           SELECT cr.target_memory_id, cr.similarity
+             FROM memory_cross_refs cr
+            WHERE cr.company_id=$1 AND cr.source_memory_id=gw.memory_id
+            ORDER BY cr.similarity DESC NULLS LAST, cr.target_memory_id
+            LIMIT $4
+         ) edge
+        WHERE gw.hop < $3 AND NOT edge.target_memory_id = ANY(gw.path_ids)
+     ), deduplicated AS (
+       SELECT DISTINCT ON (root_memory_id, memory_id)
+              root_memory_id, memory_id, similarity, hop
+         FROM graph_walk
+        ORDER BY root_memory_id, memory_id, hop ASC, similarity DESC NULLS LAST
+     ), ranked AS (
+       SELECT root_memory_id, memory_id, similarity, hop,
+              row_number() OVER (
+                PARTITION BY root_memory_id
+                ORDER BY hop ASC, similarity DESC NULLS LAST, memory_id
+              ) AS root_rank
+         FROM deduplicated
+     )
+     SELECT root_memory_id::text, memory_id::text, similarity, hop
+       FROM ranked
+      WHERE root_rank <= $5
+      ORDER BY root_memory_id, root_rank`,
+    [
+      company,
+      seedIds,
+      hops,
+      RECALL_GRAPH_LINK_NEIGHBORS_PER_EXPANSION,
+      RECALL_GRAPH_LINKS_PER_SEED,
+    ],
+  );
+  const maximumRows = seedIds.length * RECALL_GRAPH_LINKS_PER_SEED;
+  if (result.rows.length > maximumRows) throw new Error('recall_graph_link_batch_row_bound_exceeded');
+  const linksBySeed = new Map(seedIds.map((id) => [id, []]));
+  for (const row of result.rows) {
+    const rootId = String(row.root_memory_id || '').toLowerCase();
+    const memoryId = String(row.memory_id || '').toLowerCase();
+    if (!linksBySeed.has(rootId) || !RECALL_GRAPH_LINK_UUID.test(memoryId)) {
+      throw new Error('recall_graph_link_batch_result_invalid');
+    }
+    linksBySeed.get(rootId).push(Object.freeze({
+      id: memoryId,
+      similarity: Number(row.similarity),
+      hop: Number(row.hop),
+    }));
+  }
+  return Object.freeze({
+    linksBySeed,
+    decision: Object.freeze({
+      ...RECALL_GRAPH_LINK_BATCH_CONTRACT,
+      seed_count: seedIds.length,
+      row_count: result.rows.length,
+      requested_hops: Number(maxHops),
+      applied_hops: hops,
+    }),
+  });
 }
 
 let freshnessSchemaReady = false;
@@ -1344,6 +1724,7 @@ async function lookupPostCompactionHandoff({
   sessionId,
   projectId,
   workspacePath,
+  queryFn = query,
 } = {}) {
   const params = [company, clearance, agent];
   const filters = [
@@ -1368,7 +1749,7 @@ async function lookupPostCompactionHandoff({
   params.push(Math.min(Math.max(Number(limit || 10), 1), 20));
   const limitParam = params.length;
 
-  const result = await query(
+  const result = await queryFn(
     `SELECT id, key, value, scope, memory_type, clearance_level, created_at, updated_at,
             credit_score, memory_tier, data_class, source, valid_from, valid_until,
             freshness_state, verified_by, verification_basis
@@ -1387,7 +1768,7 @@ async function lookupPostCompactionHandoff({
   const firstPostJson = parseMemoryJson(firstPost?.value);
   const linkedFullKey = firstPostJson?.source?.full_compaction_key || null;
   if (linkedFullKey && !rows.some((row) => row.key === linkedFullKey)) {
-    const linked = await query(
+    const linked = await queryFn(
       `SELECT id, key, value, scope, memory_type, clearance_level, created_at, updated_at,
               credit_score, memory_tier, data_class, source, valid_from, valid_until,
               freshness_state, verified_by, verification_basis
@@ -1430,6 +1811,10 @@ export async function executeNativeRecall(req, recallAuthority) {
     temporal: null,
   };
   let nativeGearboxEvaluationEvidence = null;
+  let preConceptPprGearboxEvidence = null;
+  const canaryClassificationMap = createCanaryContentClassificationMap();
+  let verifiedAdmissionSession = null;
+  let contentStateOccurrenceAdmission = null;
 
   // ─── Recall Pipeline Tracer — per-stage timing (P0 #7) ─────────────────────
   const _inst = SPEED_CONFIG.instrumentation.enabled;
@@ -1505,12 +1890,31 @@ export async function executeNativeRecall(req, recallAuthority) {
     });
     await ensureFreshnessSchema();
     debugRecallPoint('freshness_schema_ready');
-    const calibrationSnapshot = await getVerifiedCalibrationSnapshot(company);
     const maxRows = Math.min(Math.max(Number(limit || 10), 1), 200);
     if (!searchQuery || typeof searchQuery !== 'string' || !searchQuery.trim()) {
       console.warn(`[RECALL-GUARD] Empty query from ${req.ip} | referer: ${req.headers.referer || 'none'} | user-agent: ${req.headers['user-agent'] || 'none'} | full URL: ${req.originalUrl}`);
       return { status: 400, body: { success: false, error: 'Missing required parameter: q (search query)' } };
     }
+
+    // R4: bind one actor/certificate epoch and one provenance reader for the
+    // complete request. Every candidate-producing lane submits through this
+    // owner. Proofs verified inside this exact repeatable-read snapshot may be
+    // reused by peer gears; no proof persists beyond the request.
+    verifiedAdmissionSession = await openNativeRecallAdmissionSession({
+      authority: recallAuthority,
+    });
+    const calibrationSnapshot = await getVerifiedCalibrationSnapshot(company, {
+      client: Object.freeze({ query: verifiedAdmissionSession.read }),
+    });
+    const corpusMemoryCount = await getMemoryCount(company);
+    const requestEpistemicEvidenceScope = createRequestEpistemicEvidenceScope({
+      queryFn: verifiedAdmissionSession.read,
+    });
+    contentStateOccurrenceAdmission = createRequestScopedContentStateAdmission({
+      authority: recallAuthority,
+      admitBatch: verifiedAdmissionSession.admit,
+      evidenceScopeOwner: requestEpistemicEvidenceScope,
+    });
 
     const typeFilter = String(memory_type_filter || '').trim();
     const srcFilter = String(source_filter || '').trim();
@@ -1522,7 +1926,7 @@ export async function executeNativeRecall(req, recallAuthority) {
     });
     const routeQueryUnderstanding = buildRecallQueryUnderstanding(searchQuery, effectiveRecallRuntimeBudget);
     const twinPrimeConfig = verifiedTwinPrimePolicy();
-    const magmaCalibrationState = verifiedMagmaCalibration();
+    const graphFamilyRrfK = NATIVE_RETRIEVAL_FUSION_CONTRACT.rrf_k;
     const signedRequestSeconds = Number(recallAuthority.requestAuthority?.signedTs);
     const twinPrimeSignedRequestTimeMs = Number.isSafeInteger(signedRequestSeconds)
       ? signedRequestSeconds * 1000
@@ -1559,8 +1963,8 @@ export async function executeNativeRecall(req, recallAuthority) {
       value_rescue_limit: recallBreadthPolicy.value_rescue_limit,
       graph_hops: recallBreadthPolicy.graph_hops,
       twin_prime_policy: twinPrimeConfig?.policy?.arm || null,
-      magma_architecture_role: 'permanent_native_retrieval_gear',
-      magma_calibration_source: magmaCalibrationState.source,
+      magma_architecture_role: MAGMA_DORMANT_RUNTIME_DECISION.architecture_role,
+      magma_runtime_wired: false,
     });
 
     debugRecallPoint('identifier_lookup_start');
@@ -1572,6 +1976,7 @@ export async function executeNativeRecall(req, recallAuthority) {
       limit: effectiveMaxRows,
       memoryTypeFilter: typeFilter,
       sourceFilter: srcFilter,
+      queryFn: verifiedAdmissionSession.read,
     });
     debugRecallPoint('identifier_lookup_done', {
       status: identifierLookup.status,
@@ -1583,11 +1988,21 @@ export async function executeNativeRecall(req, recallAuthority) {
     // native admission, epistemic selection, Canary inspection, Aladdin
     // retention closure, and final signed-receipt construction below.
     if (identifierLookup.status === IDENTIFIER_RECALL_STATUS.EXACT_MATCH) {
-      const identifierAdmission = await admitNativeRecallCandidates(identifierLookup.memories, recallAuthority);
-      applyCalibrationSnapshot(identifierAdmission.memories, calibrationSnapshot);
-      const identifierDeepRecallSummary = annotateDeepRecallOverrides(identifierAdmission.memories, searchQuery);
-      const identifierMemories = applyDeepRecallOverrideRanking(identifierAdmission.memories);
+      const identifierAdmission = await contentStateOccurrenceAdmission.admit(identifierLookup.memories);
+      const identifierStateSelection =
+        contentStateOccurrenceAdmission.selectCandidateStateRepresentatives(
+          identifierAdmission.memories,
+          { retainIneligibleForSecurityBoundary: true },
+        );
+      const identifierDiagnostics = {
+        ...identifierLookup.diagnostics,
+        content_state_selection: identifierStateSelection.decision,
+      };
+      applyCalibrationSnapshot(identifierStateSelection.memories, calibrationSnapshot);
+      const identifierDeepRecallSummary = annotateDeepRecallOverrides(identifierStateSelection.memories, searchQuery);
+      const identifierMemories = applyDeepRecallOverrideRanking(identifierStateSelection.memories);
       annotateRecallRankDiagnostics(identifierMemories);
+      markStage('canary_clean_top_k_boundary');
       const identifierEpistemic = await selectAndLedgerEpistemicRecall({
         memories: identifierMemories,
         queryText: searchQuery,
@@ -1601,31 +2016,42 @@ export async function executeNativeRecall(req, recallAuthority) {
         signedRequestTimeMs: twinPrimeSignedRequestTimeMs,
         parentEventId: recallAuthority.requestAuthority?.requestAdmissionEventId || null,
         requestAuthority: recallAuthority.requestAuthority || null,
+        queryFn: verifiedAdmissionSession.read,
+        canaryClassificationMap,
+        contentStateEvidenceScopeDecision:
+          contentStateOccurrenceAdmission.finalizeEvidenceScope(),
+        returnPath: 'identifier_exact',
       });
       await logEvent(company, agent, 'recall', searchQuery, {
-        reasoning: `Exact identifier recall for '${searchQuery}' returned ${identifierLookup.memories.length} memory record(s).`,
+        reasoning: `Exact identifier recall for '${searchQuery}' returned ${identifierStateSelection.memories.length} content-state representative(s) from ${identifierLookup.memories.length} retained occurrence row(s).`,
         source_knowledge: 'identifier-recall.js — Generative Retrieval identifier ambiguity guard',
       });
-      const identifierSecurity = await closeNativeRecallSecurityBoundary({
-        boundaryId: 'identifier_exact',
-        sourceAgentId: 'identifier-recall',
-        memories: identifierEpistemic.memories,
+      const identifierFinalClosure = await governCanaryRecallFinalClosure({
+        classificationMap: canaryClassificationMap,
+        returnPath: 'identifier_exact',
+        selectedMemories: identifierEpistemic.memories,
+        cleanSelection: identifierEpistemic.cleanSelection,
+        epistemicDecision: identifierEpistemic.decision,
+        epistemicReceipt: identifierEpistemic.receipt,
+        contentStateEvidenceScope: identifierEpistemic.evidenceScope,
+        consumers: {},
         companyId: company,
         subjectAgentId: agent,
         recallAuthority,
-        epistemicReceipt: identifierEpistemic.receipt,
-        epistemicDecisionHash: identifierEpistemic.decision.decision_sha256,
       });
       const identifierBody = {
           success: true,
-          memories: identifierSecurity.memories,
-          count: identifierSecurity.memories.length,
+          memories: identifierFinalClosure.memories,
+          count: identifierFinalClosure.memories.length,
           cache_hit: false,
-          identifier_recall: identifierLookup.diagnostics,
+          identifier_recall: identifierDiagnostics,
           recall_meta: {
-            identifier_recall: identifierLookup.diagnostics,
+            content_state_occurrence_admission: contentStateOccurrenceAdmission.publicMetadata(),
+            identifier_recall: identifierDiagnostics,
             deep_recall_override: identifierDeepRecallSummary,
-            rank_observability: buildRecallRankObservability(identifierMemories),
+            rank_observability: buildRecallRankObservability(identifierEpistemic.memories),
+            canary_clean_selection:
+              canaryCleanSelectionMetadata(identifierEpistemic.cleanSelection),
             epistemic_retrieval: {
               version: identifierEpistemic.decision.version,
               decision_sha256: identifierEpistemic.decision.decision_sha256,
@@ -1635,9 +2061,10 @@ export async function executeNativeRecall(req, recallAuthority) {
               ...(identifierEpistemic.decision.twin_prime ? { twin_prime: identifierEpistemic.decision.twin_prime } : {}),
               decision_receipt: identifierEpistemic.receipt,
             },
-            recall_security_closure: identifierSecurity.decision,
+            recall_security_closure:
+              canaryFinalClosureMetadata(identifierFinalClosure),
             magma_retrieval: {
-              ...magmaGearMetadata({ calibrationState: magmaCalibrationState, runtimeMs: 0 }),
+              ...magmaDormancyMetadata(),
               applicability: 'not_applicable_explicit_identifier',
               authority_ruling: 'exact_identifier_non_substitutable',
               substitution_authorized: false,
@@ -1652,14 +2079,14 @@ export async function executeNativeRecall(req, recallAuthority) {
             mode: 'identifier_exact',
           },
         };
-      const calibratedIdentifierBody = calibrateRecallRouteBody({
+      const calibratedIdentifierBody = await calibrateAndFinalizeNativeRecallReturn({
+        returnPath: 'identifier_exact',
         queryText: searchQuery,
         body: identifierBody,
         runtimeBudget: effectiveRecallRuntimeBudget,
         responseLimit: effectiveMaxRows,
-      });
-      calibratedIdentifierBody.recall_receipt = await finalizeNativeRecall({
-        memories: calibratedIdentifierBody.memories,
+        securityClosure: identifierFinalClosure,
+        contentStateSelection: identifierStateSelection.decision,
         authority: recallAuthority,
         epistemicDecisionHash: epistemicReceiptDecisionHash(identifierEpistemic.decision),
       });
@@ -1680,11 +2107,17 @@ export async function executeNativeRecall(req, recallAuthority) {
         sessionId: session_id,
         projectId: project_id,
         workspacePath: workspace_path,
+        queryFn: verifiedAdmissionSession.read,
       });
       if (handoffLookup.memories.length > 0) {
-        const handoffAdmission = await admitNativeRecallCandidates(handoffLookup.memories, recallAuthority);
-        const admittedHandoffMemories = handoffAdmission.memories;
+        const handoffAdmission = await contentStateOccurrenceAdmission.admit(handoffLookup.memories);
+        const handoffStateSelection =
+          contentStateOccurrenceAdmission.selectCandidateStateRepresentatives(
+            handoffAdmission.memories,
+          );
+        const admittedHandoffMemories = handoffStateSelection.memories;
         applyCalibrationSnapshot(admittedHandoffMemories, calibrationSnapshot);
+        markStage('canary_clean_top_k_boundary');
         const handoffEpistemic = await selectAndLedgerEpistemicRecall({
           memories: admittedHandoffMemories,
           queryText: searchQuery,
@@ -1698,24 +2131,44 @@ export async function executeNativeRecall(req, recallAuthority) {
           signedRequestTimeMs: twinPrimeSignedRequestTimeMs,
           parentEventId: recallAuthority.requestAuthority?.requestAdmissionEventId || null,
           requestAuthority: recallAuthority.requestAuthority || null,
+          queryFn: verifiedAdmissionSession.read,
+          canaryClassificationMap,
+          contentStateEvidenceScopeDecision:
+            contentStateOccurrenceAdmission.finalizeEvidenceScope(),
+          returnPath: 'post_compaction_handoff',
         });
         await logEvent(company, agent, 'recall', searchQuery, {
           lane: 'post_compaction_delivery',
           recall_mode: 'post_compaction_handoff',
           result_count: admittedHandoffMemories.length,
+          retained_occurrence_count: handoffAdmission.memories.length,
+          content_state_selection_sha256: handoffStateSelection.decision.decision_sha256,
           linked_full_compaction_key: handoffLookup.linked_full_compaction_key,
           reasoning: `Post-compaction handoff recall for '${searchQuery}' returned ${handoffLookup.memories.length} native compaction lane record(s) before semantic cache.`,
           source_knowledge: 'compaction-post-compaction-corpus.md — TiMem L2 + Chronos handoff tuning',
         });
-        const workingMemory = handoffEpistemic.memories
+        const handoffFinalClosure = await governCanaryRecallFinalClosure({
+          classificationMap: canaryClassificationMap,
+          returnPath: 'post_compaction_handoff',
+          selectedMemories: handoffEpistemic.memories,
+          cleanSelection: handoffEpistemic.cleanSelection,
+          epistemicDecision: handoffEpistemic.decision,
+          epistemicReceipt: handoffEpistemic.receipt,
+          contentStateEvidenceScope: handoffEpistemic.evidenceScope,
+          consumers: {},
+          companyId: company,
+          subjectAgentId: agent,
+          recallAuthority,
+        });
+        const workingMemory = handoffFinalClosure.memories
           .slice(0, 2)
           .map((mem) => `[${mem.source}] ${mem.value}`.slice(0, 700))
           .join('\n');
         const handoffBody = {
             success: true,
-            memories: handoffEpistemic.memories,
+            memories: handoffFinalClosure.memories,
             working_memory: isDemoMode ? demoRedact(workingMemory) : workingMemory,
-            count: handoffEpistemic.memories.length,
+            count: handoffFinalClosure.memories.length,
             cache_hit: false,
             recall_plan: {
               ...recallPlan,
@@ -1725,23 +2178,25 @@ export async function executeNativeRecall(req, recallAuthority) {
               cache_bypassed: true,
             },
             recall_meta: {
+              content_state_occurrence_admission: contentStateOccurrenceAdmission.publicMetadata(),
               qmd_activated: false,
-              total_results: admittedHandoffMemories.length,
+              total_results: handoffEpistemic.memories.length,
               confidence_distribution: {
-                high: admittedHandoffMemories.length,
+                high: handoffEpistemic.memories.length,
                 medium: 0,
                 low: 0,
               },
               temporal_truth: {
                 truth_band: 'live',
-                newest_memory_at: admittedHandoffMemories[0]?.created_at || null,
-                oldest_memory_at: admittedHandoffMemories.at(-1)?.created_at || null,
-                valid_from: admittedHandoffMemories[0]?.valid_from || null,
-                valid_until: admittedHandoffMemories[0]?.valid_until || null,
+                newest_memory_at: handoffEpistemic.memories[0]?.created_at || null,
+                oldest_memory_at: handoffEpistemic.memories.at(-1)?.created_at || null,
+                valid_from: handoffEpistemic.memories[0]?.valid_from || null,
+                valid_until: handoffEpistemic.memories[0]?.valid_until || null,
               },
               compaction_handoff_recall: {
                 source: 'native_compaction_lane',
                 preferred_source: 'aimos-compaction:post',
+                content_state_selection: handoffStateSelection.decision,
                 linked_full_compaction_key: handoffLookup.linked_full_compaction_key,
                 session_id: session_id || admittedHandoffMemories[0]?.compaction_handoff?.session_id || null,
                 project_id: project_id || admittedHandoffMemories[0]?.compaction_handoff?.project_id || null,
@@ -1755,17 +2210,21 @@ export async function executeNativeRecall(req, recallAuthority) {
                 ...(handoffEpistemic.decision.twin_prime ? { twin_prime: handoffEpistemic.decision.twin_prime } : {}),
                 decision_receipt: handoffEpistemic.receipt,
               },
+              canary_clean_selection:
+                canaryCleanSelectionMetadata(handoffEpistemic.cleanSelection),
+              recall_security_closure:
+                canaryFinalClosureMetadata(handoffFinalClosure),
             },
             ...(isDemoMode ? { demo_mode: true } : {}),
           };
-        const calibratedHandoffBody = calibrateRecallRouteBody({
-            queryText: searchQuery,
-            body: handoffBody,
-            runtimeBudget: effectiveRecallRuntimeBudget,
-            responseLimit: effectiveMaxRows,
-          });
-        calibratedHandoffBody.recall_receipt = await finalizeNativeRecall({
-          memories: calibratedHandoffBody.memories,
+        const calibratedHandoffBody = await calibrateAndFinalizeNativeRecallReturn({
+          returnPath: 'post_compaction_handoff',
+          queryText: searchQuery,
+          body: handoffBody,
+          runtimeBudget: effectiveRecallRuntimeBudget,
+          responseLimit: effectiveMaxRows,
+          securityClosure: handoffFinalClosure,
+          contentStateSelection: handoffStateSelection.decision,
           authority: recallAuthority,
           epistemicDecisionHash: epistemicReceiptDecisionHash(handoffEpistemic.decision),
         });
@@ -1801,56 +2260,128 @@ export async function executeNativeRecall(req, recallAuthority) {
       };
       const cached = await semanticCache.get(queryEmbedding, searchQuery, cacheContext);
       if (cached) {
-        const cachedAdmission = await admitNativeRecallCandidates(cached.memories || [], recallAuthority);
-        applyCalibrationSnapshot(cachedAdmission.memories, calibrationSnapshot);
-        const cachedEpistemic = await selectAndLedgerEpistemicRecall({
-          memories: cachedAdmission.memories,
-          queryText: searchQuery,
-          limit: effectiveMaxRows,
+        const hydratedCache = await hydrateSemanticCacheStateReferences({
+          cacheEntry: cached,
           companyId: company,
-          subjectAgentId: agent,
-          twinPrimePolicy: twinPrimeConfig?.policy,
-          twinPrimePolicyMutationHash: twinPrimeConfig?.mutationHash,
-          twinPrimeEligibilityReason: twinPrimeConfig ? 'semantic_cache_policy_identity_unbound' : null,
-          queryEmbedding,
-          temporalScope: twinPrimeTemporalScope,
-          signedRequestTimeMs: twinPrimeSignedRequestTimeMs,
-          parentEventId: recallAuthority.requestAuthority?.requestAdmissionEventId || null,
-          requestAuthority: recallAuthority.requestAuthority || null,
+          queryFn: verifiedAdmissionSession.read,
         });
-        await logEvent(company, agent, 'cache_hit', searchQuery, {
-          reasoning: `Cache hit for query '${searchQuery.slice(0,50)}...' — skipping full 21-stage native recall per semantic similarity threshold ${SPEED_CONFIG.cache.similarityThreshold}`,
-          source_knowledge: 'Cache-Augmented Generation (Gao et al., 2024) — Speed.md Appendix A'
-        });
-        const calibratedCachedBody = calibrateRecallRouteBody({
-            queryText: searchQuery,
-            body: {
-              ...cached,
-              memories: cachedEpistemic.memories,
-              recall_meta: {
-                ...(cached.recall_meta || {}),
-                epistemic_retrieval: {
-                  version: cachedEpistemic.decision.version,
-                  decision_sha256: cachedEpistemic.decision.decision_sha256,
-                  candidate_count: cachedEpistemic.decision.candidate_count,
-                  states: cachedEpistemic.decision.states,
-                  abstention_required: cachedEpistemic.decision.abstention_required,
-                  ...(cachedEpistemic.decision.twin_prime ? { twin_prime: cachedEpistemic.decision.twin_prime } : {}),
-                  decision_receipt: cachedEpistemic.receipt,
+        if (hydratedCache.valid) {
+          const cachedAdmission = await contentStateOccurrenceAdmission.admit(hydratedCache.memories);
+          const referenceById = new Map(cached.state_references.map((ref) => [ref.memory_id, ref]));
+          const exactCommitments = cachedAdmission.memories.length === cached.state_references.length
+            && cachedAdmission.memories.every((memory) => {
+              const reference = referenceById.get(String(memory.id).toLowerCase());
+              const proof = memory.provenance_proof;
+              return reference
+                && reference.live_content_hash === proof?.live_content_hash
+                && reference.save_mutation_hash === proof?.save_mutation_hash
+                && reference.binding_mutation_hash === proof?.binding_mutation_hash;
+            });
+          if (exactCommitments) {
+            const cachedStateSelection =
+              contentStateOccurrenceAdmission.selectCandidateStateRepresentatives(
+                cachedAdmission.memories,
+              );
+            applyCalibrationSnapshot(cachedStateSelection.memories, calibrationSnapshot);
+            markStage('canary_clean_top_k_boundary');
+            const cachedEpistemic = await selectAndLedgerEpistemicRecall({
+              memories: cachedStateSelection.memories,
+              queryText: searchQuery,
+              limit: effectiveMaxRows,
+              companyId: company,
+              subjectAgentId: agent,
+              twinPrimePolicy: twinPrimeConfig?.policy,
+              twinPrimePolicyMutationHash: twinPrimeConfig?.mutationHash,
+              twinPrimeEligibilityReason: twinPrimeConfig ? 'semantic_cache_policy_identity_unbound' : null,
+              queryEmbedding,
+              temporalScope: twinPrimeTemporalScope,
+              signedRequestTimeMs: twinPrimeSignedRequestTimeMs,
+              parentEventId: recallAuthority.requestAuthority?.requestAdmissionEventId || null,
+              requestAuthority: recallAuthority.requestAuthority || null,
+              queryFn: verifiedAdmissionSession.read,
+              canaryClassificationMap,
+              contentStateEvidenceScopeDecision:
+                contentStateOccurrenceAdmission.finalizeEvidenceScope(),
+              returnPath: 'semantic_cache',
+            });
+            await logEvent(company, agent, 'cache_hit', searchQuery, {
+              reasoning: `State-reference cache hit for query '${searchQuery.slice(0,50)}...' was hydrated and reverified before the semantic-cache return path.`,
+              source_knowledge: 'Cache-Augmented Generation + HOM-AIMOS content-state/provenance closure',
+            });
+            const cachedFinalClosure = await governCanaryRecallFinalClosure({
+              classificationMap: canaryClassificationMap,
+              returnPath: 'semantic_cache',
+              selectedMemories: cachedEpistemic.memories,
+              cleanSelection: cachedEpistemic.cleanSelection,
+              epistemicDecision: cachedEpistemic.decision,
+              epistemicReceipt: cachedEpistemic.receipt,
+              contentStateEvidenceScope: cachedEpistemic.evidenceScope,
+              consumers: {},
+              companyId: company,
+              subjectAgentId: agent,
+              recallAuthority,
+            });
+            const calibratedCachedBody = await calibrateAndFinalizeNativeRecallReturn({
+              returnPath: 'semantic_cache',
+              queryText: searchQuery,
+              body: {
+                success: true,
+                memories: cachedFinalClosure.memories,
+                count: cachedFinalClosure.memories.length,
+                working_memory: cachedFinalClosure.memories
+                  .slice(0, 4)
+                  .map((memory) => `[${memory.memory_type || 'memory'}] ${String(memory.value || '').slice(0, 300)}`)
+                  .join('\n'),
+                recall_meta: {
+                  content_state_occurrence_admission: contentStateOccurrenceAdmission.publicMetadata(),
+                  cache_revalidation: {
+                    cache_entry_sha256: cached.decision_sha256,
+                    cache_tier: cached.cache_tier,
+                    source_state_reference_count: cached.state_references.length,
+                    hydrated_memory_count: hydratedCache.memories.length,
+                    admitted_memory_count: cachedAdmission.memories.length,
+                    selected_state_count: cachedStateSelection.memories.length,
+                    selected_clean_count: cachedEpistemic.memories.length,
+                    exact_commitments_verified: true,
+                    canonical_hydration_performed: true,
+                    provenance_reverification_performed: true,
+                    content_state_reselection_performed: true,
+                    stale_selection_derived_content_reused: false,
+                    canonical_memory_mutated: false,
+                    retention_changed: false,
+                  },
+                  epistemic_retrieval: {
+                    version: cachedEpistemic.decision.version,
+                    decision_sha256: cachedEpistemic.decision.decision_sha256,
+                    candidate_count: cachedEpistemic.decision.candidate_count,
+                    states: cachedEpistemic.decision.states,
+                    abstention_required: cachedEpistemic.decision.abstention_required,
+                    ...(cachedEpistemic.decision.twin_prime ? { twin_prime: cachedEpistemic.decision.twin_prime } : {}),
+                    decision_receipt: cachedEpistemic.receipt,
+                  },
+                  canary_clean_selection:
+                    canaryCleanSelectionMetadata(cachedEpistemic.cleanSelection),
+                  recall_security_closure:
+                    canaryFinalClosureMetadata(cachedFinalClosure),
                 },
+                cache_hit: true,
+                cache_served_at: new Date().toISOString(),
               },
-              cache_hit: true,
-              cached_at: new Date().toISOString(),
-            },
-            runtimeBudget: effectiveRecallRuntimeBudget,
-            responseLimit: effectiveMaxRows,
-          });
-        calibratedCachedBody.recall_receipt = await finalizeNativeRecall({
-          memories: calibratedCachedBody.memories,
-          authority: recallAuthority,
-          epistemicDecisionHash: epistemicReceiptDecisionHash(cachedEpistemic.decision),
-        });
-        return { status: 200, body: calibratedCachedBody };
+              runtimeBudget: effectiveRecallRuntimeBudget,
+              responseLimit: effectiveMaxRows,
+              securityClosure: cachedFinalClosure,
+              contentStateSelection: cachedStateSelection.decision,
+              authority: recallAuthority,
+              epistemicDecisionHash: epistemicReceiptDecisionHash(cachedEpistemic.decision),
+            });
+            return { status: 200, body: calibratedCachedBody };
+          }
+        }
+        logEvent(company, agent, 'cache_revalidation_miss', cached.decision_sha256 || 'invalid', {
+          reason: hydratedCache.valid ? 'cache_reference_commitment_changed' : hydratedCache.reason,
+          full_native_path_continued: true,
+          cached_response_body_served: false,
+        }).catch(() => {});
       }
     }
     // ─────────────────────────────────────────────────────────────────────────
@@ -1892,6 +2423,10 @@ export async function executeNativeRecall(req, recallAuthority) {
     // ─── Feature 6: Data classification filter ──────────────────────────────
     let dataClassClause = '';
     const allowedClasses = getMaxDataClassForClearance(clearance);
+    const rescueAllowedDataClasses = getAuthorizedRescueDataClasses(
+      clearance,
+      recallAuthority.dataClassCeiling,
+    );
     if (allowedClasses) {
       params.push(allowedClasses);
       dataClassClause = `AND COALESCE(data_class, 'public') = ANY($${params.length}::text[])`;
@@ -2088,7 +2623,7 @@ export async function executeNativeRecall(req, recallAuthority) {
     markStage('entity_recall');
     // Extract entities from the query, look up memory IDs via entity_memory_edges,
     // inject any unseen high-relevance memories into results.
-    let entityMemories = [];
+    let entityCandidates = [];
     try {
       const queryEntities = extractEntities(searchQuery || '');
       if (queryEntities.length > 0) {
@@ -2119,6 +2654,7 @@ export async function executeNativeRecall(req, recallAuthority) {
         const entResult = await query(
           `SELECT DISTINCT e.memory_id, m.key, m.value, m.scope, m.memory_type,
                   m.clearance_level, m.memory_tier, m.data_class, m.source,
+                  m.created_at, m.credit_score,
                   m.access_count, m.last_accessed_at, m.last_verified_at,
                   m.verified_by, m.verification_basis, m.freshness_state,
                   COALESCE(m.retrieval_weight, 1.0) AS retrieval_weight,
@@ -2126,20 +2662,58 @@ export async function executeNativeRecall(req, recallAuthority) {
            FROM entity_memory_edges e
            JOIN aimos_memories m ON m.id = e.memory_id AND m.company_id = e.company_id
            WHERE ${entityClauses.join(' AND ')}
-           ORDER BY entity_hits DESC
+           ORDER BY entity_hits DESC, e.memory_id ASC
            LIMIT 5`,
           entityParams
         );
-        entityMemories = entResult.rows;
+        entityCandidates = entResult.rows.map((row) => ({
+          id: row.memory_id,
+          key: row.key,
+          value: row.value,
+          scope: row.scope,
+          memory_type: row.memory_type,
+          clearance_level: row.clearance_level,
+          created_at: row.created_at,
+          credit_score: parseFloat(row.credit_score || 1.0),
+          memory_tier: row.memory_tier || 'short-term',
+          data_class: row.data_class || 'public',
+          entity_hits: Number(row.entity_hits || 1),
+          source: row.source || null,
+          access_count: Number(row.access_count || 0),
+          last_accessed_at: row.last_accessed_at || null,
+          last_verified_at: row.last_verified_at || null,
+          verified_by: row.verified_by || null,
+          verification_basis: row.verification_basis || null,
+          freshness_state: row.freshness_state || null,
+          retrieval_weight: Math.max(0.1, Math.min(3, Number(row.retrieval_weight || 1))),
+          retrieval_source: 'entity_graph',
+          graph_links: [],
+        }));
       }
-    } catch (_entRecallErr) {
+    } catch (entRecallError) {
       // Entity recall is best-effort
+      recallBreadthPolicy.entity_recall_error = entRecallError.message;
     }
-    debugRecallPoint('entity_recall_done', { entity_memories: entityMemories.length });
+    const entityAdmission = entityCandidates.length
+      ? await contentStateOccurrenceAdmission.admit(entityCandidates)
+      : { memories: [], occurrence_admission_decision_sha256: null };
+    const entityMemories = entityAdmission.memories;
+    if (entityCandidates.length) {
+      recallBreadthPolicy.entity_admission_decision_sha256 =
+        entityAdmission.occurrence_admission_decision_sha256;
+    }
+    debugRecallPoint('entity_recall_done', {
+      entity_candidates: entityCandidates.length,
+      entity_memories: entityMemories.length,
+      entity_admission_decision_sha256:
+        entityAdmission.occurrence_admission_decision_sha256,
+    });
 
     // ─── Feature 8: Recursive Graph Traversal (replaces manual 2-hop) ────────
     // WITH RECURSIVE enables configurable N-hop traversal (default 2, max 4).
-    const requestedHops = max_hops !== undefined ? Number(max_hops) : recallBreadthPolicy.graph_hops;
+    const requestedHops = max_hops !== undefined && max_hops !== null
+      ? Number(max_hops)
+      : recallBreadthPolicy.graph_hops;
     const hops = Math.min(
       Math.max(Number.isFinite(requestedHops) ? requestedHops : recallBreadthPolicy.graph_hops, 0),
       4
@@ -2187,32 +2761,24 @@ export async function executeNativeRecall(req, recallAuthority) {
       graph_hops: hops,
     });
 
-    // ─── HIPPORAG: Merge entity-recalled memories not already in vector results ──
+    // ─── HIPPORAG: Merge admitted entity evidence without losing overlapping hits ──
+    // Entity is one bounded fusion gear. If another gear already opened the
+    // same occurrence, retain that candidate and attach the admitted entity
+    // evidence; otherwise add the admitted occurrence to the shared set.
+    const entityMemoryById = new Map(memories.map((memory) => [String(memory.id), memory]));
     for (const em of entityMemories) {
-      if (!seenIds.has(em.memory_id)) {
-        seenIds.add(em.memory_id);
-        memories.push({
-          id: em.memory_id,
-          key: em.key,
-          value: em.value,
-          scope: em.scope,
-          memory_type: em.memory_type,
-          clearance_level: em.clearance_level,
-          memory_tier: em.memory_tier || 'short-term',
-          data_class: em.data_class || 'public',
-          entity_hits: Number(em.entity_hits || 1),
-          source: em.source || null,
-          access_count: Number(em.access_count || 0),
-          last_accessed_at: em.last_accessed_at || null,
-          last_verified_at: em.last_verified_at || null,
-          verified_by: em.verified_by || null,
-          verification_basis: em.verification_basis || null,
-          freshness_state: em.freshness_state || null,
-          retrieval_weight: Math.max(0.1, Math.min(3, Number(em.retrieval_weight || 1))),
-          retrieval_source: 'entity_graph',
-          graph_links: []
-        });
+      const entityId = String(em.id);
+      const existing = entityMemoryById.get(entityId);
+      if (existing) {
+        existing.entity_hits = Math.max(
+          Number(existing.entity_hits || 0),
+          Number(em.entity_hits || 0),
+        );
+        continue;
       }
+      seenIds.add(entityId);
+      entityMemoryById.set(entityId, em);
+      memories.push(em);
     }
     debugRecallPoint('entity_merge_done', { memories: memories.length, seen_ids: seenIds.size });
 
@@ -2486,6 +3052,7 @@ export async function executeNativeRecall(req, recallAuthority) {
         }
 
         let siblingHydrated = 0;
+        const pendingSiblingIds = new Set();
         for (const spec of specs) {
           const siblingParams = [company, clearance, agent, spec.root, spec.likePattern];
           const siblingClauses = [
@@ -2518,11 +3085,11 @@ export async function executeNativeRecall(req, recallAuthority) {
              LIMIT $${siblingLimitIdx}`,
             siblingParams
           );
+          const siblingCandidates = [];
           for (const row of siblingResult.rows) {
-            if (seenIds.has(row.id)) continue;
-            seenIds.add(row.id);
-            siblingHydrated += 1;
-            memories.push({
+            if (seenIds.has(row.id) || pendingSiblingIds.has(row.id)) continue;
+            pendingSiblingIds.add(row.id);
+            siblingCandidates.push({
               id: row.id,
               key: row.key,
               value: row.value,
@@ -2541,10 +3108,21 @@ export async function executeNativeRecall(req, recallAuthority) {
               graph_links: [],
             });
           }
+          const siblingAdmission = siblingCandidates.length
+            ? await contentStateOccurrenceAdmission.admit(siblingCandidates)
+            : { memories: [] };
+          for (const memory of siblingAdmission.memories) {
+            if (seenIds.has(memory.id)) continue;
+            seenIds.add(memory.id);
+            siblingHydrated += 1;
+            memories.push(memory);
+          }
         }
         if (siblingHydrated > 0) {
           recallBreadthPolicy.sibling_hydrated = siblingHydrated;
           recallBreadthPolicy.sibling_hydrated_roots = specs.map((spec) => spec.root).slice(0, 12);
+          recallBreadthPolicy.sibling_admission_decision_sha256 =
+            contentStateOccurrenceAdmission.publicMetadata().decision_sha256;
         }
       } catch (_siblingErr) {
         console.warn('[recall] sibling hydration error (non-fatal):', _siblingErr.message);
@@ -2572,9 +3150,9 @@ export async function executeNativeRecall(req, recallAuthority) {
     }
     debugRecallPoint('reranking_done', { memories: memories.length, query_terms: queryTerms.length });
 
-    // ─── QMD STAGE ACTIVATION: structured query stage for low-confidence recall ──
-    // Per Adaptive RAG (paper:adaptive_rag_2024): low-confidence queries activate
-    // the native QMD stage instead of relying solely on vector similarity.
+    // ─── QMD RESCUE ADAPTATION: structured low-confidence lexical proposal ──
+    // Adaptive-RAG uses a trained complexity classifier. AIMOS does not claim
+    // that classifier: this is a deterministic confidence-routed adaptation.
     // Fixes: (1) uses tsvector index not regex, (2) searches full value not LEFT(500),
     // (3) unordered term matching, (4) computed rerank_score not hardcoded 1.0,
     // (5) searches metadata (source, technique) for Knowledge Gate retrieval.
@@ -2598,10 +3176,8 @@ export async function executeNativeRecall(req, recallAuthority) {
               'clearance_level <= $2',
               '(clearance_level > 2 OR agent_id = $3 OR agent_id IS NULL)',
             ];
-            if (allowedClasses) {
-              scopedParams.push(allowedClasses);
-              scopedClauses.push(`COALESCE(data_class, 'public') = ANY($${scopedParams.length}::text[])`);
-            }
+            scopedParams.push(rescueAllowedDataClasses);
+            scopedClauses.push(`COALESCE(data_class, 'public') = ANY($${scopedParams.length}::text[])`);
             if (typeFilter) {
               scopedParams.push(typeFilter);
               scopedClauses.push(`memory_type = $${scopedParams.length}`);
@@ -2627,10 +3203,10 @@ export async function executeNativeRecall(req, recallAuthority) {
              FROM aimos_memories
              WHERE ${qmdFtsScope.scopedClauses.join(' AND ')}
                    AND search_vector @@ to_tsquery('english', $${qmdFtsQueryIdx})
-             ORDER BY fts_rank DESC
+             ORDER BY fts_rank DESC, id ASC
              LIMIT 10`,
             qmdFtsScope.scopedParams
-          ).catch(() => ({ rows: [] }));
+          );
 
           // Channel 2: Key-pattern + metadata search (for Knowledge Gate: papers, techniques)
           // Use OR between terms — any term matching key/metadata surfaces the memory.
@@ -2641,7 +3217,7 @@ export async function executeNativeRecall(req, recallAuthority) {
           const qmdKeyFirstPatternIdx = qmdKeyScope.scopedParams.length + 1;
           qmdKeyScope.scopedParams.push(...keyLikePatterns);
           const keyOrClauses = qmdKeyTerms.map((_, i) => `LOWER(key) LIKE $${qmdKeyFirstPatternIdx + i}`).join(' OR ');
-          const metaOrClauses = qmdKeyTerms.map((_, i) => `LOWER(COALESCE(metadata->>'source','')) LIKE $${qmdKeyFirstPatternIdx + i}`).join(' OR ');
+          const metaOrClauses = qmdKeyTerms.map((_, i) => `LOWER(COALESCE(source,'')) LIKE $${qmdKeyFirstPatternIdx + i}`).join(' OR ');
           const qmdKeyResult = await query(
             `SELECT id, key, value, scope, memory_type, clearance_level, created_at,
                     credit_score, memory_tier, decay_weight, data_class, source,
@@ -2651,55 +3227,69 @@ export async function executeNativeRecall(req, recallAuthority) {
                    AND (${keyOrClauses} OR ${metaOrClauses})
              ORDER BY
                CASE WHEN memory_type IN ('procedural_seed', 'procedural', 'tacit_knowledge') THEN 0 ELSE 1 END ASC,
-               created_at DESC
+               created_at DESC, id ASC
              LIMIT 10`,
             qmdKeyScope.scopedParams
-          ).catch(() => ({ rows: [] }));
+          );
 
-          // Merge both channels, compute real rerank_score
+          // Merge both proposal channels without allowing an overlap with an
+          // earlier gear to erase QMD evidence.
           const qmdCandidates = new Map();
           for (const row of (qmdFtsResult.rows || [])) {
-            if (!seenIds.has(row.id)) {
-              qmdCandidates.set(row.id, { ...row, _fts_rank: parseFloat(row.fts_rank || 0), _source: 'qmd_fts' });
-            }
+            qmdCandidates.set(row.id, { ...row, _fts_rank: parseFloat(row.fts_rank || 0), _source: 'qmd_fts' });
           }
           for (const row of (qmdKeyResult.rows || [])) {
-            if (!seenIds.has(row.id) && !qmdCandidates.has(row.id)) {
+            if (!qmdCandidates.has(row.id)) {
               qmdCandidates.set(row.id, { ...row, _fts_rank: 0, _source: 'qmd_key' });
             }
           }
 
-          for (const [id, row] of qmdCandidates) {
-            seenIds.add(id);
-            // Compute real rerank_score: term overlap on full text
+          const qmdProposals = [...qmdCandidates.values()].map((row) => ({
+            id: row.id, key: row.key, value: row.value,
+            scope: row.scope, memory_type: row.memory_type,
+            clearance_level: row.clearance_level, created_at: row.created_at,
+            credit_score: parseFloat(row.credit_score || 1),
+            memory_tier: row.memory_tier || 'long-term',
+            data_class: row.data_class || 'public', source: row.source || null,
+            access_count: Number(row.access_count || 0),
+            last_accessed_at: row.last_accessed_at || null,
+            retrieval_source: row._source,
+            graph_links: [],
+          }));
+          const qmdAdmission = qmdProposals.length
+            ? await contentStateOccurrenceAdmission.admit(qmdProposals)
+            : { memories: [], occurrence_admission_decision_sha256: null };
+          const rescueMemoryById = new Map(memories.map((memory) => [String(memory.id), memory]));
+          for (const row of qmdAdmission.memories) {
+            const id = String(row.id);
+            const qmdEvidence = qmdCandidates.get(id);
             const fullText = `${row.key} ${row.value}`.toLowerCase();
             const hitCount = queryTerms.filter(t => fullText.includes(t)).length;
             const termOverlap = queryTerms.length > 0 ? hitCount / queryTerms.length : 0;
-            // Boost procedural_seed and paper memories for Knowledge Gate retrieval
             const typeBoost = ['procedural_seed', 'procedural', 'tacit_knowledge'].includes(row.memory_type) ? 0.15 : 0;
-            const computedScore = Math.min(1.0, termOverlap + typeBoost + (row._fts_rank > 0 ? 0.1 : 0));
-
-            memories.push({
-              id: row.id, key: row.key, value: row.value,
-              scope: row.scope, memory_type: row.memory_type,
-              clearance_level: row.clearance_level,
-              memory_tier: row.memory_tier || 'long-term',
-              data_class: row.data_class || 'public',
-              source: row.source || null,
-              access_count: Number(row.access_count || 0),
-              last_accessed_at: row.last_accessed_at || null,
-              retrieval_source: row._source,
-              rerank_score: computedScore,
-              graph_links: []
-            });
+            const computedScore = Math.min(
+              1.0,
+              termOverlap + typeBoost + (Number(qmdEvidence?._fts_rank || 0) > 0 ? 0.1 : 0),
+            );
+            const existing = rescueMemoryById.get(id);
+            if (existing) {
+              existing.qmd_score = Math.max(Number(existing.qmd_score || 0), computedScore);
+              continue;
+            }
+            const qmdMemory = { ...row, qmd_score: computedScore, rerank_score: computedScore };
+            seenIds.add(id);
+            rescueMemoryById.set(id, qmdMemory);
+            memories.push(qmdMemory);
           }
-          if (qmdCandidates.size > 0) {
+          if (qmdAdmission.memories.length > 0) {
             qmdActivated = true;
-            memories.sort((a, b) => (b.rerank_score || 0) - (a.rerank_score || 0));
+            recallBreadthPolicy.qmd_admission_decision_sha256 =
+              qmdAdmission.occurrence_admission_decision_sha256;
           }
         }
-      } catch (_qmdErr) {
-        console.warn('[recall] QMD auto-switch error:', _qmdErr.message);
+      } catch (qmdError) {
+        recallBreadthPolicy.qmd_error = qmdError.message;
+        console.warn('[recall] QMD auto-switch error:', qmdError.message);
       }
     }
     debugRecallPoint('qmd_activation_done', {
@@ -2709,7 +3299,7 @@ export async function executeNativeRecall(req, recallAuthority) {
       avg_rerank: Math.round(avgRerank * 1000) / 1000,
     });
 
-    // ─── Wire: multi-stage-retrieval — HyDE fallback on low-quality recall ────
+    // ─── Multi-stage deterministic HyDE adaptation on low-quality recall ────
     markStage('hyde_expansion');
     // When recall quality is still low after QMD, expand query with hypothetical
     // document embeddings and run multi-stage retrieval to surface better results.
@@ -2718,32 +3308,39 @@ export async function executeNativeRecall(req, recallAuthority) {
         const hydeResults = await multiStageRecall(searchQuery, {
           companyId: company,
           clearanceLevel: clearance,
-          limit: Math.min(candidateOpeningLimit, 10)
+          requestingAgent,
+          allowedDataClasses: rescueAllowedDataClasses,
+          memoryTypeFilter: typeFilter,
+          sourceFilter: srcFilter,
+          sessionLikePattern,
+          limit: Math.min(candidateOpeningLimit, 10),
+          admitEvidenceFn: contentStateOccurrenceAdmission.admit,
         });
+        const rescueMemoryById = new Map(memories.map((memory) => [String(memory.id), memory]));
         for (const hit of hydeResults) {
-          if (hit.id && !seenIds.has(hit.id)) {
-            seenIds.add(hit.id);
-            memories.push({
-              id: hit.id,
-              key: hit.key,
-              value: hit.value,
-              scope: hit.scope,
-              memory_type: hit.memory_type,
-              clearance_level: hit.clearance_level,
-              memory_tier: hit.memory_tier || 'long-term',
-              data_class: hit.data_class || 'public',
-              source: hit.source || null,
-              retrieval_source: 'multi_stage_hyde',
-              rerank_score: hit.rrf_score,
-              graph_links: []
-            });
+          if (!hit.id) continue;
+          const id = String(hit.id);
+          const hydeScore = Number(hit.rrf_score || 0);
+          const existing = rescueMemoryById.get(id);
+          if (existing) {
+            existing.hyde_score = Math.max(Number(existing.hyde_score || 0), hydeScore);
+            continue;
           }
+          const hydeMemory = {
+            ...hit,
+            retrieval_source: 'multi_stage_hyde',
+            hyde_score: hydeScore,
+            rerank_score: hydeScore,
+            graph_links: [],
+          };
+          seenIds.add(id);
+          rescueMemoryById.set(id, hydeMemory);
+          memories.push(hydeMemory);
         }
-        if (hydeResults.length > 0) {
-          memories.sort((a, b) => (b.rerank_score || 0) - (a.rerank_score || 0));
-        }
-      } catch (_hydeErr) {
-        console.warn('[recall] multi-stage HyDE fallback error (non-fatal):', _hydeErr.message);
+        recallBreadthPolicy.hyde_adaptation = MULTI_STAGE_RETRIEVAL_CONTRACT.hyde_implementation;
+      } catch (hydeError) {
+        recallBreadthPolicy.hyde_error = hydeError.message;
+        console.warn('[recall] multi-stage HyDE fallback error (non-fatal):', hydeError.message);
       }
     }
     debugRecallPoint('hyde_expansion_done', { memories: memories.length, seen_ids: seenIds.size });
@@ -2751,13 +3348,20 @@ export async function executeNativeRecall(req, recallAuthority) {
     // The ranking engines propose ids; this native boundary is the sole
     // disclosure authority. No calibration, graph completion, synthesis,
     // mnemonic encoding, cache admission, or early exit sees unverified rows.
-    const mainAdmission = await admitNativeRecallCandidates(memories, recallAuthority);
+    const mainAdmission = await contentStateOccurrenceAdmission.admit(memories);
     memories.length = 0;
     memories.push(...mainAdmission.memories);
-    const magmaBaselineCandidateIds = Object.freeze(memories.map((memory) => String(memory.id)));
-    let magmaCandidate = null;
-    let magmaCandidateRuntimeMs = null;
-    let magmaCandidateFailure = null;
+    // Canary stage evidence and native retained-quarantine evidence are
+    // composed before any graph-family subgear sees an input. MAGMA is dormant;
+    // this signed decision now governs G2 only.
+    markStage('canary_magma_graph_admission');
+    const canaryMagmaComposition = await governCanaryMagmaGraphAdmission({
+      memories,
+      classificationMap: canaryClassificationMap,
+      companyId: company,
+      subjectAgentId: agent,
+      recallAuthority,
+    });
     let reconstructedGraphCandidate = null;
     let reconstructedGraphCandidateFailure = null;
     let reconstructedGraphEligibleCandidateCount = 0;
@@ -2769,47 +3373,16 @@ export async function executeNativeRecall(req, recallAuthority) {
       'temporal_delta', 'temporal_order', 'timeline', 'session_recall', 'session_count',
     ].includes(routeQueryUnderstanding.intent);
 
-    // MAGMA is a permanent native retrieval gear. It receives only admitted
-    // candidates, contributes a bounded rank channel plus admitted graph
-    // discoveries, and never owns the candidate set or disclosure. A graph
-    // read failure is explicit degraded operation; it is not an off mode.
-    markStage('magma_native_gear');
-    if (memories.length > 0) {
-      try {
-        const magmaStartedAt = performance.now();
-        magmaCandidate = await composeMagmaNativeCandidate({
-          recallAuthority,
-          admittedMemories: memories,
-          queryEmbedding,
-          queryText: searchQuery,
-          limit: magmaCalibrationState.calibration.result_limit,
-          maxDepth: magmaCalibrationState.calibration.max_depth,
-          maxNodes: magmaCalibrationState.calibration.max_nodes,
-          beamWidth: magmaCalibrationState.calibration.beam_width,
-        });
-        magmaCandidateRuntimeMs = Number((performance.now() - magmaStartedAt).toFixed(3));
-      } catch (error) {
-        magmaCandidateFailure = String(error?.message || 'magma_native_gear_failure').slice(0, 240);
-        await logEvent(company, agent, 'native_retrieval_gear_failure', searchQuery, {
-          gear: 'magma',
-          calibration_mutation_hash: magmaCalibrationState.mutationHash,
-          error_code: magmaCandidateFailure,
-          candidate_set_changed: false,
-          canonical_memory_changed: false,
-          disclosure_changed: false,
-        }, null, { authority: recallAuthority.requestAuthority || null });
-      }
-    }
-
-    graphFamilyCandidate = composeNativeGraphFamilyChannel({
-      magmaGear: magmaCandidate,
-      limit: 50,
-    });
+    skipStage('magma_native_gear', 'dormant_research_not_in_live_recall');
     const graphFamilyBaselineFusion = fuseNativeRetrievalGears({
       admittedMemories: memories,
-      magmaGear: graphFamilyCandidate,
+      graphFamilyGear: null,
       temporalBias: temporalFusionIntent,
-      rrfK: magmaCalibrationState.calibration.rrf_k,
+      rrfK: graphFamilyRrfK,
+      contentStateProjection: contentStateOccurrenceAdmission.internalProjection(),
+      contentStateGears: NATIVE_RETRIEVAL_FUSION_CONTRACT.content_state_first_gear_set,
+      fusionPhase: 'pre_reconstructed_graph',
+      requireGraphFamilyContract: false,
     });
 
     // Reconstructed Graph G2 is a permanent non-owning subgear inside the
@@ -2821,15 +3394,22 @@ export async function executeNativeRecall(req, recallAuthority) {
     markStage('reconstructed_graph_native_subgear');
     const reconstructedGraphCanaryPartition = partitionGraphCanaryDisclosure(
       graphFamilyBaselineFusion.memories,
+      canaryClassificationMap,
     );
-    reconstructedGraphEligibleCandidateCount = reconstructedGraphCanaryPartition.admitted.length;
+    const reconstructedGraphStateSelection =
+      contentStateOccurrenceAdmission.selectCandidateStateRepresentatives(
+        reconstructedGraphCanaryPartition.admitted,
+      );
+    reconstructedGraphEligibleCandidateCount = reconstructedGraphStateSelection.memories.length;
     reconstructedGraphCanaryWithheldCount = reconstructedGraphCanaryPartition.withheld.length;
     if (reconstructedGraphEligibleCandidateCount > 0) {
       try {
         reconstructedGraphCandidate = composeReconstructedGraphNativeCandidate({
-          admittedMemories: reconstructedGraphCanaryPartition.admitted
+          admittedMemories: reconstructedGraphStateSelection.memories
             .map((memory) => ({ ...memory, canary_admitted: true })),
           queryText: searchQuery,
+          contentStateSelectionDecision: reconstructedGraphStateSelection.decision,
+          requireContentStateSelection: true,
         });
       } catch (error) {
         reconstructedGraphCandidateFailure = String(
@@ -2849,16 +3429,20 @@ export async function executeNativeRecall(req, recallAuthority) {
 
     const graphFamilyStartedAt = performance.now();
     graphFamilyCandidate = composeNativeGraphFamilyChannel({
-      magmaGear: magmaCandidate,
       reconstructedGraphGear: reconstructedGraphCandidate,
       limit: 50,
+      contentStateProjection: contentStateOccurrenceAdmission.internalProjection(),
     });
     graphFamilyRuntimeMs = Number((performance.now() - graphFamilyStartedAt).toFixed(3));
     nativeRetrievalFusion = fuseNativeRetrievalGears({
       admittedMemories: memories,
-      magmaGear: graphFamilyCandidate,
+      graphFamilyGear: graphFamilyCandidate,
       temporalBias: temporalFusionIntent,
-      rrfK: magmaCalibrationState.calibration.rrf_k,
+      rrfK: graphFamilyRrfK,
+      contentStateProjection: contentStateOccurrenceAdmission.internalProjection(),
+      contentStateGears: NATIVE_RETRIEVAL_FUSION_CONTRACT.content_state_first_gear_set,
+      fusionPhase: 'pre_concept_ppr',
+      requireGraphFamilyContract: true,
     });
     memories.length = 0;
     memories.push(...nativeRetrievalFusion.memories.map((memory) => ({ ...memory })));
@@ -2869,8 +3453,11 @@ export async function executeNativeRecall(req, recallAuthority) {
     // population and all incumbent gear outputs before confidence or
     // epistemic selection, allowing a candidate graph subgear to be evaluated
     // without changing canonical recall behavior.
-    const evaluationCanaryPartition = partitionGraphCanaryDisclosure(memories);
-    nativeGearboxEvaluationEvidence = Object.freeze({
+    const evaluationCanaryPartition = partitionGraphCanaryDisclosure(
+      memories,
+      canaryClassificationMap,
+    );
+    preConceptPprGearboxEvidence = Object.freeze({
       schema: NATIVE_GEARBOX_EVALUATION_EVIDENCE_SCHEMA,
       query_text: searchQuery,
       query_embedding: Object.freeze(Array.from(queryEmbedding, Number)),
@@ -2884,11 +3471,15 @@ export async function executeNativeRecall(req, recallAuthority) {
           .sort(),
       ),
       temporal_bias: temporalFusionIntent,
-      rrf_k: magmaCalibrationState.calibration.rrf_k,
-      magma_gear: magmaCandidate,
+      rrf_k: graphFamilyRrfK,
+      magma_gear: null,
+      magma_dormancy: MAGMA_DORMANT_RUNTIME_DECISION,
       reconstructed_graph_gear: reconstructedGraphCandidate,
       graph_family_gear: graphFamilyCandidate,
       baseline_fusion: nativeRetrievalFusion,
+      evidence_stage: 'pre_concept_ppr',
+      pre_ppr_content_state_occurrence_admission:
+        contentStateOccurrenceAdmission.metadata(),
       transport_exposed: false,
       canonical_memory_mutated: false,
       retention_changed: false,
@@ -2898,34 +3489,22 @@ export async function executeNativeRecall(req, recallAuthority) {
       ? memories.reduce((sum, memory) => sum + Number(memory.rerank_score || 0), 0) / memories.length
       : 0;
 
-    // Recursive graph traversal starts only from provenance-admitted seeds and
-    // returns identifiers/edge weights, never unverified passage content.
+    // Bounded graph-link annotation starts only from provenance-admitted seeds
+    // and returns identifiers/edge weights, never unverified passage content.
+    // One multi-seed query replaces the predecessor N+1 database loop.
     if (hops > 0) {
+      const graphLinkBatch = await readBatchedRecallGraphLinks({
+        companyId: company,
+        seedMemoryIds: memories
+          .slice(0, RECALL_GRAPH_LINK_BATCH_CONTRACT.maximum_seed_states)
+          .map((memory) => memory.id),
+        maxHops: hops,
+        queryFn: verifiedAdmissionSession.read,
+      });
       for (const memory of memories) {
-        const graphRes = await query(
-          `WITH RECURSIVE graph_walk AS (
-             SELECT cr.target_memory_id AS memory_id, cr.similarity, 1 AS hop
-               FROM memory_cross_refs cr
-              WHERE cr.company_id = $1 AND cr.source_memory_id = $2::uuid
-             UNION ALL
-             SELECT cr.target_memory_id, cr.similarity, gw.hop + 1
-               FROM graph_walk gw
-               JOIN memory_cross_refs cr
-                 ON cr.source_memory_id = gw.memory_id AND cr.company_id = $1
-              WHERE gw.hop < $3 AND cr.target_memory_id != $2::uuid
-           )
-           SELECT DISTINCT ON (memory_id) memory_id, similarity, hop
-             FROM graph_walk
-            ORDER BY memory_id, hop ASC, similarity DESC
-            LIMIT 8`,
-          [company, memory.id, hops],
-        ).catch(() => ({ rows: [] }));
-        memory.graph_links = graphRes.rows.map((link) => ({
-          id: link.memory_id,
-          similarity: Number(link.similarity),
-          hop: Number(link.hop),
-        }));
+        memory.graph_links = graphLinkBatch.linksBySeed.get(String(memory.id).toLowerCase()) || [];
       }
+      recallBreadthPolicy.graph_link_batch = graphLinkBatch.decision;
     }
 
     let deepRecallOverrideSummary = annotateDeepRecallOverrides(memories, searchQuery, lexicalCalibration);
@@ -2950,8 +3529,24 @@ export async function executeNativeRecall(req, recallAuthority) {
       && !twinPrimeConfig
       && !explicitFullDetailRecall
       && recallBreadthPolicy.profile !== 'exact_detail') {
-      applyCalibrationSnapshot(memories, calibrationSnapshot);
-      const earlyTopScores = memories.slice(0, 5).map((memory) => {
+      // The early-return path has its own final selection point. Build its
+      // response-local boundary here so later Concept/PPR work is neither
+      // skipped nor accidentally omitted from the normal-path boundary.
+      const earlyStateSelection =
+        contentStateOccurrenceAdmission.selectCandidateStateRepresentatives(memories);
+      markStage('trust_scoring');
+      const earlyCandidateMemories = applyDeepRecallOverrideRanking(
+        rankByTrust(earlyStateSelection.memories, { memoryCount: corpusMemoryCount }),
+      );
+      markStage('canary_clean_top_k_boundary');
+      const earlyCanaryCleanSelectionBoundary = buildCanaryCleanSelectionBoundary(
+        earlyCandidateMemories,
+        effectiveMaxRows,
+        { classificationMap: canaryClassificationMap },
+      );
+      const earlySelectionMemories = earlyCanaryCleanSelectionBoundary.clean_eligible_memories;
+      applyCalibrationSnapshot(earlySelectionMemories, calibrationSnapshot);
+      const earlyTopScores = earlySelectionMemories.slice(0, 5).map((memory) => {
         const lexical = Number(memory.rerank_score || 0);
         const fusion = Number.isFinite(Number(memory.native_fusion_score))
           ? Number(memory.native_fusion_score)
@@ -2960,12 +3555,19 @@ export async function executeNativeRecall(req, recallAuthority) {
           + (fusion * NATIVE_FUSION_SEMANTIC_SHARE);
       });
       const earlyMvs = await checkContextSufficiency(session_id || agent || company).catch(() => ({ mvs: 0.5 }));
-      if (shouldEarlyExit(earlyTopScores, earlyMvs.mvs, { user_trust_level: 'standard' })) {
+      const earlyTop1Medallion = earlySelectionMemories[0]?.medallion_layer || 'silver';
+      if (shouldEarlyExit(earlyTopScores, earlyMvs.mvs, {
+        user_trust_level: 'standard',
+        top1_medallion: earlyTop1Medallion,
+        total_memories: corpusMemoryCount,
+      })) {
         const earlyMeta = generateEarlyExitMetadata({
           reason: 'high_confidence_gap',
           confidence_gap: earlyTopScores[0] - (earlyTopScores[1] || 0),
           mvs_score: earlyMvs.mvs,
-          top_score: earlyTopScores[0]
+          top_score: earlyTopScores[0],
+          top1_medallion: earlyTop1Medallion,
+          total_memories: corpusMemoryCount,
         });
         await logEvent(company, agent, 'early_exit', searchQuery.slice(0, 50), {
           reasoning: `Early exit at stage 7 boundary after one signed calibration snapshot: confidence_gap=${(earlyTopScores[0] - (earlyTopScores[1] || 0)).toFixed(3)}, MVS=${earlyMvs.mvs}.`,
@@ -2975,10 +3577,10 @@ export async function executeNativeRecall(req, recallAuthority) {
           qmd_activated: qmdActivated,
           top_rerank: topRerank,
           avg_rerank: Math.round(avgRerank * 100) / 100,
-          total_results: memories.length,
+          total_results: earlyCandidateMemories.length,
           early_exit: true,
           exit_stage: 7,
-          skipped_stages: ['salience_frequency_evaluation', 'trust_scoring', 'concept_graph_ppr', 'mnemonic_encoding'],
+          skipped_stages: ['salience_frequency_evaluation', 'concept_graph_ppr', 'mnemonic_encoding'],
           confidence_distribution: { high: 0, medium: 0, low: 0 },
           early_exit_flag: earlyExitFlag,
           deep_recall_override: deepRecallOverrideSummary,
@@ -2987,7 +3589,6 @@ export async function executeNativeRecall(req, recallAuthority) {
         };
         // Record skipped stages in tracer
         skipStage('salience_frequency_evaluation', 'early_exit');
-        skipStage('trust_scoring', 'early_exit');
         skipStage('concept_graph_ppr', 'early_exit');
         skipStage('mnemonic_encoding', 'early_exit');
         skipStage('confidence_scoring', 'early_exit');
@@ -3007,15 +3608,21 @@ export async function executeNativeRecall(req, recallAuthority) {
             total_duration_ms: recallDurationMs, stage_count: _stageTimings.length,
             stages_executed: _stageTimings.filter(s => !s.skipped).map(s => s.id),
             stages_skipped: _stageTimings.filter(s => s.skipped).map(s => s.id),
-            early_exit: true, result_count: memories.length
+            early_exit: true, result_count: earlyCandidateMemories.length
           }).catch(() => {});
           earlyRecallMeta.stage_timings = _stageTimings;
         }
         earlyRecallMeta.confidence_source = 'signed_sortify_belief_snapshot';
         earlyRecallMeta.calibration_mutation_hash = calibrationSnapshot.calibrationMutationHash;
         earlyRecallMeta.cache_admitted = false;
+        earlyRecallMeta.content_state_occurrence_admission =
+          contentStateOccurrenceAdmission.publicMetadata();
         const earlyEpistemic = await selectAndLedgerEpistemicRecall({
-          memories,
+          // The precomputed boundary is bound to the full ordered population.
+          // The shared selector consumes its clean subset internally; passing
+          // only that subset here would sever the population commitment when
+          // retained Canary/quarantine evidence is present.
+          memories: earlyCandidateMemories,
           queryText: searchQuery,
           limit: effectiveMaxRows,
           companyId: company,
@@ -3028,34 +3635,33 @@ export async function executeNativeRecall(req, recallAuthority) {
           signedRequestTimeMs: twinPrimeSignedRequestTimeMs,
           parentEventId: recallAuthority.requestAuthority?.requestAdmissionEventId || null,
           requestAuthority: recallAuthority.requestAuthority || null,
+          queryFn: verifiedAdmissionSession.read,
+          canaryCleanSelectionBoundary: earlyCanaryCleanSelectionBoundary,
+          canaryClassificationMap,
+          contentStateEvidenceScopeDecision:
+            contentStateOccurrenceAdmission.finalizeEvidenceScope(),
+          returnPath: 'adaptive_early_exit',
         });
-        const earlyMagmaSecurity = magmaCandidate
-          ? await closeGraphSecurityBoundary({
-              graphId: 'magma',
-              sourceAgentId: 'magma',
-              memories: earlyEpistemic.memories,
-              companyId: company,
-              subjectAgentId: agent,
-              recallAuthority,
-              epistemicReceipt: earlyEpistemic.receipt,
-              epistemicDecisionHash: earlyEpistemic.decision.decision_sha256,
-              graphDecision: magmaCandidate.decision,
-            })
-          : Object.freeze({ memories: earlyEpistemic.memories, decision: null });
-        const earlyReconstructedGraphSecurity = reconstructedGraphCandidate
-          ? await closeGraphSecurityBoundary({
-              graphId: 'reconstructed_graph',
-              sourceAgentId: 'reconstructed-graph',
-              memories: earlyMagmaSecurity.memories,
-              companyId: company,
-              subjectAgentId: agent,
-              recallAuthority,
-              epistemicReceipt: earlyEpistemic.receipt,
-              epistemicDecisionHash: earlyEpistemic.decision.decision_sha256,
-              graphDecision: reconstructedGraphCandidate.decision,
-            })
-          : Object.freeze({ memories: earlyMagmaSecurity.memories, decision: null });
-        const earlyDisclosureMemories = earlyReconstructedGraphSecurity.memories;
+        const earlyFinalClosure = await governCanaryRecallFinalClosure({
+          classificationMap: canaryClassificationMap,
+          returnPath: 'adaptive_early_exit',
+          selectedMemories: earlyEpistemic.memories,
+          cleanSelection: earlyEpistemic.cleanSelection,
+          epistemicDecision: earlyEpistemic.decision,
+          epistemicReceipt: earlyEpistemic.receipt,
+          contentStateEvidenceScope: earlyEpistemic.evidenceScope,
+          consumers: {
+            canary_magma_graph_admission: canaryMagmaComposition.decision,
+            magma_dormancy: MAGMA_DORMANT_RUNTIME_DECISION,
+            reconstructed_graph_native_candidate: reconstructedGraphCandidate?.decision,
+            graph_family_channel: graphFamilyCandidate?.decision,
+            native_retrieval_fusion: nativeRetrievalFusion?.decision,
+          },
+          companyId: company,
+          subjectAgentId: agent,
+          recallAuthority,
+        });
+        const earlyDisclosureMemories = earlyFinalClosure.memories;
         earlyRecallMeta.epistemic_retrieval = {
           version: earlyEpistemic.decision.version,
           decision_sha256: earlyEpistemic.decision.decision_sha256,
@@ -3067,13 +3673,11 @@ export async function executeNativeRecall(req, recallAuthority) {
         };
         earlyRecallMeta.total_results = earlyDisclosureMemories.length;
         earlyRecallMeta.native_retrieval_fusion = nativeRetrievalFusion.decision;
-        earlyRecallMeta.magma_retrieval = magmaGearMetadata({
-          calibrationState: magmaCalibrationState,
-          gear: magmaCandidate,
-          runtimeMs: magmaCandidateRuntimeMs,
-          fusion: nativeRetrievalFusion,
-          failure: magmaCandidateFailure,
-        });
+        earlyRecallMeta.canary_magma_composition =
+          canaryMagmaCompositionMetadata(canaryMagmaComposition);
+        earlyRecallMeta.canary_clean_selection =
+          canaryCleanSelectionMetadata(earlyEpistemic.cleanSelection);
+        earlyRecallMeta.magma_retrieval = magmaDormancyMetadata();
         earlyRecallMeta.graph_family_retrieval = graphFamilyMetadata({
           family: graphFamilyCandidate,
           runtimeMs: graphFamilyRuntimeMs,
@@ -3084,18 +3688,13 @@ export async function executeNativeRecall(req, recallAuthority) {
           canaryWithheldCount: reconstructedGraphCanaryWithheldCount,
           failure: reconstructedGraphCandidateFailure,
         });
-        if (earlyMagmaSecurity.decision) {
-          earlyRecallMeta.magma_security_closure = earlyMagmaSecurity.decision;
-        }
-        if (earlyReconstructedGraphSecurity.decision) {
-          earlyRecallMeta.reconstructed_graph_security_closure =
-            earlyReconstructedGraphSecurity.decision;
-        }
+        earlyRecallMeta.recall_security_closure =
+          canaryFinalClosureMetadata(earlyFinalClosure);
         earlyRecallMeta.response_limit_enforcement = {
           requested_limit: effectiveMaxRows,
-          candidate_count: memories.length,
+          candidate_count: earlyCandidateMemories.length,
           returned_count: earlyDisclosureMemories.length,
-          truncated: memories.length > earlyDisclosureMemories.length,
+          truncated: earlyCandidateMemories.length > earlyDisclosureMemories.length,
         };
         annotateRecallRankDiagnostics(earlyDisclosureMemories);
         earlyRecallMeta.retrieval_frequency = annotateRetrievalFrequencyMetadata(earlyDisclosureMemories);
@@ -3105,14 +3704,14 @@ export async function executeNativeRecall(req, recallAuthority) {
           agentId: agent,
           queryText: searchQuery,
         });
-        const earlyResponse = calibrateRecallRouteBody({
+        const earlyResponse = await calibrateAndFinalizeNativeRecallReturn({
+          returnPath: 'adaptive_early_exit',
           queryText: searchQuery,
           body: { memories: earlyDisclosureMemories, working_memory: '', recall_meta: earlyRecallMeta, cache_hit: false },
           runtimeBudget: effectiveRecallRuntimeBudget,
           responseLimit: effectiveMaxRows,
-        });
-        earlyResponse.recall_receipt = await finalizeNativeRecall({
-          memories: earlyResponse.memories,
+          securityClosure: earlyFinalClosure,
+          contentStateSelection: earlyStateSelection.decision,
           authority: recallAuthority,
           epistemicDecisionHash: epistemicReceiptDecisionHash(earlyEpistemic.decision),
         });
@@ -3173,7 +3772,7 @@ export async function executeNativeRecall(req, recallAuthority) {
     // ─── WIRE: trust-score — rank memories by trust ──────────────────────────
     markStage('trust_scoring');
     try {
-      const trusted = rankByTrust(memories);
+      const trusted = rankByTrust(memories, { memoryCount: corpusMemoryCount });
       if (trusted.length > 0) {
         const trustedWithDeepRecall = applyDeepRecallOverrideRanking(trusted);
         memories.length = 0;
@@ -3199,102 +3798,103 @@ export async function executeNativeRecall(req, recallAuthority) {
 
     // ─── WIRE: concept-graph — merge PPR hybrid scoring ──────────────────────
     markStage('concept_graph_ppr');
-    // HippoRAG: PPR returns INDICES (node IDs). Passage retrieval must hydrate content.
+    // HippoRAG ingredient: PPR lifts concept probability to the already
+    // admitted request-state passage set. It owns no candidate discovery.
+    let conceptPprStateSelectionDecision = null;
+    let conceptPprResultCount = 0;
     try {
       if (searchQuery && searchQuery.trim()) {
-        const pprResults = hops > 0
-          ? await conceptPprLookup(searchQuery, company, Math.min(candidateOpeningLimit, 10))
+        const conceptPprCanaryPartition = partitionGraphCanaryDisclosure(
+          memories,
+          canaryClassificationMap,
+        );
+        const conceptPprStateSelection =
+          contentStateOccurrenceAdmission.selectCandidateStateRepresentatives(
+            conceptPprCanaryPartition.admitted,
+          );
+        conceptPprStateSelectionDecision = conceptPprStateSelection.decision;
+        const conceptPprStateMemories = conceptPprStateSelection.memories
+          .slice(0, CONCEPT_PPR_MAX_REQUEST_STATES);
+        const pprResults = hops > 0 && conceptPprStateMemories.length > 0
+          ? await conceptPprLookup(
+              searchQuery,
+              company,
+              Math.min(candidateOpeningLimit, 10),
+              {
+                admittedStates: conceptPprStateMemories.map((memory) => ({
+                  memory_id: memory.id,
+                  live_content_hash: memory.provenance_proof?.live_content_hash,
+                })),
+              },
+            )
           : [];
-        const pprOnlyIds = []; // IDs discovered ONLY by PPR (not in vector/BM25 results)
-
+        conceptPprResultCount = pprResults.length;
+        const conceptPprMemoryById = new Map(memories.map((memory) => [String(memory.id), memory]));
         for (const pprHit of pprResults) {
-          if (pprHit.id && !seenIds.has(pprHit.id)) {
-            seenIds.add(pprHit.id);
-            // Track PPR-only discoveries for hydration
-            pprOnlyIds.push(pprHit.id);
-            memories.push({
-              id: pprHit.id,
-              score: pprHit.score,
-              ppr_score: pprHit.ppr,
-              cosine_score: pprHit.cosine,
-              source: 'concept_graph_ppr',
-              graph_links: []
-            });
-          } else if (pprHit.id && seenIds.has(pprHit.id)) {
-            // Enrich existing memory with PPR score
-            const existing = memories.find(m => m.id === pprHit.id);
-            if (existing) {
-              existing.ppr_score = pprHit.ppr;
-              existing.cosine_score = pprHit.cosine;
-            }
-          }
+          const existing = conceptPprMemoryById.get(String(pprHit.id));
+          if (!existing) throw new Error('concept_ppr_result_outside_admitted_state_set');
+          existing.ppr_score = Math.max(Number(existing.ppr_score || 0), Number(pprHit.ppr || 0));
+          existing.cosine_score = Math.max(Number(existing.cosine_score || 0), Number(pprHit.cosine || 0));
         }
-
-        // ─── PASSAGE RETRIEVAL: Hydrate PPR-only discoveries ──────────────────
-        // HippoRAG: "PPR on KG → Passage retrieval" - must fetch actual content
-        if (pprOnlyIds.length > 0) {
-          try {
-            const hydrationResult = await query(
-              `SELECT id, key, value, scope, memory_type, clearance_level, created_at,
-                      credit_score, memory_tier, data_class, source,
-                      last_verified_at, verified_by, verification_basis, freshness_state,
-                      COALESCE(retrieval_weight, 1.0) AS retrieval_weight
-               FROM aimos_memories
-               WHERE company_id = $1 AND id = ANY($2::uuid[])`,
-              [company, pprOnlyIds]
-            );
-
-            // Merge hydrated content into PPR-only memories
-            for (const row of hydrationResult.rows) {
-              const mem = memories.find(m => m.id === row.id);
-              if (mem && !mem.value) { // Only hydrate if not already hydrated
-                mem.key = row.key;
-                mem.value = row.value;
-                mem.scope = row.scope;
-                mem.memory_type = row.memory_type;
-                mem.clearance_level = row.clearance_level;
-                mem.created_at = row.created_at;
-                mem.credit_score = parseFloat(row.credit_score || 1.0);
-                mem.memory_tier = row.memory_tier || 'short-term';
-                mem.data_class = row.data_class || 'public';
-                mem.source = row.source || null;
-                mem.last_verified_at = row.last_verified_at || null;
-                mem.verified_by = row.verified_by || null;
-                mem.verification_basis = row.verification_basis || null;
-                mem.freshness_state = row.freshness_state || null;
-                mem.retrieval_weight = Math.max(0.1, Math.min(3, Number(row.retrieval_weight || 1)));
-                mem.retrieval_source = mem.retrieval_source || 'concept_graph_ppr';
-              }
-            }
-          } catch (_hydrationErr) {
-            console.warn('[recall] PPR passage hydration error (non-fatal):', _hydrationErr.message);
-          }
-        }
+        recallBreadthPolicy.concept_ppr_state_selection_sha256 =
+          conceptPprStateSelection.decision.decision_sha256;
       }
     } catch (_pprErr) {
       console.warn('[recall] concept-graph PPR error (non-fatal):', _pprErr.message);
     }
-    debugRecallPoint('concept_graph_ppr_done', { memories: memories.length, seen_ids: seenIds.size });
+    debugRecallPoint('concept_graph_ppr_done', {
+      memories: memories.length,
+      seen_ids: seenIds.size,
+      result_count: conceptPprResultCount,
+      state_selection_sha256: conceptPprStateSelectionDecision?.decision_sha256 || null,
+    });
 
     // PPR may propose additional ids. Re-admit the complete set before the
     // first calibration stage; PPR hydration cannot bypass provenance or ACL.
-    const postGraphAdmission = await admitNativeRecallCandidates(memories, recallAuthority);
+    const postGraphAdmission = await contentStateOccurrenceAdmission.admit(memories);
     memories.length = 0;
     memories.push(...postGraphAdmission.memories);
 
     // Recompose the central gearbox after concept-PPR has contributed its own
-    // admitted channel. The graph family is not rerun: the same bounded MAGMA
-    // and G2 evidence is fused with the enlarged admitted set, keeping one
-    // execution per subgear and exactly one outer graph-family channel while
-    // preserving candidate monotonicity.
+    // admitted channel. The graph family is not rerun: the same bounded G2
+    // evidence is fused with the enlarged admitted set, keeping one execution
+    // and exactly one outer graph-family channel while preserving candidate
+    // monotonicity. MAGMA remains dormant and contributes no rank.
     nativeRetrievalFusion = fuseNativeRetrievalGears({
       admittedMemories: memories,
-      magmaGear: graphFamilyCandidate,
+      graphFamilyGear: graphFamilyCandidate,
       temporalBias: temporalFusionIntent,
-      rrfK: magmaCalibrationState.calibration.rrf_k,
+      rrfK: graphFamilyRrfK,
+      contentStateProjection: contentStateOccurrenceAdmission.internalProjection(),
+      contentStateGears: NATIVE_RETRIEVAL_FUSION_CONTRACT.content_state_first_gear_set,
+      fusionPhase: 'final_post_concept_ppr',
+      requireGraphFamilyContract: true,
     });
     memories.length = 0;
     memories.push(...nativeRetrievalFusion.memories.map((memory) => ({ ...memory })));
+    const finalEvaluationCanaryPartition = partitionGraphCanaryDisclosure(
+      memories,
+      canaryClassificationMap,
+    );
+    nativeGearboxEvaluationEvidence = Object.freeze({
+      ...preConceptPprGearboxEvidence,
+      evidence_stage: 'final_post_concept_ppr',
+      admitted_memories: Object.freeze(
+        finalEvaluationCanaryPartition.admitted.map(snapshotNativeGearboxMemory),
+      ),
+      canary_withheld_memory_ids: Object.freeze(
+        finalEvaluationCanaryPartition.withheld
+          .map((memory) => String(memory?.id || memory?.memory_id || '').toLowerCase())
+          .filter(Boolean)
+          .sort(),
+      ),
+      pre_concept_ppr_fusion: preConceptPprGearboxEvidence?.baseline_fusion || null,
+      baseline_fusion: nativeRetrievalFusion,
+      final_fusion: nativeRetrievalFusion,
+      post_ppr_content_state_occurrence_admission:
+        contentStateOccurrenceAdmission.metadata(),
+      final_production_fusion: true,
+    });
 
     // ─── WIRE: recall-calibrator — one signed Sortify Belief snapshot ────────
     markStage('recall_calibration');
@@ -3488,6 +4088,17 @@ export async function executeNativeRecall(req, recallAuthority) {
       medium: confidenceDistribution.medium,
       low: confidenceDistribution.low,
     });
+    const normalFinalStateSelection =
+      contentStateOccurrenceAdmission.selectCandidateStateRepresentatives(memories);
+    memories.length = 0;
+    memories.push(...normalFinalStateSelection.memories);
+    recallBreadthPolicy.final_content_state_selection_sha256 =
+      normalFinalStateSelection.decision.decision_sha256;
+    // This is the normal return path's final ordered population: every native
+    // gear (including Concept/PPR discoveries), admission pass, calibration,
+    // and deterministic reranker has completed. The shared selector now owns
+    // the mandatory clean-selection boundary for every return-path class.
+    markStage('canary_clean_top_k_boundary');
     markStage('epistemic_trust_selection');
     const epistemicRecall = await selectAndLedgerEpistemicRecall({
       memories,
@@ -3502,46 +4113,32 @@ export async function executeNativeRecall(req, recallAuthority) {
       signedRequestTimeMs: twinPrimeSignedRequestTimeMs,
       parentEventId: recallAuthority.requestAuthority?.requestAdmissionEventId || null,
       requestAuthority: recallAuthority.requestAuthority || null,
+      queryFn: verifiedAdmissionSession.read,
+      canaryClassificationMap,
+      contentStateEvidenceScopeDecision:
+        contentStateOccurrenceAdmission.finalizeEvidenceScope(),
+      returnPath: 'normal_recall',
     });
-    const conceptGraphSecurity = hops > 0
-      ? await closeGraphSecurityBoundary({
-          graphId: 'concept_gaama',
-          sourceAgentId: 'concept-graph',
-          memories: epistemicRecall.memories,
-          companyId: company,
-          subjectAgentId: agent,
-          recallAuthority,
-          epistemicReceipt: epistemicRecall.receipt,
-          epistemicDecisionHash: epistemicRecall.decision.decision_sha256,
-        })
-      : Object.freeze({ memories: epistemicRecall.memories, decision: null });
-    const magmaGraphSecurity = magmaCandidate
-      ? await closeGraphSecurityBoundary({
-          graphId: 'magma',
-          sourceAgentId: 'magma',
-          memories: conceptGraphSecurity.memories,
-          companyId: company,
-          subjectAgentId: agent,
-          recallAuthority,
-          epistemicReceipt: epistemicRecall.receipt,
-          epistemicDecisionHash: epistemicRecall.decision.decision_sha256,
-          graphDecision: magmaCandidate.decision,
-        })
-      : Object.freeze({ memories: conceptGraphSecurity.memories, decision: null });
-    const reconstructedGraphSecurity = reconstructedGraphCandidate
-      ? await closeGraphSecurityBoundary({
-          graphId: 'reconstructed_graph',
-          sourceAgentId: 'reconstructed-graph',
-          memories: magmaGraphSecurity.memories,
-          companyId: company,
-          subjectAgentId: agent,
-          recallAuthority,
-          epistemicReceipt: epistemicRecall.receipt,
-          epistemicDecisionHash: epistemicRecall.decision.decision_sha256,
-          graphDecision: reconstructedGraphCandidate.decision,
-        })
-      : Object.freeze({ memories: magmaGraphSecurity.memories, decision: null });
-    const disclosureMemories = reconstructedGraphSecurity.memories;
+    const finalSecurityClosure = await governCanaryRecallFinalClosure({
+      classificationMap: canaryClassificationMap,
+      returnPath: 'normal_recall',
+      selectedMemories: epistemicRecall.memories,
+      cleanSelection: epistemicRecall.cleanSelection,
+      epistemicDecision: epistemicRecall.decision,
+      epistemicReceipt: epistemicRecall.receipt,
+      contentStateEvidenceScope: epistemicRecall.evidenceScope,
+      consumers: {
+        canary_magma_graph_admission: canaryMagmaComposition.decision,
+        magma_dormancy: MAGMA_DORMANT_RUNTIME_DECISION,
+        reconstructed_graph_native_candidate: reconstructedGraphCandidate?.decision,
+        graph_family_channel: graphFamilyCandidate?.decision,
+        native_retrieval_fusion: nativeRetrievalFusion?.decision,
+      },
+      companyId: company,
+      subjectAgentId: agent,
+      recallAuthority,
+    });
+    const disclosureMemories = finalSecurityClosure.memories;
     // The working set must contain only the post-epistemic disclosure set.
     workingMemory = disclosureMemories
       .map((memory) => `[${memory.memory_type}] ${memory.value}`.slice(0, 300))
@@ -3637,26 +4234,18 @@ export async function executeNativeRecall(req, recallAuthority) {
           ...(epistemicRecall.decision.twin_prime ? { twin_prime: epistemicRecall.decision.twin_prime } : {}),
           decision_receipt: epistemicRecall.receipt,
         },
-        ...(conceptGraphSecurity.decision ? { graph_security_closure: conceptGraphSecurity.decision } : {}),
-        ...(magmaGraphSecurity.decision ? { magma_security_closure: magmaGraphSecurity.decision } : {}),
-        ...(reconstructedGraphSecurity.decision
-          ? { reconstructed_graph_security_closure: reconstructedGraphSecurity.decision }
-          : {}),
+        recall_security_closure:
+          canaryFinalClosureMetadata(finalSecurityClosure),
         native_retrieval_fusion: nativeRetrievalFusion.decision,
+        canary_magma_composition:
+          canaryMagmaCompositionMetadata(canaryMagmaComposition),
+        canary_clean_selection:
+          canaryCleanSelectionMetadata(epistemicRecall.cleanSelection),
         graph_family_retrieval: graphFamilyMetadata({
           family: graphFamilyCandidate,
           runtimeMs: graphFamilyRuntimeMs,
         }),
-        magma_retrieval: {
-          ...magmaGearMetadata({
-            calibrationState: magmaCalibrationState,
-            gear: magmaCandidate,
-            runtimeMs: magmaCandidateRuntimeMs,
-            fusion: nativeRetrievalFusion,
-            failure: magmaCandidateFailure,
-          }),
-          baseline_candidate_memory_ids: magmaBaselineCandidateIds,
-        },
+        magma_retrieval: magmaDormancyMetadata(),
         reconstructed_graph_retrieval: reconstructedGraphGearMetadata({
           gear: reconstructedGraphCandidate,
           eligibleCandidateCount: reconstructedGraphEligibleCandidateCount,
@@ -3721,6 +4310,14 @@ export async function executeNativeRecall(req, recallAuthority) {
       memories: responseMemories,
       working_memory: workingMemory,
       recall_meta: {
+        content_state_occurrence_admission: contentStateOccurrenceAdmission.publicMetadata(),
+        concept_ppr_state_selection: conceptPprStateSelectionDecision
+          ? {
+              ...conceptPprStateSelectionDecision,
+              result_count: conceptPprResultCount,
+              maximum_request_states: CONCEPT_PPR_MAX_REQUEST_STATES,
+            }
+          : null,
         qmd_activated: qmdActivated,
         top_rerank: topRerank,
         avg_rerank: Math.round(avgRerank * 100) / 100,
@@ -3748,26 +4345,18 @@ export async function executeNativeRecall(req, recallAuthority) {
           ...(epistemicRecall.decision.twin_prime ? { twin_prime: epistemicRecall.decision.twin_prime } : {}),
           decision_receipt: epistemicRecall.receipt,
         },
-        ...(conceptGraphSecurity.decision ? { graph_security_closure: conceptGraphSecurity.decision } : {}),
-        ...(magmaGraphSecurity.decision ? { magma_security_closure: magmaGraphSecurity.decision } : {}),
-        ...(reconstructedGraphSecurity.decision
-          ? { reconstructed_graph_security_closure: reconstructedGraphSecurity.decision }
-          : {}),
+        recall_security_closure:
+          canaryFinalClosureMetadata(finalSecurityClosure),
         native_retrieval_fusion: nativeRetrievalFusion.decision,
+        canary_magma_composition:
+          canaryMagmaCompositionMetadata(canaryMagmaComposition),
+        canary_clean_selection:
+          canaryCleanSelectionMetadata(epistemicRecall.cleanSelection),
         graph_family_retrieval: graphFamilyMetadata({
           family: graphFamilyCandidate,
           runtimeMs: graphFamilyRuntimeMs,
         }),
-        magma_retrieval: {
-          ...magmaGearMetadata({
-            calibrationState: magmaCalibrationState,
-            gear: magmaCandidate,
-            runtimeMs: magmaCandidateRuntimeMs,
-            fusion: nativeRetrievalFusion,
-            failure: magmaCandidateFailure,
-          }),
-          baseline_candidate_memory_ids: magmaBaselineCandidateIds,
-        },
+        magma_retrieval: magmaDormancyMetadata(),
         reconstructed_graph_retrieval: reconstructedGraphGearMetadata({
           gear: reconstructedGraphCandidate,
           eligibleCandidateCount: reconstructedGraphEligibleCandidateCount,
@@ -3800,34 +4389,38 @@ export async function executeNativeRecall(req, recallAuthority) {
     // Per PerCache (2024): only cache medium-or-higher confidence results.
     // Admission threshold (0.50) matches Aimos's real confidence distribution.
     // semanticCache.set() enforces its own threshold as a second check.
-    const calibratedRecallResponse = calibrateRecallRouteBody({
+    if (SPEED_CONFIG.cache.enabled && allowSemanticCache) {
+      semanticCache.set(queryEmbedding, searchQuery, { memories: disclosureMemories }, {
+        companyId: company,
+        agentId: agent,
+        clearanceLevel: clearance,
+        calibrationMutationHash: calibrationSnapshot.calibrationMutationHash,
+        contentStateDecisionHash: normalFinalStateSelection.decision.decision_sha256,
+        nativeFusionDecisionHash: nativeRetrievalFusion.decision.decision_sha256,
+        epistemicDecisionHash: epistemicRecall.decision.decision_sha256,
+        securityClosureDecisionHash: finalSecurityClosure.decision.decision_sha256,
+      });
+    }
+
+    const calibratedRecallResponse = await calibrateAndFinalizeNativeRecallReturn({
+      returnPath: 'normal_recall',
       queryText: searchQuery,
       body: recallResponse,
       runtimeBudget: effectiveRecallRuntimeBudget,
       responseLimit: effectiveMaxRows,
+      securityClosure: finalSecurityClosure,
+      contentStateSelection: normalFinalStateSelection.decision,
+      authority: recallAuthority,
+      epistemicDecisionHash: epistemicReceiptDecisionHash(epistemicRecall.decision),
     });
     debugRecallPoint('output_calibration_done', {
       memories: calibratedRecallResponse?.memories?.length || 0,
       count: calibratedRecallResponse?.count || 0,
     });
 
-    if (SPEED_CONFIG.cache.enabled && allowSemanticCache) {
-      semanticCache.set(queryEmbedding, searchQuery, calibratedRecallResponse, {
-        companyId: company,
-        agentId: agent,
-        clearanceLevel: clearance,
-        calibrationMutationHash: calibrationSnapshot.calibrationMutationHash,
-      });
-    }
-
     debugRecallPoint('request_done', {
       memories: calibratedRecallResponse?.memories?.length || 0,
       count: calibratedRecallResponse?.count || 0,
-    });
-    calibratedRecallResponse.recall_receipt = await finalizeNativeRecall({
-      memories: calibratedRecallResponse.memories,
-      authority: recallAuthority,
-      epistemicDecisionHash: epistemicReceiptDecisionHash(epistemicRecall.decision),
     });
     return {
       status: 200,
@@ -3839,6 +4432,10 @@ export async function executeNativeRecall(req, recallAuthority) {
       throw error;
     }
     return { status: 500, body: { memories: [], error: isDemoMode ? 'Recall failed' : error.message } };
+  } finally {
+    if (verifiedAdmissionSession) {
+      await verifiedAdmissionSession.close({ commit: false });
+    }
   }
 }
 const DEMO_REDACT_PATTERNS = [

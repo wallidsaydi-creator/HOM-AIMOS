@@ -34,6 +34,9 @@ const RESERVED = [9000, 9001];
 const SCANNED_EXTENSION = /\.(?:js|mjs|cjs|py|sh|sql|md|json|ya?ml)$/i;
 
 function isExactReservedPortGuard(rel, line) {
+  if (/!\[\s*9000,\s*9001(?:,\s*9100)?\s*\]\.includes\([A-Za-z_$][A-Za-z0-9_$.]*\)/.test(line.trim())) {
+    return true;
+  }
   if (rel === 'services/core/runtime-config.js') {
     return /^export const RESERVED_LEGACY_PORTS = Object\.freeze\(\[9000, 9001\]\);$/.test(line.trim());
   }

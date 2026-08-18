@@ -51,6 +51,10 @@ export function buildSaveEnvelope(persistResult, opts = {}) {
     correction_applied: Boolean(result.correction_applied),
     rpe: result.rpe ?? null,
     encoding_style: result.encoding_style ?? null,
+    occurrence_reasserted: result.occurrence_reasserted === true,
+    occurrence_event_id: result.save_feedback?.occurrence_event_id ?? null,
+    occurrence_commitment: result.save_feedback?.occurrence_commitment ?? null,
+    retrieval_vote_added: result.occurrence_reasserted === true ? false : null,
   };
   if (!ok) {
     env.reason = result.reason ?? null;

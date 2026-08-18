@@ -67,7 +67,14 @@ export function createValenceLedger(deps = {}) {
    * @param {string} [args.contextHash] — optional hash of recall context
    * @returns {Promise<{ ok: true, id: number } | { ok: false, reason: string }>}
    */
-  async function appendValence({ memoryId, rewardSign, contextHash = null, client = null } = {}) {
+  async function appendValence({
+    memoryId,
+    rewardSign,
+    contextHash = null,
+    attribution = null,
+    outcomeReceipt = null,
+    client = null,
+  } = {}) {
     if (typeof memoryId !== 'string' || memoryId.length === 0) {
       return { ok: false, reason: 'malformed_input' };
     }
@@ -76,6 +83,12 @@ export function createValenceLedger(deps = {}) {
     }
     if (!client || typeof client.query !== 'function') {
       return { ok: false, reason: 'transaction_client_required' };
+    }
+    const evidenceVersion = attribution == null ? 1 : 2;
+    if (evidenceVersion === 2 && (!outcomeReceipt?.event_id
+        || !/^[0-9a-f]{64}$/.test(String(outcomeReceipt.mutation_hash || ''))
+        || attribution.memory_id !== memoryId)) {
+      return { ok: false, reason: 'mutation_outcome_attribution_invalid' };
     }
 
     try {
@@ -93,6 +106,19 @@ export function createValenceLedger(deps = {}) {
         signer_valid_from: signerValidFrom,
         cert_fingerprint: certFingerprint,
         identity_tier: identityTier,
+        ...(evidenceVersion === 2 ? {
+          evidence_schema: 'hom.aimos.mutation-outcome-evidence/v2',
+          target_scope: attribution.target_scope,
+          target_live_content_hash: attribution.live_content_hash,
+          target_occurrence_ref: attribution.occurrence_ref,
+          recall_event_id: attribution.recall_event_id,
+          recall_event_mutation_hash: attribution.recall_event_mutation_hash,
+          recall_merkle_root: attribution.recall_merkle_root,
+          security_closure_sha256: attribution.security_closure_sha256,
+          outcome_id: attribution.outcome_id,
+          outcome_event_id: outcomeReceipt.event_id,
+          outcome_event_mutation_hash: outcomeReceipt.mutation_hash,
+        } : {}),
       };
       const signed = await signer(body);
       if (
@@ -114,14 +140,30 @@ export function createValenceLedger(deps = {}) {
         `INSERT INTO memory_valence_ledger
            (memory_id, company_id, reward_sign, context_hash, body_json,
             content_hash, prev_hash, row_hash, ts_signed, nonce, sig,
-            signer_agent_id, signer_valid_from, cert_fingerprint, identity_tier)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+            signer_agent_id, signer_valid_from, cert_fingerprint, identity_tier,
+            evidence_schema_version,target_scope,target_live_content_hash,
+            target_occurrence_ref,recall_event_id,recall_event_mutation_hash,
+            recall_merkle_root,security_closure_hash,outcome_id,outcome_event_id,
+            outcome_event_mutation_hash)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,
+                 $16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
          RETURNING id`,
         [
           memoryId, AIMOS_COMPANY_ID, rewardSign, contextHash || null,
           JSON.stringify(signed.body), hashes.contentHash, prevHash, hashes.rowHash,
           signed.signedTs, signed.nonce, signed.sigBytes,
           signed.agentId, signed.validFromIso, certFingerprint, signed.identityTier,
+          evidenceVersion,
+          evidenceVersion === 2 ? attribution.target_scope : null,
+          evidenceVersion === 2 ? Buffer.from(attribution.live_content_hash, 'hex') : null,
+          evidenceVersion === 2 ? Buffer.from(attribution.occurrence_ref, 'hex') : null,
+          evidenceVersion === 2 ? attribution.recall_event_id : null,
+          evidenceVersion === 2 ? Buffer.from(attribution.recall_event_mutation_hash, 'hex') : null,
+          evidenceVersion === 2 ? Buffer.from(attribution.recall_merkle_root, 'hex') : null,
+          evidenceVersion === 2 ? Buffer.from(attribution.security_closure_sha256, 'hex') : null,
+          evidenceVersion === 2 ? attribution.outcome_id : null,
+          evidenceVersion === 2 ? outcomeReceipt.event_id : null,
+          evidenceVersion === 2 ? Buffer.from(outcomeReceipt.mutation_hash, 'hex') : null,
         ]
       );
       const id = r?.rows?.[0]?.id;
@@ -153,6 +195,7 @@ export function createValenceLedger(deps = {}) {
       `SELECT reward_sign, COUNT(*)::int AS evidence_count
          FROM memory_valence_ledger
         WHERE memory_id = $1
+          AND (evidence_schema_version=1 OR target_scope='principal_state')
         GROUP BY reward_sign
         ORDER BY reward_sign`,
       [memoryId]
@@ -174,14 +217,23 @@ export function createValenceLedger(deps = {}) {
     return r?.rows?.[0]?.n || 0;
   }
 
-  async function verifyValenceChain(memoryId, { masterPubkey = null } = {}) {
-    const r = await queryFn(
+  async function verifyValenceChain(memoryId, { masterPubkey = null, client = null } = {}) {
+    const run = client && typeof client.query === 'function'
+      ? client.query.bind(client)
+      : queryFn;
+    const r = await run(
       `SELECT ledger.id, ledger.memory_id, ledger.company_id, ledger.reward_sign,
               ledger.context_hash, ledger.body_json, ledger.content_hash,
               ledger.prev_hash, ledger.row_hash, ledger.ts_signed, ledger.nonce,
               ledger.sig, ledger.proof_required, ledger.signer_agent_id,
               ledger.signer_valid_from, ledger.cert_fingerprint,
               ledger.identity_tier, identity.pubkey, identity.cert,
+              ledger.evidence_schema_version,ledger.target_scope,
+              ledger.target_live_content_hash,ledger.target_occurrence_ref,
+              ledger.recall_event_id,ledger.recall_event_mutation_hash,
+              ledger.recall_merkle_root,ledger.security_closure_hash,
+              ledger.outcome_id,ledger.outcome_event_id,
+              ledger.outcome_event_mutation_hash,
               revocation.ts_signed AS revocation_ts_signed
          FROM memory_valence_ledger ledger
          LEFT JOIN agent_identity identity
@@ -234,6 +286,22 @@ export function createValenceLedger(deps = {}) {
         || certFingerprint !== row.cert_fingerprint
       ) {
         return { ok: false, failedId: row.id, reason: 'identity_or_body_mismatch' };
+      }
+      if (Number(row.evidence_schema_version || 1) === 2) {
+        const exactAttribution = body.evidence_schema === 'hom.aimos.mutation-outcome-evidence/v2'
+          && body.target_scope === row.target_scope
+          && body.target_live_content_hash === Buffer.from(row.target_live_content_hash || []).toString('hex')
+          && body.target_occurrence_ref === Buffer.from(row.target_occurrence_ref || []).toString('hex')
+          && body.recall_event_id === String(row.recall_event_id)
+          && body.recall_event_mutation_hash === Buffer.from(row.recall_event_mutation_hash || []).toString('hex')
+          && body.recall_merkle_root === Buffer.from(row.recall_merkle_root || []).toString('hex')
+          && body.security_closure_sha256 === Buffer.from(row.security_closure_hash || []).toString('hex')
+          && body.outcome_id === String(row.outcome_id)
+          && body.outcome_event_id === String(row.outcome_event_id)
+          && body.outcome_event_mutation_hash === Buffer.from(row.outcome_event_mutation_hash || []).toString('hex');
+        if (!exactAttribution) {
+          return { ok: false, failedId: row.id, reason: 'mutation_outcome_attribution_mismatch' };
+        }
       }
       const certAuthority = certBody.issuer === row.signer_agent_id ? row.pubkey : masterPubkey;
       if (!certAuthority) return { ok: false, failedId: row.id, reason: 'master_identity_missing' };

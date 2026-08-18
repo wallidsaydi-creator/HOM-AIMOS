@@ -58,6 +58,8 @@ export const MAGMA_NATIVE_READER_CONTRACT = Object.freeze({
   maximum_entity_names_per_frontier: MAX_ENTITY_NAMES_PER_FRONTIER,
   maximum_entity_names_scanned_per_frontier: MAX_ENTITY_NAMES_SCANNED_PER_FRONTIER,
   maximum_entity_neighbors_per_name: MAX_ENTITY_NEIGHBORS_PER_NAME,
+  entity_neighbor_domain: 'current_bounded_graph_workspace',
+  entity_candidate_materialization: 'once_per_topology_read',
   maximum_temporal_edges_per_frontier: MAX_TEMPORAL_EDGES_PER_FRONTIER,
   maximum_rows_per_frontier: MAX_SEMANTIC_EDGES_PER_FRONTIER
     + (MAX_ENTITY_NAMES_PER_FRONTIER * MAX_ENTITY_NEIGHBORS_PER_NAME)
@@ -68,9 +70,13 @@ export const MAGMA_NATIVE_READER_CONTRACT = Object.freeze({
     'entity_memory_edges(company_id,memory_id)',
     'entity_memory_edges(company_id,entity,memory_id)',
     'aimos_memories(company_id,created_at,id)',
+    'aimos_memories(company_id,source,memory_type,created_at,id)',
   ]),
   semantic_edge_requires_signed_projection: true,
   entity_edge_evidence: 'endpoint_provenance_plus_recall_decision_receipt_required',
+  retained_quarantine_graph_admission: false,
+  retained_quarantine_policy:
+    'retained_in_canonical_memory_and_central_candidates_but_ineligible_as_magma_anchor_or_endpoint',
 });
 
 function fail(code) {
@@ -185,6 +191,7 @@ export function buildMagmaNativeEvidenceQuery({ recallAuthority, candidateIds } 
       OR ((m.scope = 'quarantine' OR m.memory_type = 'quarantine') AND (m.agent_id = $4 OR $5::boolean)))`,
     '(m.clearance_level > 2 OR m.agent_id = $4 OR m.agent_id IS NULL)',
     'm.id = ANY($6::uuid[])',
+    "NOT (m.scope = 'quarantine' OR m.memory_type = 'quarantine' OR COALESCE(m.retrieval_weight, 1.0) = 0.1)",
   ];
 
   clauses.push(...commandScopeClauses(scope, params));
@@ -215,10 +222,12 @@ export function buildMagmaNativeTopologyQuery({
   recallAuthority,
   frontierIds,
   queryEmbedding,
+  entityCandidateIds = frontierIds,
 } = {}) {
   const scope = normalizeAuthority(recallAuthority);
   const frontier = normalizeCandidateIds(frontierIds);
   const embedding = normalizeQueryEmbedding(queryEmbedding);
+  const entityCandidates = normalizeCandidateIds(entityCandidateIds);
   const params = [
     scope.companyId,
     scope.clearanceCeiling,
@@ -236,30 +245,50 @@ export function buildMagmaNativeTopologyQuery({
       OR (m.scope = ANY(ARRAY['agent','private',$4]::text[]) AND m.agent_id = $4)
       OR ((m.scope = 'quarantine' OR m.memory_type = 'quarantine') AND (m.agent_id = $4 OR $5::boolean)))`,
     '(m.clearance_level > 2 OR m.agent_id = $4 OR m.agent_id IS NULL)',
+    "NOT (m.scope = 'quarantine' OR m.memory_type = 'quarantine' OR COALESCE(m.retrieval_weight, 1.0) = 0.1)",
   ];
   clauses.push(...commandScopeClauses(scope, params));
+  params.push([...entityCandidates]);
+  const entityCandidateParameter = `$${params.length}`;
 
   const text = `WITH eligible AS NOT MATERIALIZED (
-              SELECT m.id, m.created_at, m.embedding
+              SELECT m.id, m.created_at, m.embedding, m.content_hash
                 FROM aimos_memories m
                WHERE ${clauses.join('\n                 AND ')}
             ),
             frontier AS MATERIALIZED (
-              SELECT e.id, e.created_at, e.embedding
+              SELECT e.id, e.created_at, e.embedding, e.content_hash
                 FROM eligible e
                WHERE e.id = ANY($6::uuid[])
+            ),
+            entity_candidate_scope AS MATERIALIZED (
+              SELECT candidate.id AS memory_id,
+                     candidate.embedding,
+                     candidate.content_hash,
+                     membership.entity
+                FROM eligible candidate
+                JOIN entity_memory_edges membership
+                  ON membership.company_id = $1
+                 AND membership.memory_id = candidate.id
+               WHERE candidate.id = ANY(${entityCandidateParameter}::uuid[])
             ),
             semantic_edges AS (
               SELECT f.id AS source_id,
                      neighbor.target_id,
                      neighbor.edge_weight,
+                     neighbor.query_similarity,
+                     neighbor.target_content_hash,
                      neighbor.authority_event_id
                 FROM frontier f
                 CROSS JOIN LATERAL (
-                  SELECT bounded.target_id, bounded.edge_weight, bounded.authority_event_id
+                  SELECT bounded.target_id, bounded.edge_weight,
+                         bounded.query_similarity, bounded.target_content_hash,
+                         bounded.authority_event_id
                     FROM (
                       (SELECT cr.target_memory_id AS target_id,
                               cr.similarity::float8 AS edge_weight,
+                              1 - (target.embedding <=> $7::vector) AS query_similarity,
+                              target.content_hash AS target_content_hash,
                               cr.authority_event_id::text AS authority_event_id
                          FROM memory_cross_refs cr
                          JOIN eligible target ON target.id = cr.target_memory_id
@@ -271,6 +300,8 @@ export function buildMagmaNativeTopologyQuery({
                       UNION ALL
                       (SELECT cr.source_memory_id AS target_id,
                               cr.similarity::float8 AS edge_weight,
+                              1 - (target.embedding <=> $7::vector) AS query_similarity,
+                              target.content_hash AS target_content_hash,
                               cr.authority_event_id::text AS authority_event_id
                          FROM memory_cross_refs cr
                          JOIN eligible target ON target.id = cr.source_memory_id
@@ -288,7 +319,9 @@ export function buildMagmaNativeTopologyQuery({
               SELECT f.id AS source_id,
                      neighbor.target_id,
                      entity_anchor.entity AS qualifier,
-                     neighbor.edge_weight
+                     neighbor.edge_weight,
+                     neighbor.query_similarity,
+                     neighbor.target_content_hash
                 FROM frontier f
                 CROSS JOIN LATERAL (
                   SELECT bounded_anchor.entity,
@@ -308,14 +341,14 @@ export function buildMagmaNativeTopologyQuery({
                    LIMIT ${MAX_ENTITY_NAMES_PER_FRONTIER}
                 ) entity_anchor
                 CROSS JOIN LATERAL (
-                  SELECT pe.memory_id AS target_id,
-                         1 - (target.embedding <=> $7::vector) AS edge_weight
-                    FROM entity_memory_edges pe
-                    JOIN eligible target ON target.id = pe.memory_id
-                   WHERE pe.company_id = $1
-                     AND pe.entity = entity_anchor.entity
-                     AND pe.memory_id <> f.id
-                   ORDER BY target.embedding <=> $7::vector, pe.memory_id
+                  SELECT candidate.memory_id AS target_id,
+                         1 - (candidate.embedding <=> $7::vector) AS edge_weight,
+                         1 - (candidate.embedding <=> $7::vector) AS query_similarity,
+                         candidate.content_hash AS target_content_hash
+                    FROM entity_candidate_scope candidate
+                   WHERE candidate.entity = entity_anchor.entity
+                     AND candidate.memory_id <> f.id
+                   ORDER BY candidate.embedding <=> $7::vector, candidate.memory_id
                    LIMIT ${MAX_ENTITY_NEIGHBORS_PER_NAME}
                 ) neighbor
             ),
@@ -323,16 +356,22 @@ export function buildMagmaNativeTopologyQuery({
               SELECT f.id AS source_id,
                      neighbor.id AS target_id,
                      1::float8 AS edge_weight,
+                     neighbor.query_similarity,
+                     neighbor.target_content_hash,
                      neighbor.direction AS qualifier
                 FROM frontier f
                 CROSS JOIN LATERAL (
-                  (SELECT prior.id, 'prior'::text AS direction
+                  (SELECT prior.id, 'prior'::text AS direction,
+                          1 - (prior.embedding <=> $7::vector) AS query_similarity,
+                          prior.content_hash AS target_content_hash
                      FROM eligible prior
                     WHERE prior.created_at < f.created_at
                     ORDER BY prior.created_at DESC, prior.id
                     LIMIT 1)
                   UNION ALL
-                  (SELECT following.id, 'following'::text AS direction
+                  (SELECT following.id, 'following'::text AS direction,
+                          1 - (following.embedding <=> $7::vector) AS query_similarity,
+                          following.content_hash AS target_content_hash
                      FROM eligible following
                     WHERE following.created_at > f.created_at
                     ORDER BY following.created_at, following.id
@@ -340,17 +379,21 @@ export function buildMagmaNativeTopologyQuery({
                 ) neighbor
             )
             SELECT 'semantic'::text AS relation, source_id::text, target_id::text,
-                   edge_weight, NULL::text AS qualifier, authority_event_id,
+                   edge_weight, query_similarity,
+                   encode(target_content_hash,'hex') AS target_content_hash,
+                   NULL::text AS qualifier, authority_event_id,
                    'signed_memory_cross_ref'::text AS evidence_kind
               FROM semantic_edges
             UNION ALL
             SELECT 'entity', source_id::text, target_id::text,
-                   edge_weight, qualifier, NULL::text,
+                   edge_weight, query_similarity, encode(target_content_hash,'hex'),
+                   qualifier, NULL::text,
                    'derived_entity_membership'::text
               FROM entity_edges
             UNION ALL
             SELECT 'temporal', source_id::text, target_id::text,
-                   edge_weight, qualifier, NULL::text,
+                   1::float8, query_similarity, encode(target_content_hash,'hex'),
+                   qualifier, NULL::text,
                    'signed_endpoint_origin_time'::text
               FROM temporal_edges
             ORDER BY relation, source_id, edge_weight DESC, target_id, qualifier`;
@@ -359,6 +402,7 @@ export function buildMagmaNativeTopologyQuery({
     preparedName: preparedQueryName('magma_native_topology_v2', text),
     params: Object.freeze(params),
     frontierIds: frontier,
+    entityCandidateIds: entityCandidates,
     scope,
   });
 }
@@ -382,7 +426,7 @@ export async function openMagmaNativeReadSession({
       [
         'app.current_client_id', scope.companyId,
         'app.current_agent_id', scope.actorAgentId,
-        'plan_cache_mode', 'force_generic_plan',
+        'plan_cache_mode', 'force_custom_plan',
       ],
     );
 
@@ -507,9 +551,15 @@ export async function readMagmaNativeTopology({
   recallAuthority,
   frontierIds,
   queryEmbedding,
+  entityCandidateIds = frontierIds,
   queryFn = null,
 } = {}) {
-  const statement = buildMagmaNativeTopologyQuery({ recallAuthority, frontierIds, queryEmbedding });
+  const statement = buildMagmaNativeTopologyQuery({
+    recallAuthority,
+    frontierIds,
+    queryEmbedding,
+    entityCandidateIds,
+  });
   const result = queryFn
     ? await queryFn(statement.text, statement.params, { preparedName: statement.preparedName })
     : await executeVerifiedRead(statement);
@@ -532,6 +582,12 @@ export async function readMagmaNativeTopology({
       source_id: sourceId,
       target_id: targetId,
       edge_weight: Number.isFinite(Number(row.edge_weight)) ? Number(row.edge_weight) : 0,
+      query_similarity: Number.isFinite(Number(row.query_similarity))
+        ? Math.max(-1, Math.min(1, Number(row.query_similarity)))
+        : 0,
+      target_content_hash: /^[0-9a-f]{64}$/.test(String(row.target_content_hash || '').toLowerCase())
+        ? String(row.target_content_hash).toLowerCase()
+        : null,
       qualifier: row.qualifier == null ? null : String(row.qualifier),
       authority_event_id: row.authority_event_id == null ? null : String(row.authority_event_id),
       evidence_kind: String(row.evidence_kind || ''),
@@ -545,6 +601,10 @@ export async function readMagmaNativeTopology({
     decision: Object.freeze({
       schema: 'hom-aimos/magma-native-topology/v2',
       frontier_count: statement.frontierIds.length,
+      entity_candidate_pool_count: statement.entityCandidateIds.length,
+      entity_neighbor_domain: MAGMA_NATIVE_READER_CONTRACT.entity_neighbor_domain,
+      entity_candidate_materialization:
+        MAGMA_NATIVE_READER_CONTRACT.entity_candidate_materialization,
       edge_count: edges.length,
       semantic_edges: edges.filter((edge) => edge.relation === 'semantic').length,
       entity_edges: edges.filter((edge) => edge.relation === 'entity').length,
@@ -553,6 +613,7 @@ export async function readMagmaNativeTopology({
       access_strategy: MAGMA_NATIVE_READER_CONTRACT.topology_access_strategy,
       maximum_rows_per_frontier: MAGMA_NATIVE_READER_CONTRACT.maximum_rows_per_frontier,
       content_read: false,
+      content_state_hash_read: true,
       database_write_performed: false,
       entity_edge_receipt_required_at_recall_decision: edges.some((edge) => edge.relation === 'entity'),
     }),

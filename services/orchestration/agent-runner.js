@@ -129,7 +129,12 @@ import {
 } from './agent-investigation-loop.js';
 import { runSecurityGates, buildSecurityGateError } from './agent-security-gates.js';
 // classifyBloomLevel, mapBloomToSecurityTier — now used via agent-security-gates.js
-import { detectCanaries, scanRelayedMemory } from '../security/canary-tracker.js';
+import {
+  detectCanaries,
+  observeCanariesAtRelayGate,
+  recordCanariesRelayed,
+  recordCanaryRelayBlocked,
+} from '../security/canary-tracker.js';
 import { getOperatorAgentId, isOperatorAgentId, systemConfigStore } from '../security/system-config-store.js';
 import { getConstraintForRole, applyNoHaveConstraint, applyEPrimeConstraint } from '../context/linguistic-constraints.js';
 import { createScopedState, inheritState, setScopedVar, getAllScopedVars, getStateSummary } from '../context/scoped-state.js';
@@ -945,7 +950,7 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
   const aimosContextPack = fastLane
     ? buildEmptyContextPack()
     : await loadHybridAimosContext(sourceAgentId, runtimeAgent.id, userPrompt, 8);
-  const canaryRelay = await scanRelayedMemory(
+  const canaryRelayObservation = await observeCanariesAtRelayGate(
     aimosContextPack.text,
     runId,
     {
@@ -957,12 +962,18 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
       authority: options.executionContext || options.credentialUseContext || null,
     },
   );
-  if (canaryRelay.canariesFound.length > 0) {
+  if (canaryRelayObservation.canariesFound.length > 0) {
+    const blockedCanaryRelay = await recordCanaryRelayBlocked(
+      canaryRelayObservation,
+      {
+        authority: options.executionContext || options.credentialUseContext || null,
+      },
+    );
     const error = new Error(`Canary token blocked before recalled memory was delivered to ${runtimeAgent.id}.`);
     error.code = 'CANARY_RELAY_BLOCKED';
     error.blocked = true;
-    error.canaryTokens = canaryRelay.canariesFound;
-    error.killChainDiagnostics = canaryRelay.kill_chain_diagnostics;
+    error.canaryTokens = canaryRelayObservation.canariesFound;
+    error.killChainDiagnostics = blockedCanaryRelay.kill_chain_diagnostics;
     throw error;
   }
 
@@ -1647,6 +1658,10 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
       },
       onToken,
       conversationMessages: contextGuard.messages
+    });
+    await recordCanariesRelayed(canaryRelayObservation, {
+      authority: options.executionContext || credentialUseContext,
+      modelInvocationCompleted: true,
     });
     response = result.response;
     executedModel = result.model || executedModel;

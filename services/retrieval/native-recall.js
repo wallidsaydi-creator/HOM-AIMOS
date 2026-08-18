@@ -33,6 +33,19 @@ const COMMAND_FIELDS = new Set([
   'answer_mode', 'ts_signed',
 ]);
 const DATA_CLASS_ORDER = Object.freeze(['public', 'internal', 'confidential', 'restricted']);
+export const NATIVE_RECALL_SESSION_SCALE_CONTRACT = Object.freeze({
+  schema: 'hom-aimos/native-recall-session-scale/v1',
+  restricted_connections_per_request: 1,
+  shared_read_snapshot: true,
+  transaction_isolation: 'repeatable_read',
+  transaction_access: 'read_interface_with_authority_row_lock',
+  read_interface: 'select_or_with_only',
+  verified_evidence_cache_scope: 'request_local_repeatable_read_snapshot',
+  verified_evidence_cache_authority: false,
+  rejected_evidence_cached: false,
+  mutation_authority: false,
+  environment_authority: false,
+});
 
 function sha256(value) {
   return createHash('sha256').update(value).digest();
@@ -325,10 +338,82 @@ export async function admitNativeRecallCandidatesInVerifiedSession(
 }
 
 /**
+ * Reuse verified provenance proofs only inside one already-authorized
+ * REPEATABLE READ request. The cache has no persistence, no authority, and no
+ * negative-result memory: missing/rejected evidence is rechecked and remains
+ * fail-closed. This prevents peer gears from re-verifying the same immutable
+ * occurrence chain through repeated database scans.
+ */
+export function createRequestLocalRecallEvidenceCache(verifyEvidenceFn) {
+  if (typeof verifyEvidenceFn !== 'function') {
+    throw new TypeError('recall_evidence_verifier_required');
+  }
+  const proofByMemoryId = new Map();
+  let hitCount = 0;
+  let missCount = 0;
+  let verifierCallCount = 0;
+
+  const verify = async ({ memoryIds, client = null } = {}) => {
+    const requested = [...new Set(
+      (Array.isArray(memoryIds) ? memoryIds : [])
+        .map((id) => String(id || ''))
+        .filter(Boolean),
+    )];
+    const missing = [];
+    for (const memoryId of requested) {
+      if (proofByMemoryId.has(memoryId)) hitCount += 1;
+      else {
+        missCount += 1;
+        missing.push(memoryId);
+      }
+    }
+    const rejected = [];
+    if (missing.length) {
+      verifierCallCount += 1;
+      const fresh = await verifyEvidenceFn({ memoryIds: missing, client });
+      rejected.push(...(Array.isArray(fresh?.rejected) ? fresh.rejected : []));
+      const rejectedIds = new Set(rejected.map((entry) => String(entry?.memory_id || '')));
+      for (const memoryId of missing) {
+        const proof = fresh?.proofs?.get(memoryId);
+        if (proof && fresh?.verified?.has(memoryId)) {
+          proofByMemoryId.set(memoryId, proof);
+        } else if (!rejectedIds.has(memoryId)) {
+          rejected.push({ memory_id: memoryId, reason: 'request_local_evidence_cache_fill_missing' });
+        }
+      }
+    }
+    const proofs = new Map();
+    const verified = new Set();
+    for (const memoryId of requested) {
+      const proof = proofByMemoryId.get(memoryId);
+      if (!proof) continue;
+      proofs.set(memoryId, proof);
+      verified.add(memoryId);
+    }
+    return { verified, proofs, rejected };
+  };
+
+  return Object.freeze({
+    verify,
+    stats: () => Object.freeze({
+      schema: 'hom-aimos/request-local-recall-evidence-cache/v1',
+      scope: 'request_local_repeatable_read_snapshot',
+      cache_size: proofByMemoryId.size,
+      hit_count: hitCount,
+      miss_count: missCount,
+      verifier_call_count: verifierCallCount,
+      rejected_evidence_cached: false,
+      authority: false,
+      persistent: false,
+    }),
+  });
+}
+
+/**
  * Bind one native recall principal and actor epoch for a bounded request, then
- * reuse that transaction for every newly discovered graph layer. Each call to
- * `admit` still performs the complete live provenance/signature verification;
- * only repeated connection, principal-binding, and actor-lock setup is shared.
+ * reuse that transaction for every newly discovered graph layer. A proof may
+ * be reused only after it was verified inside this same repeatable-read
+ * snapshot. New or rejected evidence is always verified live and fail-closed.
  */
 export async function openNativeRecallAdmissionSession({
   authority,
@@ -339,9 +424,10 @@ export async function openNativeRecallAdmissionSession({
     throw new Error('verified_recall_authority_required');
   }
   const client = await connectFn();
+  const evidenceCache = createRequestLocalRecallEvidenceCache(verifyEvidenceFn);
   let closed = false;
   try {
-    await client.query('BEGIN');
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
     await client.query(
       `SELECT set_config($1,$2,true),
               set_config($3,$4,true),
@@ -371,15 +457,26 @@ export async function openNativeRecallAdmissionSession({
   }
 
   return Object.freeze({
+    read: async (text, params = []) => {
+      if (closed) throw new Error('recall_admission_session_closed');
+      const statement = String(text || '').trim();
+      if (!/^(?:SELECT|WITH)\b/i.test(statement)
+        || /\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|ALTER|CREATE|DROP|GRANT|REVOKE|CALL|COPY)\b/i.test(statement)) {
+        throw new Error('recall_admission_read_only_statement_required');
+      }
+      return client.query(statement, Array.isArray(params) ? params : []);
+    },
     admit: async (memories) => {
       if (closed) throw new Error('recall_admission_session_closed');
-      return admitNativeRecallCandidatesInVerifiedSession(
+      const admitted = await admitNativeRecallCandidatesInVerifiedSession(
         memories,
         authority,
         client,
-        verifyEvidenceFn,
+        evidenceCache.verify,
       );
+      return { ...admitted, evidence_cache: evidenceCache.stats() };
     },
+    evidenceCacheStats: () => evidenceCache.stats(),
     close: async ({ commit = false } = {}) => {
       if (closed) return;
       closed = true;
@@ -404,36 +501,71 @@ export async function admitNativeRecallCandidates(memories, authority) {
   }
 }
 
-export async function finalizeNativeRecall({ memories, authority, epistemicDecisionHash = null }) {
+export async function finalizeNativeRecall({
+  memories,
+  authority,
+  epistemicDecisionHash = null,
+  securityClosureDecisionHash = null,
+  returnProjectionDecision = null,
+}) {
   const finiteScoreOrNull = (value) => {
     const score = Number(value);
     return Number.isFinite(score) ? score : null;
   };
-  const entries = memories.map((memory, ordinal) => ({
-    ordinal,
-    memory_id: String(memory.id),
-    live_content_hash: memory.provenance_proof.live_content_hash,
-    save_mutation_hash: memory.provenance_proof.save_mutation_hash,
-    binding_mutation_hash: memory.provenance_proof.binding_mutation_hash,
-    truth_state: memory.provenance_proof.version_status,
-    raw_calibration_score: finiteScoreOrNull(memory._raw_rerank),
-    calibrated_score: finiteScoreOrNull(memory.calibrated_recall_score),
-    calibration_event_id: memory.calibration_event_id,
-    calibration_mutation_hash: memory.calibration_mutation_hash,
-    calibration_formula_version: memory.calibration_formula_version,
-  }));
+  const entries = memories.map((memory, ordinal) => {
+    const occurrenceRef = String(
+      memory.provenance_proof?.disclosure_occurrence_ref || '',
+    ).toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(occurrenceRef)) {
+      throw new TypeError(`recall_disclosure_occurrence_ref_invalid:${ordinal}`);
+    }
+    return {
+      ordinal,
+      memory_id: String(memory.id),
+      live_content_hash: memory.provenance_proof.live_content_hash,
+      occurrence_ref: occurrenceRef,
+      save_mutation_hash: memory.provenance_proof.save_mutation_hash,
+      binding_mutation_hash: memory.provenance_proof.binding_mutation_hash,
+      truth_state: memory.provenance_proof.version_status,
+      raw_calibration_score: finiteScoreOrNull(memory._raw_rerank),
+      calibrated_score: finiteScoreOrNull(memory.calibrated_recall_score),
+      calibration_event_id: memory.calibration_event_id,
+      calibration_mutation_hash: memory.calibration_mutation_hash,
+      calibration_formula_version: memory.calibration_formula_version,
+    };
+  });
   const normalizedDecisionHash = epistemicDecisionHash == null
     ? null
     : String(epistemicDecisionHash).trim().toLowerCase();
   if (normalizedDecisionHash != null && !/^[0-9a-f]{64}$/.test(normalizedDecisionHash)) {
     throw new TypeError('recall_epistemic_decision_hash_invalid');
   }
-  const merkleEntries = normalizedDecisionHash
-    ? [{
+  const normalizedSecurityClosureHash = securityClosureDecisionHash == null
+    ? null
+    : String(securityClosureDecisionHash).trim().toLowerCase();
+  if (normalizedSecurityClosureHash != null
+    && !/^[0-9a-f]{64}$/.test(normalizedSecurityClosureHash)) {
+    throw new TypeError('recall_security_closure_decision_hash_invalid');
+  }
+  const normalizedReturnProjection = returnProjectionDecision == null
+    ? null
+    : Object.freeze({ ...returnProjectionDecision });
+  if (normalizedReturnProjection != null
+      && (!/^[0-9a-f]{64}$/.test(String(normalizedReturnProjection.decision_sha256 || '').toLowerCase())
+        || normalizedReturnProjection.final_security_closure_sha256 !== normalizedSecurityClosureHash)) {
+    throw new TypeError('recall_return_projection_decision_invalid');
+  }
+  const decisionEntries = [
+    ...(normalizedDecisionHash ? [{
         entry_type: 'epistemic_decision',
         decision_sha256: normalizedDecisionHash,
-      }, ...entries]
-    : entries;
+      }] : []),
+    ...(normalizedSecurityClosureHash ? [{
+      entry_type: 'canary_final_security_closure',
+      decision_sha256: normalizedSecurityClosureHash,
+    }] : []),
+  ];
+  const merkleEntries = [...decisionEntries, ...entries];
   const commandHash = sha256(Buffer.from(canonicalJson(authority.command), 'utf8')).toString('hex');
   const outerRequestHash = sha256(Buffer.from(canonicalJson(authority.requestAuthority.body), 'utf8')).toString('hex');
   const root = recallMerkleRoot(merkleEntries).toString('hex');
@@ -453,10 +585,17 @@ export async function finalizeNativeRecall({ memories, authority, epistemicDecis
     result_count: entries.length,
     merkle_root: root,
     evidence: entries,
-    ...(normalizedDecisionHash ? {
-      merkle_schema: 'hom-aimos/recall-merkle/v2-epistemic-decision',
+    ...(decisionEntries.length ? {
+      merkle_schema: normalizedSecurityClosureHash
+        ? 'hom-aimos/recall-merkle/v3-epistemic-and-security-closure'
+        : 'hom-aimos/recall-merkle/v2-epistemic-decision',
       epistemic_decision_sha256: normalizedDecisionHash,
+      canary_final_security_closure_sha256: normalizedSecurityClosureHash,
       merkle_entries: merkleEntries,
+    } : {}),
+    ...(normalizedReturnProjection ? {
+      return_projection: normalizedReturnProjection,
+      return_projection_event_body_bound: true,
     } : {}),
     reasoning: `Housekeeper observed ${entries.length} fail-closed provenance-verified recall result(s).`,
     source_knowledge: 'RFC 6962 domain-separated Merkle receipt; native-recall.js',
@@ -482,10 +621,17 @@ export async function finalizeNativeRecall({ memories, authority, epistemicDecis
     request_receipt_mutation_hash: authority.requestReceiptMutationHash,
     merkle_root: root,
     evidence: entries,
-    ...(normalizedDecisionHash ? {
-      merkle_schema: 'hom-aimos/recall-merkle/v2-epistemic-decision',
+    ...(decisionEntries.length ? {
+      merkle_schema: normalizedSecurityClosureHash
+        ? 'hom-aimos/recall-merkle/v3-epistemic-and-security-closure'
+        : 'hom-aimos/recall-merkle/v2-epistemic-decision',
       epistemic_decision_sha256: normalizedDecisionHash,
+      canary_final_security_closure_sha256: normalizedSecurityClosureHash,
       merkle_entries: merkleEntries,
+    } : {}),
+    ...(normalizedReturnProjection ? {
+      return_projection: normalizedReturnProjection,
+      return_projection_event_body_bound: true,
     } : {}),
     event_receipt: receipt,
   };

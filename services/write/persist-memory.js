@@ -41,7 +41,7 @@
  * Pipeline: SAVE | Position: canonical write gate
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { query, agentPool } from '../../db/connection.js';
 import { getEmbedding } from '../core/embeddings.js';
 import { logEvent } from '../observe/event-ledger.js';
@@ -49,7 +49,13 @@ import { assessQuality } from './quality-gate.js';
 import { checkConflict } from '../dream/curator.js';
 import { computeLiveRowContentHash, memoryProvenanceLedger } from '../security/memory-provenance.js';
 import { commitHousekeeperSupersession } from '../security/memory-lineage.js';
-import { signAsHousekeeper } from '../security/housekeeper-signer.js';
+import {
+  detectTierFromCert,
+  extractValidFromIso,
+  getHousekeeperCert,
+  signAsHousekeeper,
+  signOccurrenceCommitmentAsHousekeeper,
+} from '../security/housekeeper-signer.js';
 import { saveEnvelopeOrchestrator } from '../security/save-envelope.js';
 import { getOperatorAgentId, isOperatorAgentId, normalizeOperatorAgentId } from '../security/system-config-store.js';
 import { resolveFreshnessWriteFields } from '../temporal/freshness-metadata.js';
@@ -73,6 +79,7 @@ import { recallAuthorizationService } from '../security/recall-authorization.js'
 import { sessionKeyQueryScope } from '../shared/session-scope.js';
 import { classifyAndCommitRetainedMemoryGroup } from '../security/memory-epistemic-classifier.js';
 import { serializeMemoryValue } from '../security/protocol/memory-value.js';
+import { computeOccurrenceCommitmentV3 } from '../security/protocol/content-state-occurrence-v3.js';
 
 // ─── AGENT ID NORMALIZATION ─────────────────────────────────────────────────
 // Operator agent + normalization come from the cert-enveloped aimos_system_config
@@ -267,6 +274,68 @@ export async function findRecentCommittedDuplicate(client, companyId, value, { s
     ],
   );
   return existing.rows[0] || null;
+}
+
+/**
+ * Resolve an exact canonical content state for the same principal. The digest
+ * is an index key, never an equality oracle: every matching row is compared to
+ * the complete canonical byte set and any digest/byte disagreement aborts.
+ * Equal content owned by another principal remains a distinct occurrence
+ * lineage and therefore materializes its own retained row.
+ */
+export async function findCommittedExactContentState(client, {
+  companyId,
+  agentId,
+  liveContentHash,
+  fields,
+} = {}) {
+  const company = String(companyId || '').trim();
+  const principal = String(agentId || '').trim();
+  const digest = Buffer.from(liveContentHash || []);
+  if (!company || !principal || digest.length !== 32 || !fields || typeof fields !== 'object') {
+    throw new Error('exact_content_state_scope_invalid');
+  }
+  await client.query(
+    'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+    [`aimos:content-state:v1:${company.length}:${company}:${digest.toString('hex')}`],
+  );
+  const result = await client.query(
+    `SELECT id::text, agent_id, key, value, scope, memory_type,
+            clearance_level, data_class, source, memory_tier, expires_at,
+            freshness_state, last_verified_at, verified_by, verification_basis,
+            semantic_triples, surprise_at_save, compression_ratio,
+            valid_from, valid_until, content_hash,
+            current_epistemic_label, current_epistemic_confidence_milli,
+            current_epistemic_event_id
+       FROM aimos_memories
+      WHERE company_id = $1 AND content_hash = $2
+      ORDER BY id`,
+    [company, digest],
+  );
+  const expected = canonicalJson({
+    key: fields.key == null ? '' : String(fields.key),
+    value: fields.value == null ? '' : String(fields.value),
+    scope: fields.scope == null ? '' : String(fields.scope),
+    memory_type: fields.memory_type == null ? '' : String(fields.memory_type),
+    clearance_level: fields.clearance_level == null ? '' : String(fields.clearance_level),
+    data_class: fields.data_class == null ? '' : String(fields.data_class),
+    source: fields.source == null ? '' : String(fields.source),
+  });
+  let selected = null;
+  for (const row of result.rows) {
+    const retained = canonicalJson({
+      key: row.key == null ? '' : String(row.key),
+      value: row.value == null ? '' : String(row.value),
+      scope: row.scope == null ? '' : String(row.scope),
+      memory_type: row.memory_type == null ? '' : String(row.memory_type),
+      clearance_level: row.clearance_level == null ? '' : String(row.clearance_level),
+      data_class: row.data_class == null ? '' : String(row.data_class),
+      source: row.source == null ? '' : String(row.source),
+    });
+    if (retained !== expected) throw new Error('content_state_digest_collision');
+    if (!selected && String(row.agent_id) === principal) selected = row;
+  }
+  return selected;
 }
 
 /**
@@ -1162,74 +1231,194 @@ export async function persistMemory({
       clearanceLevel: effectiveClearanceLevel,
       dataClass,
     });
-    let duplicate = await findRecentCommittedDuplicate(txClient, cid, safeValue, {
-      sessionId: session_id,
-    });
-    let genesisCorpusRebinding = false;
-    if (publisherVerifiedGenesis) {
-      const exactGenesisBinding = await findExactGenesisManifestBinding(
-        txClient,
-        cid,
+    const exactState = await findCommittedExactContentState(txClient, {
+      companyId: cid,
+      agentId: aid,
+      liveContentHash: liveContentHashBuf,
+      fields: {
         key,
-        safeValue,
-        mutation_authority.body,
-      );
-      if (exactGenesisBinding) {
-        duplicate = exactGenesisBinding;
-      } else if (duplicate) {
-        // The body bytes are equal, but the signed corpus root/version/file
-        // commitment is new. This is a new immutable Guide version, not an
-        // exact semantic duplicate. It must continue through the canonical
-        // save, provenance, and supersession path.
-        duplicate = null;
-        genesisCorpusRebinding = true;
+        value: safeValue,
+        scope: effectiveScope,
+        memory_type: effectiveType,
+        clearance_level: effectiveClearanceLevel,
+        data_class: dataClass,
+        source: effectiveSourceForHash,
+      },
+    });
+    if (exactState) {
+      const verifiedRequest = mutation_authority?.kind === 'verified_request';
+      if (verifiedRequest && (!mutation_authority.requestReceiptMutationHash
+          || !mutation_authority.requestAdmissionEventId
+          || !mutation_authority.signedMethod
+          || !mutation_authority.signedPath)) {
+        throw mutationCommitError('provenance', 'occurrence_v3_request_authority_missing');
       }
-    }
-    if (duplicate) {
-      const duplicateWalls = {
-        ...(qualityResult.walls || {}),
-        filter: {
-          ...(qualityResult.walls?.filter || {}),
-          pass: false,
-          reason: 'Duplicate value saved within last hour',
-          dedup_status: 'duplicate_rejected',
-        },
+      const signerCertificate = await getHousekeeperCert();
+      const signerValidFrom = extractValidFromIso(signerCertificate);
+      const signerFingerprint = createHash('sha256')
+        .update(String(signerCertificate), 'utf8')
+        .digest('hex');
+      const requestBody = verifiedRequest
+        ? mutation_authority.body
+        : {
+            event_type: 'INTERNAL_SAVE_REASSERT',
+            company_id: cid,
+            subject_agent_id: aid,
+            memory_id: exactState.id,
+            key,
+            value: safeValue,
+            scope: effectiveScope,
+            clearance_level: effectiveClearanceLevel,
+            memory_type: effectiveType,
+            source: effectiveSourceForHash,
+            session_id: session_id || null,
+            authority_kind: mutation_authority?.kind || 'housekeeper',
+          };
+      const requestBodyHash = createHash('sha256')
+        .update(Buffer.from(canonicalJson(requestBody), 'utf8'))
+        .digest('hex');
+      const predecessor = await memoryProvenanceLedger.getLatestOccurrenceReference(
+        exactState.id,
+        cid,
+        txClient,
+      );
+      if (!predecessor) throw mutationCommitError('provenance', 'occurrence_v3_predecessor_missing');
+      const record = {
+        company_id: cid,
+        occurrence_event_id: randomUUID(),
+        memory_id: exactState.id,
+        event_type: verifiedRequest ? 'SAVE_REASSERT' : 'INTERNAL_SAVE_REASSERT',
+        live_content_hash_hex: liveContentHashBuf.toString('hex'),
+        predecessor_present: 1,
+        predecessor_commitment_hex: predecessor,
+        agent_id: 'housekeeper',
+        signer_valid_from_unix_ms: new Date(signerValidFrom).getTime(),
+        cert_fingerprint_hex: signerFingerprint,
+        identity_tier: detectTierFromCert(signerCertificate) === 'T1_SYSTEM_SELF'
+          ? 'T1'
+          : detectTierFromCert(signerCertificate),
+        sig_form_version: 3,
+        nonce_hex: randomBytes(16).toString('hex'),
+        ts_signed_unix_seconds: Math.floor(Date.now() / 1000),
+        signed_method: verifiedRequest ? String(mutation_authority.signedMethod).toUpperCase() : '',
+        signed_path: verifiedRequest ? String(mutation_authority.signedPath) : '',
+        request_body_hash_hex: requestBodyHash,
+        request_receipt_present: verifiedRequest ? 1 : 0,
+        request_receipt_mutation_hash_hex: verifiedRequest
+          ? String(mutation_authority.requestReceiptMutationHash).toLowerCase()
+          : '',
+        authorization_event_present: verifiedRequest ? 1 : 0,
+        authorization_event_id: verifiedRequest
+          ? String(mutation_authority.requestAdmissionEventId).toLowerCase()
+          : '',
       };
-      await logEvent(cid, aid, 'quality_gate_reject', key, {
-        score: 0,
-        reason: 'Duplicate value saved within last hour',
-        existing_memory_id: duplicate.id,
-        value_sha256: createHash('sha256').update(Buffer.from(safeValue, 'utf8')).digest('hex'),
-        reasoning: 'The canonical save transaction found the same complete value in a committed retained row inside the one-hour duplicate window.',
-        source_knowledge: 'persist-memory.js — rollback-safe committed exact-value admission',
-      }, null, { client: txClient });
+      const occurrenceCommitment = computeOccurrenceCommitmentV3(record);
+      const signedOccurrence = await signOccurrenceCommitmentAsHousekeeper(occurrenceCommitment);
+      if (signedOccurrence.certString !== signerCertificate
+          || signedOccurrence.validFromIso !== signerValidFrom) {
+        throw mutationCommitError('provenance', 'occurrence_v3_signer_epoch_changed');
+      }
+      const occurrence = await memoryProvenanceLedger.commitOccurrenceV3({
+        companyId: cid,
+        memoryId: exactState.id,
+        record,
+        signature: signedOccurrence.sigBytes,
+        certString: signerCertificate,
+        liveContentHash: liveContentHashBuf,
+        client: txClient,
+      });
+      if (!occurrence.ok) throw mutationCommitError('provenance', occurrence.reason);
+      let exactEnvelope = null;
+      if (verifiedRequest && ['T2', 'T3'].includes(String(mutation_authority.identityTier).toUpperCase())) {
+        if (!Buffer.isBuffer(mutation_authority.claimedPrev)) {
+          throw mutationCommitError('envelope', 'malformed_input');
+        }
+        exactEnvelope = await saveEnvelopeOrchestrator.commitEnvelope({
+          memoryId: exactState.id,
+          body: mutation_authority.body,
+          agentId: mutation_authority.agentId,
+          validFromIso: mutation_authority.validFromIso,
+          claimedPrev: mutation_authority.claimedPrev,
+          certString: mutation_authority.certString,
+          signedTs: mutation_authority.signedTs,
+          nonce: mutation_authority.nonce,
+          sigBytes: mutation_authority.sigBytes,
+          identityTier: mutation_authority.identityTier,
+          requestSigForm: mutation_authority.requestSigForm,
+          signedMethod: mutation_authority.signedMethod,
+          signedPath: mutation_authority.signedPath,
+          signedClaims: mutation_authority.signedClaims,
+          client: txClient,
+        });
+        if (!exactEnvelope.ok) throw mutationCommitError(
+          'envelope',
+          exactEnvelope.reason,
+          exactEnvelope.currentHead || null,
+        );
+      }
+      const event = await logEvent(cid, aid, 'content_state_occurrence_reasserted', key, {
+        memory_id: exactState.id,
+        live_content_hash: liveContentHashBuf.toString('hex'),
+        occurrence_event_id: record.occurrence_event_id,
+        occurrence_commitment: occurrenceCommitment,
+        request_receipt_mutation_hash: verifiedRequest
+          ? record.request_receipt_mutation_hash_hex
+          : null,
+        canonical_memory_inserted: false,
+        retrieval_vote_added: false,
+        genesis_corpus_rebinding: publisherVerifiedGenesis,
+        reasoning: 'An authorized exact canonical state was retained as a distinct signed occurrence on its existing memory state; no duplicate row or retrieval vote was created.',
+        source_knowledge: 'R7 content-state/signed-occurrence contract',
+      }, mutation_authority?.requestAdmissionEventId || null, {
+        client: txClient,
+        authority: verifiedRequest ? mutation_authority : null,
+        returnReceipt: true,
+      });
       if (ownsTransaction) await txClient.query('COMMIT');
       return {
-        rejected: true,
-        reason: 'Duplicate value saved within last hour',
-        quality_score: 0,
-        wall_results: duplicateWalls,
+        id: exactState.id,
+        memory_tier: exactState.memory_tier,
+        expires_at: exactState.expires_at,
+        quarantined: effectiveScope === 'quarantine' || effectiveType === 'quarantine',
+        security_decision_event_id: securityReceipt?.event_id || null,
+        conflict_detected: false,
+        correction_applied: false,
+        corrections_applied: 0,
+        quality_score: qualityResult.score,
+        wall_results: qualityResult.walls || null,
+        freshness_state: exactState.freshness_state,
+        last_verified_at: exactState.last_verified_at,
+        verified_by: exactState.verified_by,
+        verification_basis: exactState.verification_basis,
+        epistemic_label: exactState.current_epistemic_label || 'unverified',
+        epistemic_confidence_milli: Number(exactState.current_epistemic_confidence_milli || 0),
+        epistemic_classification_event_id: exactState.current_epistemic_event_id || null,
+        epistemic_classification_hash: null,
+        epistemic_related_memory_ids_reclassified: [],
         save_feedback: {
-          accepted: false,
-          quality_score: 0,
-          wall_results: duplicateWalls,
+          accepted: true,
+          quality_score: qualityResult.score,
+          wall_results: qualityResult.walls || null,
           sum_of_checks: qualityResult.sum_of_checks || null,
-          dedup_status: 'duplicate_rejected',
-          existing_memory_id: duplicate.id,
-          reasoning: 'Save rejected by the rollback-safe committed exact-value check.',
+          dedup_status: 'exact_state_reasserted',
+          existing_memory_id: exactState.id,
+          occurrence_event_id: record.occurrence_event_id,
+          occurrence_commitment: occurrenceCommitment,
+          retrieval_vote_added: false,
+          reasoning: 'Exact content was accepted as a new signed occurrence of the existing canonical state.',
         },
+        semantic_triples: exactState.semantic_triples,
+        surprise_at_save: exactState.surprise_at_save,
+        compression_ratio: exactState.compression_ratio,
+        valid_from: exactState.valid_from,
+        valid_until: exactState.valid_until,
+        live_content_hash: liveContentHashBuf,
+        ledger_commit: occurrence,
+        binding_commit: null,
+        envelope_commit: exactEnvelope,
+        occurrence_reasserted: true,
+        occurrence_event_receipt: event,
       };
-    }
-    if (genesisCorpusRebinding) {
-      await logEvent(cid, aid, 'quality_gate_genesis_corpus_rebind', key, {
-        genesis_manifest_schema: mutation_authority.body.genesis_manifest_schema,
-        genesis_manifest_version: mutation_authority.body.genesis_manifest_version,
-        genesis_corpus_root: mutation_authority.body.genesis_corpus_root,
-        genesis_file_path: mutation_authority.body.genesis_file_path,
-        value_sha256: createHash('sha256').update(Buffer.from(safeValue, 'utf8')).digest('hex'),
-        reasoning: 'Identical Guide bytes were admitted as a new immutable version because the verified housekeeper request binds a different complete Genesis corpus commitment.',
-        source_knowledge: 'persist-memory.js — signed Genesis corpus rebinding through canonical persistence',
-      }, null, { client: txClient });
     }
     if (key) {
       // Serialize one immutable chain per company/key, including the no-row

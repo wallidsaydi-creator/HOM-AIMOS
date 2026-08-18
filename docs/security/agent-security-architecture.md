@@ -13,7 +13,7 @@ filter placed around a vector store.
 | Recall | Admits principal-scoped evidence, ranks it, applies trust and calibration, and signs disclosure order | Signed recall receipt and RFC 6962-style Merkle evidence | A recalled item can still be false |
 | Cognitive mutation | Changes bounded retrieval weight after signed outcome evidence | Housekeeper-authorized, predecessor-linked transition | Canonical memory content is not rewritten |
 | Canary traversal | Tracks generated markers at persistence, model relay, tool input, and tool output | Stage decisions at `PERSISTED`, `RELAYED`, `EXECUTED`, and `EXPOSED` | Detects its explicit marker family, not arbitrary poison |
-| MAGMA selection | Permanently expands and ranks admitted graph candidates; signed configuration may only tighten bounded calibration | Graph decision and final recall receipt | Candidate selection owns neither activation nor final disclosure |
+| Governed graph-family selection | Reconstructed Graph G2 contributes one bounded structural vote over admitted evidence; MAGMA is retained dormant | Graph-family decision and final recall receipt | Graph evidence owns neither candidate admission nor final disclosure |
 | Operational red team | Exercises fixed attack and benign-control manifests | Signed campaign start, per-case decision, terminal outcome, and portable hash-only evidence | Evaluation only; no runtime authority and no certification claim |
 
 ## Retention and quarantine
@@ -30,21 +30,18 @@ as universal poison detection.
 
 ## Governed retrieval
 
-MAGMA is a permanent native retrieval gear with no activation mode. It operates
-after principal and provenance admission and before epistemic, Canary,
-retention, and signed-disclosure controls. Optional master-signed configuration
-may tighten bounded calibration; it cannot disable the gear or give it final
-disclosure authority. The completed native-gear proof recorded 20/20 signed
-recalls, graph discoveries in 8/20 observations, and candidate p95 latency of
-218.941 ms under the unchanged 250 ms ceiling. One of the 20 individual calls
-exceeded 250 ms; the preregistered latency decision was the p95 statistic.
-The identity-bearing live artifact remains private and is bound by SHA-256:
+Reconstructed Graph G2 is the sole live subgear in one bounded graph-family
+channel. It operates after principal and provenance admission and before
+epistemic, Canary, retention, and signed-disclosure controls. It owns no
+candidate admission, persistence, mutation, or final-disclosure authority.
 
-```text
-ade56f7a1e5e145f23362243abbff39c9e28b37425407440e6eed7cf8682397e
-```
+MAGMA is retained as dormant research. Its paper adaptation, tests, historical
+positive proof, later current-stack utility and latency failures, and signed
+policy history remain reviewable, but canonical recall does not call it,
+accept its discoveries, or assign it a rank vote. Its signed configuration head
+is `dormant`. A future version requires a new preregistered utility, latency,
+scale, security-composition, and operator-authorization sequence.
 
-Reconstructed Graph G2 shares the one bounded graph-family channel with MAGMA.
 Other graph candidates are evaluated one at a time against the complete native
 gearbox and are not claimed as active merely because dormant source or isolated
 tests exist.

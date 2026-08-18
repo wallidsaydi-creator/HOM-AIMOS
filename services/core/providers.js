@@ -1146,6 +1146,9 @@ function extractCodexResponseEventText(event) {
   if (event?.type === 'response.output_text.delta') {
     return { kind: 'delta', text: String(event.delta || '') };
   }
+  if (event?.type === 'response.output_text.done') {
+    return { kind: 'final', text: String(event.text || '') };
+  }
   if (event?.type === 'response.output_item.done' && Array.isArray(event?.item?.content)) {
     const text = event.item.content
       .map((part) => {
@@ -1156,6 +1159,23 @@ function extractCodexResponseEventText(event) {
     return { kind: 'final', text };
   }
   return { kind: 'none', text: '' };
+}
+
+function extractCodexTerminalResponseText(response) {
+  if (!Array.isArray(response?.output)) return '';
+  return response.output
+    .flatMap((item) => (Array.isArray(item?.content) ? item.content : []))
+    .map((part) => {
+      if (part?.type === 'output_text' || part?.type === 'text') return String(part.text || '');
+      return '';
+    })
+    .join('');
+}
+
+function safeCodexDiagnosticString(value) {
+  const normalized = String(value || '').trim();
+  if (!normalized) return null;
+  return normalized.slice(0, 160);
 }
 
 function safeUsageInteger(value) {
@@ -1177,18 +1197,32 @@ function sanitizeCodexUsage(usage) {
 export function parseCodexSseResponse(raw, onToken) {
   let deltaText = '';
   let finalText = '';
+  let terminalText = '';
   let completedResponse = null;
-  for (const block of String(raw || '').split(/\n\n+/)) {
+  let terminalEventType = null;
+  let terminalErrorCode = null;
+  let terminalErrorType = null;
+  let incompleteReason = null;
+  let dataLineCount = 0;
+  let parsedEventCount = 0;
+  let malformedDataCount = 0;
+  const eventTypes = new Set();
+  const serialized = String(raw || '');
+  for (const block of serialized.split(/\r?\n\r?\n+/)) {
     const dataLines = block.split('\n').filter(line => line.startsWith('data:'));
     for (const line of dataLines) {
+      dataLineCount += 1;
       const payload = line.slice(5).trim();
       if (!payload || payload === '[DONE]') continue;
       let event;
       try {
         event = JSON.parse(payload);
       } catch {
+        malformedDataCount += 1;
         continue;
       }
+      parsedEventCount += 1;
+      if (event?.type) eventTypes.add(String(event.type));
       const extracted = extractCodexResponseEventText(event);
       if (extracted.kind === 'delta') {
         deltaText += extracted.text;
@@ -1198,16 +1232,40 @@ export function parseCodexSseResponse(raw, onToken) {
       }
       if (['response.completed', 'response.failed', 'response.incomplete'].includes(event?.type)) {
         completedResponse = event.response || null;
+        terminalEventType = String(event.type);
+        terminalText = extractCodexTerminalResponseText(completedResponse);
+        terminalErrorCode = safeCodexDiagnosticString(
+          event?.error?.code || completedResponse?.error?.code,
+        );
+        terminalErrorType = safeCodexDiagnosticString(
+          event?.error?.type || completedResponse?.error?.type,
+        );
+        incompleteReason = safeCodexDiagnosticString(completedResponse?.incomplete_details?.reason);
       }
     }
   }
   return Object.freeze({
-    text: (deltaText || finalText).trim(),
+    text: (deltaText || finalText || terminalText).trim(),
     responseId: completedResponse?.id ? String(completedResponse.id) : null,
     model: completedResponse?.model ? String(completedResponse.model) : null,
     status: completedResponse?.status ? String(completedResponse.status) : null,
     usage: sanitizeCodexUsage(completedResponse?.usage),
+    diagnostics: Object.freeze({
+      rawBytes: Buffer.byteLength(serialized, 'utf8'),
+      dataLineCount,
+      parsedEventCount,
+      malformedDataCount,
+      eventTypes: Object.freeze([...eventTypes].sort()),
+      terminalEventType,
+      terminalErrorCode,
+      terminalErrorType,
+      incompleteReason,
+    }),
   });
+}
+
+function codexResponseDiagnosticSuffix(parsed) {
+  return JSON.stringify(parsed?.diagnostics || {});
 }
 
 async function runCodex({
@@ -1276,9 +1334,13 @@ async function runCodex({
       throw new Error(`Codex error (${response.status}): ${raw.slice(0, 1000)}`);
     }
     const parsed = parseCodexSseResponse(raw, onToken);
-    if (!parsed.text) throw new Error('Codex response was empty');
     if (parsed.status && parsed.status !== 'completed') {
-      throw new Error(`Codex response ended with status ${parsed.status}`);
+      throw new Error(
+        `Codex response ended with status ${parsed.status}:${codexResponseDiagnosticSuffix(parsed)}`,
+      );
+    }
+    if (!parsed.text) {
+      throw new Error(`Codex response was empty:${codexResponseDiagnosticSuffix(parsed)}`);
     }
     let credentialUseEvidence = null;
     if (reservation) {

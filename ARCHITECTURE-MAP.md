@@ -76,7 +76,7 @@ envelopes; bearer-only authentication is not an AIMOS authority path.
 ## Canonical pipelines
 
 `services/pipeline-manifest.js` declares the critical wiring for six pipelines.
-It declares 156 service connections across 6 pipelines.
+It declares 153 service connections across 6 pipelines.
 
 | Pipeline | Entrypoint | Responsibility |
 |---|---|---|
@@ -125,25 +125,23 @@ owner. The externally visible path has eight principal stages:
 | 2 | Embedding and candidate opening | `services/core/embeddings.js` |
 | 3 | Similarity statistics | `services/retrieval/similarity-stats.js` |
 | 4 | Trust scoring | `services/learning/trust-score.js` |
-| 5 | Permanent dense, sparse, temporal, entity, QuIM, QMD, HyDE, and concept gears plus one bounded MAGMA/Reconstructed-Graph family channel with central deterministic RRF | `services/retrieval/native-recall-pipeline.js`, `services/retrieval/native-retrieval-fusion.js`, `services/retrieval/reconstructed-graph-native-candidate.js` |
+| 5 | Permanent dense, sparse, temporal, entity, QuIM, QMD, HyDE, and concept gears plus one bounded Reconstructed-Graph G2 family channel with central deterministic RRF | `services/retrieval/native-recall-pipeline.js`, `services/retrieval/native-retrieval-fusion.js`, `services/retrieval/reconstructed-graph-native-candidate.js` |
 | 6 | Verified epistemic projection and selection | `services/retrieval/epistemic-trust-retrieval.js` |
 | 7 | Pre-disclosure calibration | `services/retrieval/recall-calibrator.js` |
 | 8 | Bounded evidence and signed receipt | `services/retrieval/native-recall.js` |
 
-The 78 declared recall connections span exact-identifier, semantic, temporal,
+The 75 declared recall connections span exact-identifier, semantic, temporal,
 graph, procedural, lineage, cache, instrumentation, and ingestion-assisted
 paths. Candidate evidence passes provenance and authorization admission before
 epistemic selection and bounded disclosure.
 
-MAGMA is an internal retrieval gear, not an activation mode or an alternative
-pipeline. Its principal-scoped reader opens bounded semantic, entity, and
-temporal topology; its four-view mathematical kernel also accepts signed causal
-edges when such evidence exists. MAGMA emits one rank channel plus
-provenance-re-admitted discoveries into the same deterministic reciprocal-rank
-fusion that combines the other native gears. It cannot remove the admitted
-baseline, authorize disclosure, mutate retained memory, or bypass epistemic,
-Canary, SABER-evidence, and Aladdin boundaries. Optional signed configuration
-can tighten bounded calibration only; it cannot enable or disable the gear.
+MAGMA is retained dormant research. Its source, paper implementation, tests,
+and historical artifacts remain available, but it has no canonical recall
+import, pipeline-manifest edge, discovery path, or rank vote. Recall emits an
+explicit dormancy decision. Reconstructed Graph G2 is the sole live subgear in
+the bounded graph-family channel and remains downstream of principal and
+provenance admission and upstream of epistemic, Canary, SABER-evidence, and
+Aladdin boundaries.
 
 ### Native cognitive-mutation plane
 
@@ -256,7 +254,7 @@ filter:
 | Certificate-envelope admission | `services/security/auth-gate.js` | Identity, method, path, body, nonce, timestamp, and request receipt are cryptographically bound |
 | Retained-memory epistemics | `services/security/memory-epistemic-classifier.js` | Signed, reversible label; canonical content remains retained |
 | Canary traversal | `services/security/canary-write-gate.js`, recall/tool owners | Explicit markers are observed at persistence, relay, execution, and exposure boundaries |
-| Graph security closure | `services/retrieval/native-recall-pipeline.js` | MAGMA rank evidence is fused downstream of principal/provenance admission and remains upstream of epistemic/Canary/retention disclosure control |
+| Graph security closure | `services/retrieval/native-recall-pipeline.js` | G2 graph-family evidence is fused downstream of principal/provenance admission and remains upstream of epistemic/Canary/retention disclosure control; MAGMA contributes zero runtime evidence |
 | Cognitive mutation | governance owner, housekeeper signer, restricted writer | Only bounded retrieval weight changes through signed no-fork transitions |
 | Operational red-team evidence | `services/security/red-team-toolkit.js`, `routes/security.js` | Evaluation-only; fixed manifests and native case receipts, no runtime defense authority |
 
@@ -363,14 +361,15 @@ distributed.
 | Cognitive tamper cases detected | 4/4 |
 | SQL/portable cognitive verifier parity | 9/9 records |
 | Signed cognitive-transition latency, median | 4.865 ms |
-| MAGMA permanent native-gear proof | 20/20 signed recalls; 8/20 graph-discovery observations; candidate p95 218.941 ms under its fixed 250 ms gate; 1/20 individual calls exceeded 250 ms |
+| MAGMA retained research proof (historical) | 20/20 signed recalls; 8/20 graph-discovery observations; candidate p95 218.941 ms under its fixed 250 ms gate |
+| MAGMA current-stack ruling | Dormant: later Gate50 evidence recall −0.028 and judged accuracy −0.04, candidate p95 430.081 ms; no canonical recall caller or rank vote |
 | SABER-inspired operational campaign | 27/27 attacks blocked or retained-quarantined; 0/28 benign false positives; 0 indeterminate |
 
 The protocols are distinct and are not averaged. The sanitized, self-hashed
 `eval/publication/verified-benchmark-results.json` binds the promoted paper
-evidence by SHA-256. MAGMA and SABER-inspired values are later live conformance
-proofs with separate hash-addressed evidence and are not folded into that
-benchmark aggregate.
+evidence by SHA-256. MAGMA's retained historical artifacts and SABER-inspired
+values are separate evidence and are not folded into that benchmark aggregate;
+dormant MAGMA is not represented as current runtime performance.
 
 ## Change discipline
 

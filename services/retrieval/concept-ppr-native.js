@@ -43,12 +43,29 @@ export const CONCEPT_PPR_DAMPING = 0.5;
 export const CONCEPT_PPR_ITERATIONS = 20;
 export const CONCEPT_SYNONYM_THRESHOLD = 0.8;
 export const CONCEPT_MAX_SYNONYMS_PER_NODE = 8;
+export const CONCEPT_PPR_MAX_REQUEST_STATES = 200;
+export const CONCEPT_PPR_MAX_REQUEST_NODES = 4096;
+export const CONCEPT_PPR_MAX_REQUEST_RELATION_EDGES = 32768;
+export const CONCEPT_PPR_QUERY_CONTRACT = Object.freeze({
+  schema: 'hom-aimos/concept-ppr-query/v2-request-state-scoped',
+  input_authority: 'request_scoped_r4_content_state_commitments_and_representatives',
+  maximum_request_states: CONCEPT_PPR_MAX_REQUEST_STATES,
+  maximum_request_nodes: CONCEPT_PPR_MAX_REQUEST_NODES,
+  maximum_request_relation_edges: CONCEPT_PPR_MAX_REQUEST_RELATION_EDGES,
+  one_passage_vote_per_verified_content_state: true,
+  global_unadmitted_passage_influence: false,
+  candidate_discovery_authority: false,
+  disclosure_authority: false,
+  mutation_authority: false,
+  environment_authority: false,
+});
 
 const BUILD_EVENT_OPERATION = 'concept_ppr_build_committed';
 const MAX_BUILD_CONCEPTS = 100_000;
 const MAX_BUILD_RELATION_EDGES = 1_000_000;
 const SYNONYM_SIGNATURE_BITS = 8;
 const SHA256_RE = /^[0-9a-f]{64}$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function sha256(value) {
   return createHash('sha256').update(value).digest();
@@ -551,7 +568,14 @@ async function verifySelectedBuild(company, selected) {
   return build;
 }
 
-async function mapQueryAnchorsToNodes(queryText, company, buildId, policy) {
+async function mapQueryAnchorsToNodes(
+  queryText,
+  company,
+  buildId,
+  policy,
+  eligibleNodeIds,
+  requestSpecificityByNode,
+) {
   let anchors = extractQueryEntityAnchors(queryText, policy.entity_seed_limit);
   if (anchors.length === 0) anchors = [{ name: String(queryText || '').trim().toLowerCase(), type: 'query' }];
   const best = new Map();
@@ -562,14 +586,16 @@ async function mapQueryAnchorsToNodes(queryText, company, buildId, policy) {
               1 - (embedding <=> $3::vector) AS similarity
          FROM public.concept_graph_nodes
         WHERE company_id=$1 AND build_id=$2::uuid
+          AND node_id = ANY($4::uuid[])
         ORDER BY embedding <=> $3::vector, node_identity_sha256
         LIMIT 1`,
-      [company, buildId, JSON.stringify(embedding)],
+      [company, buildId, JSON.stringify(embedding), eligibleNodeIds],
     );
     if (match.rowCount !== 1) continue;
     const row = match.rows[0];
     const similarity = Math.max(0, Math.min(1, Number(row.similarity || 0)));
-    const weight = similarity * similarity * Number(row.specificity || 0);
+    const weight = similarity * similarity
+      * Number(requestSpecificityByNode.get(String(row.node_id)) || 0);
     const prior = best.get(String(row.node_id)) || 0;
     if (weight > prior) best.set(String(row.node_id), weight);
   }
@@ -577,30 +603,93 @@ async function mapQueryAnchorsToNodes(queryText, company, buildId, policy) {
 }
 
 /** Query-time specificity-weighted PPR and phrase-to-passage lift. */
-export async function conceptPprLookup(queryText, companyId = COMPANY, limit = 10) {
+export async function conceptPprLookup(
+  queryText,
+  companyId = COMPANY,
+  limit = 10,
+  { admittedStates = [] } = {},
+) {
   const selected = readConceptPprPolicy();
   if (!selected) throw new Error('concept_ppr_signed_build_policy_missing');
   const company = String(companyId || '').trim();
+  const representativeByStateHash = new Map();
+  for (const state of Array.isArray(admittedStates) ? admittedStates : []) {
+    const memoryId = String(state?.memory_id || state?.id || '').trim().toLowerCase();
+    const liveContentHash = String(state?.live_content_hash || '').trim().toLowerCase();
+    if (!UUID_RE.test(memoryId) || !SHA256_RE.test(liveContentHash)) {
+      throw new Error('concept_ppr_admitted_state_binding_invalid');
+    }
+    if (representativeByStateHash.has(liveContentHash)) {
+      throw new Error('concept_ppr_duplicate_state_binding');
+    }
+    representativeByStateHash.set(liveContentHash, memoryId);
+  }
+  const requestStateHashes = [...representativeByStateHash.keys()];
+  if (!requestStateHashes.length) throw new Error('concept_ppr_admitted_states_required');
+  if (requestStateHashes.length > CONCEPT_PPR_MAX_REQUEST_STATES) {
+    throw new Error('concept_ppr_request_state_bound_exceeded');
+  }
   const build = await verifySelectedBuild(company, selected);
-  const seedWeights = await mapQueryAnchorsToNodes(queryText, company, build.build_id, selected.policy);
+  const eligiblePassageNodes = await query(
+    `SELECT concept_node_id AS node_id, COUNT(DISTINCT memory_id)::int AS request_passage_degree
+      FROM public.concept_passage_edges
+      WHERE company_id=$1 AND build_id=$2::uuid
+        AND encode(source_content_sha256, 'hex') = ANY($3::text[])
+      GROUP BY concept_node_id
+      ORDER BY concept_node_id
+      LIMIT $4`,
+    [company, build.build_id, requestStateHashes, CONCEPT_PPR_MAX_REQUEST_NODES + 1],
+  );
+  const eligibleNodeIds = eligiblePassageNodes.rows.map((row) => String(row.node_id));
+  if (!eligibleNodeIds.length) return [];
+  if (eligibleNodeIds.length > CONCEPT_PPR_MAX_REQUEST_NODES
+    || eligibleNodeIds.length > selected.policy.max_ppr_nodes) {
+    throw new Error('concept_ppr_request_node_bound_exceeded');
+  }
+  const requestSpecificityByNode = new Map(eligiblePassageNodes.rows.map((row) => [
+    String(row.node_id),
+    1 / Math.max(1, Number(row.request_passage_degree || 1)),
+  ]));
+  const seedWeights = await mapQueryAnchorsToNodes(
+    queryText,
+    company,
+    build.build_id,
+    selected.policy,
+    eligibleNodeIds,
+    requestSpecificityByNode,
+  );
   if (seedWeights.size === 0) return [];
   const [nodesResult, edgesResult] = await Promise.all([
     query(
       `SELECT node_id FROM public.concept_graph_nodes
         WHERE company_id=$1 AND build_id=$2::uuid
+          AND node_id = ANY($3::uuid[])
         ORDER BY node_identity_sha256`,
-      [company, build.build_id],
+      [company, build.build_id, eligibleNodeIds],
     ),
     query(
       `SELECT source_concept_node_id AS source, target_concept_node_id AS target,
               relation_type, weight
-         FROM public.concept_relation_edges
+        FROM public.concept_relation_edges
         WHERE company_id=$1 AND build_id=$2::uuid
-        ORDER BY edge_identity_sha256`,
-      [company, build.build_id],
+          AND source_concept_node_id = ANY($3::uuid[])
+          AND target_concept_node_id = ANY($3::uuid[])
+          AND (source_content_sha256 IS NULL
+            OR encode(source_content_sha256, 'hex') = ANY($4::text[]))
+        ORDER BY edge_identity_sha256
+        LIMIT $5`,
+      [
+        company,
+        build.build_id,
+        eligibleNodeIds,
+        requestStateHashes,
+        CONCEPT_PPR_MAX_REQUEST_RELATION_EDGES + 1,
+      ],
     ),
   ]);
-  if (nodesResult.rowCount > selected.policy.max_ppr_nodes
+  if (nodesResult.rowCount > CONCEPT_PPR_MAX_REQUEST_NODES
+      || edgesResult.rowCount > CONCEPT_PPR_MAX_REQUEST_RELATION_EDGES
+      || nodesResult.rowCount > selected.policy.max_ppr_nodes
       || edgesResult.rowCount > selected.policy.max_ppr_edges) {
     throw new Error('concept_ppr_runtime_scale_bound_exceeded');
   }
@@ -623,20 +712,29 @@ export async function conceptPprLookup(queryText, companyId = COMPANY, limit = 1
   const conceptIds = activeConcepts.map(([nodeId]) => nodeId);
   const scoreValues = activeConcepts.map(([, score]) => score);
   const passages = await query(
-    `SELECT edge.memory_id AS id,
+    `SELECT encode(edge.source_content_sha256, 'hex') AS state_hash,
             SUM(score.value * edge.weight)::float8 AS ppr_score,
             COUNT(*)::int AS concept_hits
        FROM unnest($3::uuid[], $4::float8[]) AS score(node_id, value)
        JOIN public.concept_passage_edges edge
          ON edge.company_id=$1 AND edge.build_id=$2::uuid
         AND edge.concept_node_id=score.node_id
-      GROUP BY edge.memory_id
-      ORDER BY ppr_score DESC, edge.memory_id
-      LIMIT $5`,
-    [company, build.build_id, conceptIds, scoreValues, Math.min(Number(limit || 10), selected.policy.passage_limit)],
+        AND encode(edge.source_content_sha256, 'hex') = ANY($5::text[])
+      GROUP BY edge.source_content_sha256
+      ORDER BY ppr_score DESC, state_hash
+      LIMIT $6`,
+    [
+      company,
+      build.build_id,
+      conceptIds,
+      scoreValues,
+      requestStateHashes,
+      Math.min(Number(limit || 10), selected.policy.passage_limit),
+    ],
   );
   return passages.rows.map((row) => ({
-    id: row.id,
+    id: representativeByStateHash.get(String(row.state_hash).toLowerCase()),
+    live_content_hash: String(row.state_hash).toLowerCase(),
     score: Number(row.ppr_score || 0),
     ppr: Number(row.ppr_score || 0),
     cosine: 0,
@@ -645,6 +743,8 @@ export async function conceptPprLookup(queryText, companyId = COMPANY, limit = 1
     build_id: selected.policy.build_id,
     build_root_sha256: selected.policy.graph_root_sha256,
     policy_mutation_hash: selected.mutation_hash,
+    request_state_count: requestStateHashes.length,
+    request_state_scoped: true,
   }));
 }
 

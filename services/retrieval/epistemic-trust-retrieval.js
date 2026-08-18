@@ -179,7 +179,8 @@ function provenanceValid(memory) {
   return Boolean(
     proof
     && /^[0-9a-f]{64}$/i.test(String(proof.live_content_hash || ''))
-    && /^[0-9a-f]{64}$/i.test(String(proof.save_mutation_hash || ''))
+    && (proof.save_mutation_hash == null
+      || /^[0-9a-f]{64}$/i.test(String(proof.save_mutation_hash)))
     && /^[0-9a-f]{64}$/i.test(String(proof.binding_mutation_hash || ''))
   );
 }
@@ -593,17 +594,43 @@ function calibrateWithPolicy({
   decisionVersion = EPISTEMIC_DECISION_VERSION,
   decisionExtras = null,
   twinPrimeContext = null,
+  enforceActiveContextWithholding = false,
 } = {}) {
   const source = Array.isArray(memories) ? memories : [];
   const boundedLimit = Math.max(1, Math.min(200, Math.trunc(Number(limit) || 10)));
   const candidates = annotateCandidates(query, source, policy);
+  const untrustedCandidateCount = candidates.filter(
+    (candidate) => candidate.evidenceHandling === 'untrusted_reference_only',
+  ).length;
+  const selectionLimit = enforceActiveContextWithholding
+    ? Math.min(candidates.length, boundedLimit + untrustedCandidateCount)
+    : Math.min(boundedLimit, candidates.length);
   const twinPrime = twinPrimeContext
-    ? twinPrimeSelection(candidates, Math.min(boundedLimit, candidates.length), twinPrimeContext)
+    ? twinPrimeSelection(candidates, selectionLimit, twinPrimeContext)
     : null;
-  const selected = twinPrime?.returned
-    || selectMmr(candidates, Math.min(boundedLimit, candidates.length));
+  const preWithholdingSelected = twinPrime?.returned
+    || selectMmr(candidates, selectionLimit);
+  const selected = (enforceActiveContextWithholding
+    ? preWithholdingSelected.filter(
+        (candidate) => candidate.evidenceHandling !== 'untrusted_reference_only',
+      )
+    : preWithholdingSelected)
+    .slice(0, boundedLimit);
+  const withheldUntrustedIds = candidates
+    .filter((candidate) => candidate.evidenceHandling === 'untrusted_reference_only')
+    .map((candidate) => String(candidate.memory?.id || candidate.memory?.memory_id || ''));
   const selectedIds = new Set(selected.map((candidate) => String(candidate.memory?.id || candidate.memory?.memory_id || '')));
   const selectedMemories = selected.map((candidate, index) => memoryWithDecision(candidate, index + 1));
+  const rawTopKTrustedSelectedCount = preWithholdingSelected
+    .slice(0, boundedLimit)
+    .filter((candidate) => candidate.evidenceHandling !== 'untrusted_reference_only')
+    .filter((candidate) => selectedIds.has(
+      String(candidate.memory?.id || candidate.memory?.memory_id || ''),
+    )).length;
+  const cleanBackfillCount = Math.max(
+    0,
+    selectedMemories.length - rawTopKTrustedSelectedCount,
+  );
   const decisions = candidates.map((candidate) => {
     const memoryId = String(candidate.memory?.id || candidate.memory?.memory_id || '');
     return {
@@ -631,6 +658,17 @@ function calibrateWithPolicy({
     ...(decisionExtras || {}),
     query_sha256: querySha256,
     candidate_count: candidates.length,
+    requested_limit: boundedLimit,
+    pre_withholding_selected_memory_ids: preWithholdingSelected
+      .map((candidate) => String(candidate.memory?.id || candidate.memory?.memory_id || '')),
+    active_context_withholding_enforced: enforceActiveContextWithholding,
+    withheld_untrusted_memory_ids: withheldUntrustedIds,
+    withheld_untrusted_count: withheldUntrustedIds.length,
+    clean_backfill_count: enforceActiveContextWithholding ? cleanBackfillCount : 0,
+    unfilled_clean_slot_count: Math.max(0, boundedLimit - selectedMemories.length),
+    eligibility_exhaustion_reason: selectedMemories.length === 0 && candidates.length > 0
+      ? 'all_candidates_untrusted_reference_only'
+      : null,
     selected_memory_ids: selectedMemories.map((memory) => String(memory.id || memory.memory_id || '')),
     states: decisions.reduce((counts, decision) => {
       counts[decision.epistemic_state] = (counts[decision.epistemic_state] || 0) + 1;
@@ -665,6 +703,7 @@ export function calibrateEpistemicRecall({ query = '', memories = [], limit = 10
     limit,
     policy: PRODUCTION_POLICY,
     twinPrimeContext,
+    enforceActiveContextWithholding: true,
   });
 }
 

@@ -16,12 +16,38 @@ import { createHash } from 'node:crypto';
 
 export const HINGEMEM_B_CONSTANTS = Object.freeze({
   maximum_states: 4096,
+  marginal_maximum_states: 256,
   maximum_segment_size: 6,
   semantic_mad_multiplier: 1.5,
   temporal_gap_ms: 30 * 60 * 1000,
   boundary_projection_limit: 20,
   boundary_member_limit: 80,
+  marginal_rank_limit: 40,
   rrf_k: 60,
+});
+
+export const HINGEMEM_BOUNDARY_MARGINAL_CONTRACT = Object.freeze({
+  schema: 'hom-aimos/hingemem-boundary-marginal-gear/v1',
+  architecture_role: 'dormant_graph_family_subgear_candidate',
+  paper_authority: 'HingeMem_equations_1_to_5_and_table_3_boundary_memory_node_indexing',
+  adaptation: 'deterministic_transient_source_bound_boundary_projection',
+  maximum_input_states: HINGEMEM_B_CONSTANTS.marginal_maximum_states,
+  maximum_emitted_ranks: HINGEMEM_B_CONSTANTS.marginal_rank_limit,
+  graph_family_outer_channels: 1,
+  candidate_set_authority: false,
+  graph_only_discoveries: false,
+  disclosure_authority: false,
+  persistence_authority: false,
+  signing_authority: false,
+  mutation_authority: false,
+  deletion_authority: false,
+  model_authority: false,
+  policy_authority: false,
+  database_authority: false,
+  environment_authority: false,
+  runtime_wired: false,
+  time_complexity: 'O(n_d_plus_n_log_n)',
+  space_complexity: 'O(n_d_plus_n)',
 });
 
 export const HINGEMEM_B_GUARDRAILS = Object.freeze({
@@ -83,6 +109,21 @@ function parseRecord(value) {
   }
 }
 
+function normalizedSha256(value) {
+  if (Buffer.isBuffer(value) || value instanceof Uint8Array) {
+    const bytes = Buffer.from(value);
+    return bytes.length === 32 ? bytes.toString('hex') : null;
+  }
+  const text = String(value || '').trim();
+  if (/^[a-f0-9]{64}$/i.test(text)) return text.toLowerCase();
+  try {
+    const bytes = Buffer.from(text, text.includes('-') || text.includes('_') ? 'base64url' : 'base64');
+    return bytes.length === 32 ? bytes.toString('hex') : null;
+  } catch {
+    return null;
+  }
+}
+
 function memoryText(memory, record) {
   if (Array.isArray(record.turns)) {
     const turns = record.turns.map((turn) => normalizeText(turn?.content)).filter(Boolean);
@@ -110,7 +151,11 @@ function sourceState(memory) {
   const id = normalizeId(memory?.id);
   const record = parseRecord(memory?.value);
   const embedding = parseEmbedding(memory?.embedding);
-  const contentHash = String(memory?.content_hash || '').trim().toLowerCase();
+  const contentHash = [
+    memory?.content_hash,
+    memory?.provenance_proof?.live_content_hash,
+    memory?.provenance_proof?.content_hash,
+  ].map(normalizedSha256).find(Boolean);
   const text = memoryText(memory, record);
   const sessionId = normalizeText(memory?.session_id || record.session_id || memory?.source);
   const observed = memory?.occurred_start || record.valid_from || record.observed_at || memory?.created_at;
@@ -118,7 +163,7 @@ function sourceState(memory) {
     ? record.turn_sequences.map(Number).filter(Number.isSafeInteger)
     : [Number.MAX_SAFE_INTEGER]));
   if (!id || !text || !sessionId || !embedding) fail('source_shape_invalid');
-  if (!/^[0-9a-f]{64}$/.test(contentHash)) fail('source_content_hash_invalid');
+  if (!contentHash) fail('source_content_hash_invalid');
   if (!memory?.provenance_proof) fail('source_provenance_missing');
   return Object.freeze({
     id,
@@ -132,6 +177,15 @@ function sourceState(memory) {
     turn_sequence: Number.isFinite(turnSequence) ? turnSequence : Number.MAX_SAFE_INTEGER,
     speakers: Object.freeze(speakers(record)),
   });
+}
+
+export function isHingeMemBoundaryInputEligible(memory) {
+  try {
+    sourceState(memory);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function cosine(left, right) {
@@ -285,16 +339,14 @@ export function buildHingeMemBoundaryProjection(memories = []) {
   });
 }
 
-export function retrieveHingeMemBoundaryProjection({
+function rankBoundaryProjectionMembers({
   queryEmbedding,
-  baselineMemories = [],
-  scopeMemories = [],
+  scopeMemories,
   projectionState = null,
-  limit = 20,
 } = {}) {
   const query = parseEmbedding(queryEmbedding);
   if (!query) fail('query_embedding_invalid');
-  if (!Array.isArray(baselineMemories) || baselineMemories.length === 0) fail('baseline_required');
+  if (!Array.isArray(scopeMemories) || scopeMemories.length === 0) fail('scope_memories_required');
   const scopeStates = scopeMemories.map(sourceState);
   const scopeById = new Map(scopeStates.map((state) => [state.id, state]));
   const built = projectionState || buildHingeMemBoundaryProjection(scopeMemories);
@@ -308,7 +360,8 @@ export function retrieveHingeMemBoundaryProjection({
     .slice(0, HINGEMEM_B_CONSTANTS.boundary_projection_limit);
 
   const boundaryRows = [];
-  for (const row of rankedProjections) {
+  for (let projectionIndex = 0; projectionIndex < rankedProjections.length; projectionIndex += 1) {
+    const row = rankedProjections[projectionIndex];
     const members = row.projection.source_memory_ids.map((id) => scopeById.get(id)).filter(Boolean)
       .map((state) => ({ id: state.id, member_score: cosine(query, state.embedding) ?? -1 }))
       .sort((left, right) => right.member_score - left.member_score || left.id.localeCompare(right.id));
@@ -317,19 +370,104 @@ export function retrieveHingeMemBoundaryProjection({
         id: member.id,
         projection_score: row.score,
         member_score: member.member_score,
+        projection_rank: projectionIndex + 1,
         projection_sha256: row.projection.projection_sha256,
       });
     }
   }
   boundaryRows.sort((left, right) => right.projection_score - left.projection_score
     || right.member_score - left.member_score
+    || left.projection_rank - right.projection_rank
     || left.id.localeCompare(right.id));
   const boundaryRank = new Map();
   for (const row of boundaryRows) {
     if (!boundaryRank.has(row.id) && boundaryRank.size < HINGEMEM_B_CONSTANTS.boundary_member_limit) {
-      boundaryRank.set(row.id, boundaryRank.size + 1);
+      boundaryRank.set(row.id, Object.freeze({ ...row, rank: boundaryRank.size + 1 }));
     }
   }
+  return Object.freeze({
+    built,
+    boundary_rows: Object.freeze([...boundaryRank.values()]),
+  });
+}
+
+export function composeHingeMemBoundaryMarginalGear({
+  queryEmbedding,
+  admittedMemories = [],
+  projectionState = null,
+  rankLimit = HINGEMEM_B_CONSTANTS.marginal_rank_limit,
+} = {}) {
+  if (!Array.isArray(admittedMemories) || admittedMemories.length === 0) fail('admitted_memories_required');
+  if (admittedMemories.length > HINGEMEM_B_CONSTANTS.marginal_maximum_states) {
+    fail('marginal_input_cap_exceeded');
+  }
+  if (admittedMemories.some((memory) => memory?.canary_admitted !== true)) {
+    fail('canary_admission_required');
+  }
+  const outputLimit = Math.max(1, Math.min(
+    HINGEMEM_B_CONSTANTS.marginal_rank_limit,
+    Math.floor(Number(rankLimit) || HINGEMEM_B_CONSTANTS.marginal_rank_limit),
+  ));
+  const ranked = rankBoundaryProjectionMembers({
+    queryEmbedding,
+    scopeMemories: admittedMemories,
+    projectionState,
+  });
+  const ranks = ranked.boundary_rows.slice(0, outputLimit).map((row, index) => Object.freeze({
+    id: row.id,
+    rank: index + 1,
+    score: Number((((row.projection_score + 1) + (row.member_score + 1)) / 4).toFixed(12)),
+    projection_rank: row.projection_rank,
+    projection_sha256: row.projection_sha256,
+  }));
+  const rankCommitment = sha256(`hom-aimos/hingemem-boundary-marginal-ranks/v1\0${ranks
+    .map((row) => `${row.id}:${row.rank}:${row.score}:${row.projection_sha256}`)
+    .join('\0')}`);
+  const decisionBody = {
+    schema: HINGEMEM_BOUNDARY_MARGINAL_CONTRACT.schema,
+    projection_set_sha256: ranked.built.decision.projection_set_sha256,
+    rank_commitment_sha256: rankCommitment,
+    source_count: ranked.built.decision.source_count,
+    projection_count: ranked.built.decision.projection_count,
+    emitted_rank_count: ranks.length,
+    source_partition_complete: ranked.built.decision.source_partition_complete,
+    candidate_set_authority: false,
+    graph_only_discovery_count: 0,
+    disclosure_authority: false,
+    automatic_activation: false,
+  };
+  return Object.freeze({
+    ranks: Object.freeze(ranks),
+    discovered_memories: Object.freeze([]),
+    decision: Object.freeze({
+      ...decisionBody,
+      decision_sha256: sha256(`hom-aimos/hingemem-boundary-marginal-decision/v1\0${JSON.stringify(decisionBody)}`),
+    }),
+    diagnostics: Object.freeze({
+      source_count: ranked.built.decision.source_count,
+      projection_count: ranked.built.decision.projection_count,
+      boundary_rank_count: ranks.length,
+      topic_clustering_used: false,
+      adaptive_stop_used: false,
+      model_boundary_extractor_used: false,
+    }),
+    guardrails: HINGEMEM_B_GUARDRAILS,
+    contract: HINGEMEM_BOUNDARY_MARGINAL_CONTRACT,
+  });
+}
+
+export function retrieveHingeMemBoundaryProjection({
+  queryEmbedding,
+  baselineMemories = [],
+  scopeMemories = [],
+  projectionState = null,
+  limit = 20,
+} = {}) {
+  if (!parseEmbedding(queryEmbedding)) fail('query_embedding_invalid');
+  if (!Array.isArray(baselineMemories) || baselineMemories.length === 0) fail('baseline_required');
+  const boundary = rankBoundaryProjectionMembers({ queryEmbedding, scopeMemories, projectionState });
+  const built = boundary.built;
+  const boundaryRank = new Map(boundary.boundary_rows.map((row) => [row.id, row.rank]));
 
   const baselineIds = baselineMemories.map((memory) => normalizeId(memory?.id));
   if (baselineIds.some((id) => !id) || new Set(baselineIds).size !== baselineIds.length) fail('baseline_identity_invalid');

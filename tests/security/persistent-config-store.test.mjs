@@ -111,6 +111,9 @@ test('MAGMA policy binds activation to the exact proof and unchanged preregister
   assert.equal(result.ok, true);
   assert.equal(result.policy.candidate_p95_ceiling_ms, 250);
   assert.equal(validateSystemConfigValue('MAGMA_RETRIEVAL_POLICY', valid).ok, true);
+  const dormant = JSON.stringify({ ...JSON.parse(valid), execution: 'dormant' });
+  assert.equal(validateMagmaRetrievalPolicy(dormant).ok, true);
+  assert.equal(validateSystemConfigValue('MAGMA_RETRIEVAL_POLICY', dormant).ok, true);
 
   const rejected = [
     { ...JSON.parse(valid), extra: true },
@@ -137,8 +140,10 @@ test('MAGMA v2 calibration adjusts only bounded gear mathematics and has no exec
     max_nodes: 200,
     result_limit: 20,
     beam_width: 5,
+    anchor_pool_limit: 20,
     rrf_k: 60,
     candidate_p95_ceiling_ms: 250,
+    candidate_p95_minimum_samples: 20,
     proof_sha256: 'a'.repeat(64),
     runner_sha256: 'b'.repeat(64),
   });
@@ -153,6 +158,9 @@ test('MAGMA v2 calibration adjusts only bounded gear mathematics and has no exec
     { ...JSON.parse(valid), max_nodes: 49 },
     { ...JSON.parse(valid), result_limit: 200 },
     { ...JSON.parse(valid), beam_width: 6 },
+    { ...JSON.parse(valid), anchor_pool_limit: 4 },
+    { ...JSON.parse(valid), anchor_pool_limit: 21 },
+    { ...JSON.parse(valid), candidate_p95_minimum_samples: 5 },
     { ...JSON.parse(valid), rrf_k: 61 },
   ]) {
     assert.equal(validateMagmaRetrievalCalibration(JSON.stringify(rejected)).ok, false);

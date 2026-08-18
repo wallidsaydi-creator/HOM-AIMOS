@@ -414,7 +414,7 @@ Query arrives
   ├─ 10. hyde_expansion ───────── If still low quality (top <= 0.5, avg < 0.3):
   │                                HyDE (Hypothetical Document Embedding) expands query
   │                                multi-stage retrieval with expanded embedding
-  ├─ 11. magma_native_gear ────── Bounded lineage evidence joins the central native RRF
+  ├─ 11. graph_family_g2 ───────── Bounded G2 evidence joins central RRF; MAGMA remains dormant research
   │                                baseline candidates remain candidate-monotone
   ├─ 12. early_exit_decision ──── If enabled by signed/request-scoped policy:
   │                                exit if (top_1 > 0.82 AND gap > 0.15)
@@ -639,14 +639,14 @@ Every service file contains a standardized header:
 // ─────────────────────────────────────────────────────────────────────────────
 ```
 
-**Pipeline Manifest:** `services/pipeline-manifest.js` — 156 declared service connections across 6 pipelines, validated at boot.
+**Pipeline Manifest:** `services/pipeline-manifest.js` — 153 declared service connections across 6 pipelines, validated at boot.
 
 **The 6 Pipelines:**
 
 | Pipeline | Entry | Declared service modules |
 |----------|-------|-------------------------:|
 | Save | `routes/aimos.js` | 13 |
-| Recall | `services/retrieval/native-recall-pipeline.js` | 78 |
+| Recall | `services/retrieval/native-recall-pipeline.js` | 75 |
 | Agent Run | `services/orchestration/agent-runner.js` | 34 |
 | Dream | `jobs/nightly-dream.js` | 20 |
 | Heartbeat | `jobs/heartbeat.js` | 1 |

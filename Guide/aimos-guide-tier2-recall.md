@@ -80,7 +80,7 @@ The `temporal_scope` field in `recall_meta` shows what the prelude found:
  8. reranking ──────────── Term overlap + recency boost (≤24h: +0.15, ≤7d: +0.10, ≤30d: +0.05)
  9. qmd_activation ─────── Low confidence? → structured FTS + key/metadata search
 10. hyde_expansion ─────── Still low? → HyDE expands query + multi-stage retrieval
-11. magma_native_gear ──── Bounded lineage evidence → central native RRF
+11. graph_family_g2 ────── Bounded G2 evidence → central native RRF; MAGMA is retained dormant research
 12. early_exit_decision ── High confidence? → skip optional enrichment, retain security closure
 13. salience_frequency_evaluation ── Annotate low-frequency evidence; never drop memories
 14. trust_scoring ──────── Rank by credit_score + access patterns

@@ -126,6 +126,32 @@ test('candidate is an additive subgear but graph family retains one outer vote',
   assert.equal(family.discovered_memories.length, 0);
 });
 
+test('R5F graph-family pooling removes duplicate-state slots before its rank limit', () => {
+  const projection = {
+    occurrence_view: [
+      { company_id: 'hom', memory_id: 'a1', live_content_hash: digest('a') },
+      { company_id: 'hom', memory_id: 'a2', live_content_hash: digest('a') },
+      { company_id: 'hom', memory_id: 'b1', live_content_hash: digest('b') },
+    ],
+    decision: { decision_sha256: digest('d') },
+  };
+  const family = fuseBoundedGraphFamily({
+    magmaGear: { ranks: [
+      { id: 'a1', rank: 1, score: 1 },
+      { id: 'a2', rank: 2, score: 0.9 },
+      { id: 'b1', rank: 3, score: 0.8 },
+    ] },
+    contentStateProjection: projection,
+    limit: 2,
+  });
+  assert.deepEqual(family.ranks.map((row) => row.id), ['a1', 'b1']);
+  assert.equal(family.decision.input_occurrence_rank_count, 3);
+  assert.equal(family.decision.emitted_state_rank_count, 2);
+  assert.equal(family.decision.collapsed_occurrence_rank_count, 1);
+  assert.equal(family.decision.content_state_deduplicated, true);
+  assert.equal(family.decision.content_state_projection_decision_sha256, digest('d'));
+});
+
 test('duplicate graph signal cannot multiply graph-family score', () => {
   const magmaGear = { ranks: [{ id: 'a', rank: 1, score: 1 }, { id: 'b', rank: 2, score: 0.9 }] };
   const reconstructed = { ranks: [{ id: 'c', rank: 1, score: 0.8 }, { id: 'b', rank: 2, score: 0.7 }] };
@@ -160,7 +186,7 @@ test('candidate cannot smuggle discoveries through the graph-family combiner', (
   assert.equal(family.decision.candidate_discovery_count, 0);
 });
 
-test('new source owns no database, network, server, model, ENV, or mutation authority', () => {
+test('pure reconstructed kernels own no database, network, server, model, ENV, or mutation authority', () => {
   const marginalSource = readFileSync(new URL('../../services/retrieval/reconstructed-graph-additive/reconstructed-graph-marginal-gear.js', import.meta.url), 'utf8');
   const familySource = readFileSync(new URL('../../services/retrieval/reconstructed-graph-additive/graph-family-bounded-fusion.js', import.meta.url), 'utf8');
   for (const source of [marginalSource, familySource]) {
@@ -168,5 +194,5 @@ test('new source owns no database, network, server, model, ENV, or mutation auth
     assert.doesNotMatch(source, /openai|anthropic|ollama|provider|chatgpt/i);
   }
   assert.equal(RECONSTRUCTED_GRAPH_MARGINAL_GEAR_CONTRACT.runtime_wired, false);
-  assert.equal(GRAPH_FAMILY_BOUNDED_FUSION_CONTRACT.runtime_wired, false);
+  assert.equal(GRAPH_FAMILY_BOUNDED_FUSION_CONTRACT.runtime_wired, true);
 });

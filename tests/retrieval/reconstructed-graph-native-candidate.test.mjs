@@ -80,6 +80,33 @@ test('native adapter owns the single bounded graph-family runtime channel', () =
   assert.equal(family.decision.candidate_discovery_count, 0);
 });
 
+test('R5G native reconstructed workspace binds a pre-cap content-state selection', () => {
+  const decision = {
+    unique_candidate_count: 3,
+    selected_state_count: 2,
+    collapsed_occurrence_count: 1,
+    decision_sha256: digest('d'),
+  };
+  const result = composeReconstructedGraphNativeCandidate({
+    admittedMemories: admittedMemories().slice(0, 2),
+    queryText: 'Quasar screenplay',
+    contentStateSelectionDecision: decision,
+    requireContentStateSelection: true,
+  });
+  assert.equal(RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT.one_workspace_node_per_verified_content_state, true);
+  assert.equal(result.decision.content_state_selection_decision_sha256, digest('d'));
+  assert.equal(result.decision.content_state_input_occurrence_count, 3);
+  assert.equal(result.decision.content_state_selected_state_count, 2);
+  assert.equal(result.decision.content_state_workspace_count, 2);
+  assert.equal(result.decision.content_state_collapsed_occurrence_count, 1);
+  assert.equal(result.decision.one_workspace_node_per_verified_content_state, true);
+  assert.throws(() => composeReconstructedGraphNativeCandidate({
+    admittedMemories: admittedMemories().slice(0, 2),
+    queryText: 'Quasar screenplay',
+    requireContentStateSelection: true,
+  }), /content_state_selection_required/);
+});
+
 test('native adapter rejects any candidate that lacks Canary admission', () => {
   const memories = admittedMemories();
   memories[1] = { ...memories[1], canary_admitted: false };
@@ -118,6 +145,7 @@ test('native adapter bounds only its transient workspace to the proven 40-candid
   });
   assert.equal(RECONSTRUCTED_GRAPH_NATIVE_CANDIDATE_CONTRACT.native_workspace_states, 40);
   assert.equal(result.decision.admitted_population, 40);
+  assert.equal(result.decision.content_state_workspace_count, 40);
   assert.equal(result.decision.workspace_population, 40);
   assert.equal(result.diagnostics.workspace_capped, true);
 });

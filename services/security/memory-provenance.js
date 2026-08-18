@@ -75,6 +75,14 @@ import {
   retainedProvenanceMerkleRoot,
 } from './protocol/mutmem-protocol.js';
 import { signedMemoryValueMatchesRetained } from './protocol/memory-value.js';
+import {
+  CONTENT_STATE_OCCURRENCE_V3,
+  computeLegacyOccurrenceReference,
+  computeOccurrenceCommitmentV3,
+  verifyOccurrenceSignatureV3,
+} from './protocol/content-state-occurrence-v3.js';
+import { readVerifiedRequestReceiptByMutationHash } from './request-receipt-ledger.js';
+import { readVerifiedEventById } from '../observe/event-ledger.js';
 export {
   retainedProvenanceLeafHash,
   retainedProvenanceMerkleRoot,
@@ -202,6 +210,167 @@ function parseJsonObject(value) {
   } catch {
     return null;
   }
+}
+
+export function occurrenceReferenceForProvenanceRow(row, companyId) {
+  if (Number(row.sig_form_version || 1) === 3) {
+    const commitment = Buffer.from(row.mutation_hash || []);
+    if (commitment.length !== HASH_BYTES) throw new Error('occurrence_v3_commitment_shape_invalid');
+    return commitment.toString('hex');
+  }
+  const validFromMs = new Date(row.agent_valid_from).getTime();
+  if (!Number.isSafeInteger(validFromMs)) throw new Error('legacy_occurrence_signer_epoch_invalid');
+  return computeLegacyOccurrenceReference({
+    company_id: companyId,
+    memory_id: row.memory_id,
+    provenance_id: row.provenance_id,
+    mutation_hash_hex: Buffer.from(row.mutation_hash || []).toString('hex'),
+    agent_id: row.provenance_agent_id || row.agent_id,
+    signer_valid_from_unix_ms: validFromMs,
+    cert_fingerprint_hex: row.cert_fingerprint,
+    event_type: String(row.event_type || 'SAVE').toUpperCase(),
+    sig_form_version: Number(row.sig_form_version || 1),
+  });
+}
+
+/**
+ * Order a mixed legacy/v3 provenance stream by occurrence references.
+ * Legacy predecessor columns still contain legacy mutation hashes, whereas v3
+ * predecessor columns contain occurrence references. This bridge preserves all
+ * retained bytes and makes the transition verifiable without rewriting them.
+ */
+export function orderProvenanceRowsByOccurrenceTopology(rows = [], companyId) {
+  if (!Array.isArray(rows) || rows.length === 0) return [];
+  const references = new Map();
+  const legacyByMutation = new Map();
+  for (const row of rows) {
+    const reference = occurrenceReferenceForProvenanceRow(row, companyId);
+    if (references.has(reference)) throw new Error('provenance_occurrence_reference_duplicate');
+    references.set(reference, row);
+    if (Number(row.sig_form_version || 1) !== 3) {
+      const mutation = Buffer.from(row.mutation_hash || []).toString('hex');
+      if (legacyByMutation.has(mutation)) throw new Error('provenance_legacy_mutation_duplicate');
+      legacyByMutation.set(mutation, reference);
+    }
+  }
+
+  const children = new Map();
+  const roots = [];
+  for (const [reference, row] of references) {
+    let predecessor = null;
+    if (row.prev_mutation_hash != null) {
+      const stored = Buffer.from(row.prev_mutation_hash).toString('hex');
+      predecessor = Number(row.sig_form_version || 1) === 3
+        ? stored
+        : legacyByMutation.get(stored) || (references.has(stored) ? stored : null);
+      if (!predecessor || !references.has(predecessor)) {
+        throw new Error('provenance_occurrence_predecessor_missing');
+      }
+      if (children.has(predecessor)) throw new Error('provenance_occurrence_fork');
+      children.set(predecessor, reference);
+    } else {
+      roots.push(reference);
+    }
+  }
+  if (roots.length !== 1) throw new Error('provenance_occurrence_genesis_invalid');
+  const ordered = [];
+  const visited = new Set();
+  let cursor = roots[0];
+  while (cursor) {
+    if (visited.has(cursor) || !references.has(cursor)) throw new Error('provenance_occurrence_cycle');
+    visited.add(cursor);
+    ordered.push(references.get(cursor));
+    cursor = children.get(cursor) || null;
+  }
+  if (ordered.length !== rows.length) throw new Error('provenance_occurrence_disconnected');
+  return ordered;
+}
+
+export function verifyOccurrenceEvidenceRowV3(row = {}) {
+  const body = parseJsonObject(row.body_json);
+  if (!body || body.schema !== CONTENT_STATE_OCCURRENCE_V3.schema) {
+    return { valid: false, reason: 'occurrence_v3_body_missing' };
+  }
+  if (!row.signer_pubkey || !row.signer_cert || !row.agent_valid_from
+      || !Buffer.isBuffer(row.sig) || row.sig.length !== 64) {
+    return { valid: false, reason: 'occurrence_v3_signer_material_missing' };
+  }
+  const certBody = parseCertificateBody(row.signer_cert);
+  const certificateFingerprint = createHash('sha256')
+    .update(String(row.signer_cert), 'utf8')
+    .digest('hex');
+  const signedTs = Number(row.ts_signed);
+  const certAuthorityPubkey = resolveCertificateAuthorityPubkey({
+    certificateBody: certBody,
+    subjectPubkey: row.signer_pubkey,
+    masterPubkey: row.master_pubkey,
+    masterFingerprint: row.master_fingerprint,
+  });
+  if (!certBody || !certAuthorityPubkey || certificateFingerprint !== row.cert_fingerprint) {
+    return { valid: false, reason: 'occurrence_v3_signer_identity_mismatch' };
+  }
+  const certificate = verifyCertChain(row.signer_cert, certAuthorityPubkey, {
+    nowFn: () => signedTs,
+  });
+  if (!certificate.valid
+      || certBody.agent_id !== row.provenance_agent_id
+      || certBody.pubkey !== row.signer_pubkey
+      || Number(certBody.valid_from) !== Math.floor(new Date(row.agent_valid_from).getTime() / 1000)) {
+    return { valid: false, reason: certificate.reason || 'occurrence_v3_certificate_mismatch' };
+  }
+  if (row.revocation_sig && Number(row.revocation_ts_signed) <= signedTs) {
+    return { valid: false, reason: 'occurrence_v3_signer_revoked_before_event' };
+  }
+  const expectedRecord = {
+    company_id: String(row.live_company_id),
+    occurrence_event_id: String(row.provenance_id).toLowerCase(),
+    memory_id: String(row.memory_id).toLowerCase(),
+    event_type: String(row.event_type || '').toUpperCase(),
+    live_content_hash_hex: Buffer.from(row.live_content_hash || []).toString('hex'),
+    predecessor_present: row.prev_mutation_hash == null ? 0 : 1,
+    predecessor_commitment_hex: row.prev_mutation_hash
+      ? Buffer.from(row.prev_mutation_hash).toString('hex')
+      : '',
+    agent_id: String(row.provenance_agent_id),
+    signer_valid_from_unix_ms: new Date(row.agent_valid_from).getTime(),
+    cert_fingerprint_hex: String(row.cert_fingerprint),
+    identity_tier: String(row.identity_tier || '').toUpperCase(),
+    sig_form_version: 3,
+    nonce_hex: String(row.nonce || '').toLowerCase(),
+    ts_signed_unix_seconds: signedTs,
+    signed_method: String(body.signed_method || ''),
+    signed_path: String(body.signed_path || ''),
+    request_body_hash_hex: Buffer.from(row.prov_content_hash || []).toString('hex'),
+    request_receipt_present: Number(body.request_receipt_present),
+    request_receipt_mutation_hash_hex: String(body.request_receipt_mutation_hash_hex || ''),
+    authorization_event_present: Number(body.authorization_event_present),
+    authorization_event_id: String(body.authorization_event_id || ''),
+  };
+  let commitment;
+  try { commitment = computeOccurrenceCommitmentV3(expectedRecord); }
+  catch { return { valid: false, reason: 'occurrence_v3_encoding_invalid' }; }
+  const exactBody = body.occurrence_commitment === commitment
+    && Object.entries(expectedRecord).every(([key, value]) => body[key] === value);
+  if (!exactBody || commitment !== Buffer.from(row.mutation_hash || []).toString('hex')) {
+    return { valid: false, reason: 'occurrence_v3_commitment_mismatch' };
+  }
+  if (!verifyOccurrenceSignatureV3(expectedRecord, row.sig, row.signer_pubkey)) {
+    return { valid: false, reason: 'occurrence_v3_signature_invalid' };
+  }
+  const liveFields = {
+    key: row.live_key,
+    value: row.live_value,
+    scope: row.live_scope,
+    memory_type: row.live_memory_type,
+    clearance_level: row.live_clearance_level,
+    data_class: row.live_data_class,
+    source: row.live_source,
+  };
+  if (!verifyLiveRowContentHash(liveFields, Buffer.from(row.live_content_hash || []))
+      || !buffersEqual(row.live_content_hash, row.snapshot_live_content_hash)) {
+    return { valid: false, reason: 'occurrence_v3_live_content_mismatch' };
+  }
+  return { valid: true, reason: null, record: expectedRecord, commitment };
 }
 
 /**
@@ -730,9 +899,24 @@ export function createMemoryProvenanceLedger(deps = {}) {
     return _agentValidFromColumn;
   }
 
+  async function getLatestOccurrenceReference(memoryId, companyId, client) {
+    const run = runner(client);
+    const result = await run(
+      `SELECT provenance_id, memory_id, agent_id, agent_id AS provenance_agent_id,
+              agent_valid_from, cert_fingerprint, mutation_hash,
+              prev_mutation_hash, event_type, sig_form_version
+         FROM aimos_memory_provenance
+        WHERE memory_id = $1`,
+      [memoryId],
+    );
+    const ordered = orderProvenanceRowsByOccurrenceTopology(result.rows || [], companyId);
+    if (!ordered.length) return null;
+    return occurrenceReferenceForProvenanceRow(ordered[ordered.length - 1], companyId);
+  }
+
   async function getLatestMutationHash(memoryId, client) {
     const run = runner(client);
-    const r = await run(
+    const legacyTopology = await run(
       `SELECT mutation_hash
          FROM (
            SELECT candidate.mutation_hash
@@ -747,19 +931,28 @@ export function createMemoryProvenanceLedger(deps = {}) {
             ORDER BY encode(candidate.mutation_hash, 'hex')
             LIMIT 2
          ) topology_heads`,
-      [memoryId]
+      [memoryId],
     );
-    if (!r || !Array.isArray(r.rows)) throw new Error('provenance_topology_read_invalid');
-    if (r.rows.length > 1) throw new Error('provenance_topology_multiple_heads');
-    if (r.rows.length === 0) {
-      const retained = await run(
-        'SELECT 1 FROM aimos_memory_provenance WHERE memory_id = $1 LIMIT 1',
-        [memoryId]
-      );
-      if (retained?.rows?.[0]) throw new Error('provenance_topology_no_head');
-      return { prevMutationHash: null, isGenesis: true };
+    if (!legacyTopology || !Array.isArray(legacyTopology.rows)) {
+      throw new Error('provenance_topology_read_invalid');
     }
-    return { prevMutationHash: r.rows[0].mutation_hash, isGenesis: false };
+    if (legacyTopology.rows.length === 0) return { prevMutationHash: null, isGenesis: true };
+    if (legacyTopology.rows.length === 1) {
+      return { prevMutationHash: legacyTopology.rows[0].mutation_hash, isGenesis: false };
+    }
+    // A mixed v1/v2/v3 stream has two apparent heads under the legacy hash
+    // namespace because the first v3 predecessor is a derived occurrence
+    // reference. Resolve it only then; the unchanged legacy hot path remains
+    // one indexed query.
+    const memory = await run('SELECT company_id FROM aimos_memories WHERE id = $1', [memoryId]);
+    if (!memory?.rows?.[0]) throw new Error('provenance_memory_missing');
+    const latest = await getLatestOccurrenceReference(
+      memoryId,
+      memory.rows[0].company_id,
+      client,
+    );
+    if (!latest) throw new Error('provenance_occurrence_topology_no_head');
+    return { prevMutationHash: Buffer.from(latest, 'hex'), isGenesis: false };
   }
 
   function _validate(args) {
@@ -790,11 +983,13 @@ export function createMemoryProvenanceLedger(deps = {}) {
 
   async function _insert(client, fields) {
     const {
+      provenanceId = null,
       memoryId, agentId, agentValidFrom, certFingerprint, cHash,
       mutationHash, prevMutationHash, signedTs, nonce, sigBytes,
       identityTier, isGenesis, eventType, bodyJson, liveContentHash,
       bindingSchemaVersion, memoryOriginatedAt,
       requestSigForm, signedMethod, signedPath, signedClaims,
+      sigFormVersion = 1,
     } = fields;
     // R3 Step 5: bind to the identity EPOCH (agent_id, agent_valid_from) when the
     // column exists. A NULL agent_valid_from leaves the composite FK unchecked
@@ -805,12 +1000,13 @@ export function createMemoryProvenanceLedger(deps = {}) {
     if (includeEpoch) {
       await client.query(
         `INSERT INTO aimos_memory_provenance
-            (memory_id, agent_id, agent_valid_from, cert_fingerprint, content_hash,
+            (provenance_id, memory_id, agent_id, agent_valid_from, cert_fingerprint, content_hash,
              mutation_hash, prev_mutation_hash, ts_signed, nonce, sig,
              identity_tier, is_genesis, backfilled,
              event_type, body_json, live_content_hash, binding_schema_version,
-             memory_originated_at, request_sig_form, signed_method, signed_path, signed_claims)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, false, $13, $14, $15, $16, $17, $18, $19, $20, $21)`,
+             memory_originated_at, request_sig_form, signed_method, signed_path, signed_claims,
+             sig_form_version)
+         VALUES (COALESCE($18::uuid, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, false, $13, $14, $15, $16, $17, $20, $21, $22, $23, $19)`,
         [
           memoryId, agentId, validFromValue, certFingerprint, cHash,
           mutationHash, prevMutationHash, signedTs, nonce, sigBytes,
@@ -819,6 +1015,8 @@ export function createMemoryProvenanceLedger(deps = {}) {
           bodyJson != null ? JSON.stringify(bodyJson) : null,
           liveContentHash || null,
           bindingSchemaVersion, memoryOriginatedAt || null,
+          provenanceId,
+          Number(sigFormVersion),
           requestSigForm, signedMethod, signedPath,
           signedClaims ? JSON.stringify(signedClaims) : null,
         ]
@@ -826,12 +1024,13 @@ export function createMemoryProvenanceLedger(deps = {}) {
     } else {
       await client.query(
         `INSERT INTO aimos_memory_provenance
-            (memory_id, agent_id, cert_fingerprint, content_hash,
+            (provenance_id, memory_id, agent_id, cert_fingerprint, content_hash,
              mutation_hash, prev_mutation_hash, ts_signed, nonce, sig,
              identity_tier, is_genesis, backfilled,
              event_type, body_json, live_content_hash, binding_schema_version,
-             memory_originated_at, request_sig_form, signed_method, signed_path, signed_claims)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false, $12, $13, $14, $15, $16, $17, $18, $19, $20)`,
+             memory_originated_at, request_sig_form, signed_method, signed_path, signed_claims,
+             sig_form_version)
+         VALUES (COALESCE($17::uuid, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false, $12, $13, $14, $15, $16, $19, $20, $21, $22, $18)`,
         [
           memoryId, agentId, certFingerprint, cHash,
           mutationHash, prevMutationHash, signedTs, nonce, sigBytes,
@@ -840,6 +1039,8 @@ export function createMemoryProvenanceLedger(deps = {}) {
           bodyJson != null ? JSON.stringify(bodyJson) : null,
           liveContentHash || null,                      // Phase 9b snapshot (NULL for REWEIGHT/backfill)
           bindingSchemaVersion, memoryOriginatedAt || null,
+          provenanceId,
+          Number(sigFormVersion),
           requestSigForm, signedMethod, signedPath,
           signedClaims ? JSON.stringify(signedClaims) : null,
         ]
@@ -990,6 +1191,142 @@ export function createMemoryProvenanceLedger(deps = {}) {
     }
   }
 
+  /**
+   * Append one successor-form occurrence to an existing content state.
+   * The caller pre-generates and signs the complete event, while this owner
+   * serializes the stream and rechecks its predecessor inside the transaction.
+   */
+  async function commitOccurrenceV3({
+    companyId,
+    memoryId,
+    record,
+    signature,
+    certString,
+    liveContentHash,
+    client = null,
+  }) {
+    const storedTier = record?.identity_tier === 'T1_SYSTEM_SELF' ? 'T1' : record?.identity_tier;
+    const commitmentHex = computeOccurrenceCommitmentV3(record);
+    const certificateBody = parseCertificateBody(certString);
+    const certFingerprint = createHash('sha256').update(String(certString || ''), 'utf8').digest('hex');
+    if (!certificateBody
+        || String(record?.company_id) !== String(companyId)
+        || String(record?.memory_id).toLowerCase() !== String(memoryId).toLowerCase()
+        || String(record?.occurrence_event_id || '').length === 0
+        || !['SAVE_REASSERT', 'INTERNAL_SAVE_REASSERT'].includes(String(record?.event_type))
+        || Number(record?.sig_form_version) !== 3
+        || record?.agent_id !== certificateBody.agent_id
+        || Number(record?.signer_valid_from_unix_ms) !== new Date(
+          Number(certificateBody.valid_from) < 10_000_000_000
+            ? Number(certificateBody.valid_from) * 1000
+            : Number(certificateBody.valid_from),
+        ).getTime()
+        || record?.cert_fingerprint_hex !== certFingerprint
+        || !Buffer.isBuffer(signature)
+        || signature.length !== 64
+        || !verifyOccurrenceSignatureV3(record, signature, certificateBody.pubkey)
+        || Buffer.from(String(record.live_content_hash_hex), 'hex').length !== HASH_BYTES
+        || !Buffer.from(String(record.live_content_hash_hex), 'hex').equals(Buffer.from(liveContentHash || []))) {
+      return { ok: false, reason: 'occurrence_v3_input_invalid' };
+    }
+    const ownsTransaction = !client;
+    const conn = client || await pool.connect();
+    try {
+      if (ownsTransaction) await conn.query('BEGIN');
+      await conn.query(
+        'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`memory-occurrence:${String(companyId).length}:${companyId}:${memoryId}`],
+      );
+      const signer = await conn.query(
+        `SELECT identity.pubkey, identity.cert, identity.device_fp,
+                master.master_pubkey, master.fingerprint AS master_fingerprint,
+                revocation.ts_signed AS revocation_ts_signed
+           FROM agent_identity identity
+           LEFT JOIN aimos_master_identity master ON master.id = 1
+           LEFT JOIN aimos_agent_revocation_events revocation
+             ON revocation.agent_id = identity.agent_id
+            AND revocation.agent_valid_from = identity.valid_from
+          WHERE identity.agent_id = $1
+            AND identity.valid_from = $2
+            AND identity.cert = $3
+          FOR SHARE OF identity`,
+        [record.agent_id, new Date(Number(record.signer_valid_from_unix_ms)).toISOString(), certString],
+      );
+      const signerRow = signer.rows[0];
+      const certAuthority = resolveCertificateAuthorityPubkey({
+        certificateBody,
+        subjectPubkey: signerRow?.pubkey,
+        masterPubkey: signerRow?.master_pubkey,
+        masterFingerprint: signerRow?.master_fingerprint,
+      });
+      const certificate = certAuthority
+        ? verifyCertChain(certString, certAuthority, {
+            nowFn: () => Number(record.ts_signed_unix_seconds),
+          })
+        : { valid: false };
+      if (!signerRow
+          || signerRow.revocation_ts_signed != null
+          || signerRow.pubkey !== certificateBody.pubkey
+          || !certificate.valid) {
+        if (ownsTransaction) await conn.query('ROLLBACK');
+        return { ok: false, reason: 'occurrence_v3_signer_epoch_invalid' };
+      }
+      const predecessor = await getLatestOccurrenceReference(memoryId, companyId, conn);
+      const expectedPredecessor = record.predecessor_present === 1
+        ? String(record.predecessor_commitment_hex || '').toLowerCase()
+        : null;
+      if (!predecessor || expectedPredecessor !== predecessor) {
+        if (ownsTransaction) await conn.query('ROLLBACK');
+        return { ok: false, reason: 'occurrence_v3_predecessor_mismatch', currentHead: predecessor };
+      }
+      await _insert(conn, {
+        provenanceId: record.occurrence_event_id,
+        memoryId,
+        agentId: record.agent_id,
+        agentValidFrom: new Date(Number(record.signer_valid_from_unix_ms)).toISOString(),
+        certFingerprint,
+        cHash: Buffer.from(record.request_body_hash_hex, 'hex'),
+        mutationHash: Buffer.from(commitmentHex, 'hex'),
+        prevMutationHash: Buffer.from(predecessor, 'hex'),
+        signedTs: Number(record.ts_signed_unix_seconds),
+        nonce: String(record.nonce_hex),
+        sigBytes: signature,
+        identityTier: storedTier,
+        isGenesis: false,
+        eventType: record.event_type,
+        bodyJson: { ...record, schema: CONTENT_STATE_OCCURRENCE_V3.schema, occurrence_commitment: commitmentHex },
+        liveContentHash: Buffer.from(liveContentHash),
+        bindingSchemaVersion: 1,
+        memoryOriginatedAt: null,
+        requestSigForm: 1,
+        signedMethod: null,
+        signedPath: null,
+        signedClaims: null,
+        sigFormVersion: 3,
+      });
+      if (ownsTransaction) await conn.query('COMMIT');
+      return {
+        ok: true,
+        provenanceId: record.occurrence_event_id,
+        contentHash: Buffer.from(record.request_body_hash_hex, 'hex'),
+        mutationHash: Buffer.from(commitmentHex, 'hex'),
+        prevMutationHash: Buffer.from(predecessor, 'hex'),
+        isGenesis: false,
+        sigFormVersion: 3,
+      };
+    } catch (error) {
+      if (ownsTransaction) {
+        try { await conn.query('ROLLBACK'); } catch { /* connection may be gone */ }
+      }
+      if (error.code === '23505') {
+        return { ok: false, reason: 'occurrence_v3_replay_or_fork' };
+      }
+      throw error;
+    } finally {
+      if (ownsTransaction) conn.release();
+    }
+  }
+
   async function getProvenanceRow(memoryId, mutationHash, { retry = 5, sleepMs = 50 } = {}) {
     if (!Buffer.isBuffer(mutationHash)) {
       throw new Error('getProvenanceRow: mutationHash must be Buffer');
@@ -1015,16 +1352,23 @@ export function createMemoryProvenanceLedger(deps = {}) {
 
   async function getProvenanceChain(memoryId) {
     const r = await queryFn(
-      `SELECT provenance_id, memory_id, agent_id, cert_fingerprint,
-              content_hash, mutation_hash, prev_mutation_hash,
-              ts_signed, nonce, sig, identity_tier, is_genesis,
-              backfilled, memory_originated_at, legacy_envelope_sig,
-              created_at
-         FROM aimos_memory_provenance
-        WHERE memory_id = $1`,
+      `SELECT p.provenance_id, p.memory_id, p.agent_id,
+              p.agent_id AS provenance_agent_id, p.agent_valid_from,
+              p.cert_fingerprint, p.content_hash, p.mutation_hash,
+              p.prev_mutation_hash, p.ts_signed, p.nonce, p.sig,
+              p.identity_tier, p.is_genesis, p.backfilled,
+              p.memory_originated_at, p.legacy_envelope_sig,
+              p.sig_form_version, p.event_type, p.created_at,
+              m.company_id
+         FROM aimos_memory_provenance p
+         JOIN aimos_memories m ON m.id = p.memory_id
+        WHERE p.memory_id = $1`,
       [memoryId]
     );
-    return orderProvenanceRowsByTopology(r?.rows || []);
+    return orderProvenanceRowsByOccurrenceTopology(
+      r?.rows || [],
+      r?.rows?.[0]?.company_id,
+    );
   }
 
   // ─── Phase 8 + Phase 9a: /recall choke-point verify ───────────────────────
@@ -1067,16 +1411,25 @@ export function createMemoryProvenanceLedger(deps = {}) {
       return { verified: new Set(), rejected: [], shadow: [], missing: [], unhashed: [] };
     }
     const r = await queryFn(
-      `SELECT p.memory_id AS memory_id,
+      `SELECT p.provenance_id,
+              p.memory_id AS memory_id,
+              p.agent_id,
+              p.agent_id AS provenance_agent_id,
+              p.agent_valid_from,
+              p.cert_fingerprint,
               p.content_hash AS prov_content_hash,
               p.mutation_hash,
               p.prev_mutation_hash,
               p.ts_signed,
               p.nonce,
+              p.event_type,
+              p.identity_tier,
+              p.body_json,
               p.sig_form_version,
               p.memory_originated_at,
               p.live_content_hash AS snapshot_live_content_hash,
               m.content_hash AS live_content_hash,
+              m.company_id AS live_company_id,
               m.key AS live_key,
               m.value AS live_value,
               m.scope AS live_scope,
@@ -1108,7 +1461,10 @@ export function createMemoryProvenanceLedger(deps = {}) {
       }
       let row;
       try {
-        row = orderProvenanceRowsByTopology(provenanceRows).at(-1);
+        row = orderProvenanceRowsByOccurrenceTopology(
+          provenanceRows,
+          provenanceRows[0].live_company_id,
+        ).at(-1);
       } catch (error) {
         const entry = {
           memory_id: memoryId,
@@ -1127,7 +1483,11 @@ export function createMemoryProvenanceLedger(deps = {}) {
       const nonce = String(row.nonce);
       let check1Ok = false;
       try {
-        if (Number(row.sig_form_version) === 2) {
+        if (Number(row.sig_form_version) === 3) {
+          const body = parseJsonObject(row.body_json);
+          check1Ok = body?.occurrence_commitment === expectedBuf.toString('hex')
+            && computeOccurrenceCommitmentV3(body) === expectedBuf.toString('hex');
+        } else if (Number(row.sig_form_version) === 2) {
           const moaUnix = row.memory_originated_at
             ? Math.floor(new Date(row.memory_originated_at).getTime() / 1000)
             : 0;
@@ -1417,36 +1777,12 @@ export function createMemoryProvenanceLedger(deps = {}) {
         continue;
       }
 
-      const byMutation = new Map();
-      const successorByPrev = new Map();
-      const genesis = [];
       let nodeFailure = null;
-      for (const row of provenanceRows) {
-        const mutationHex = Buffer.from(row.mutation_hash || []).toString('hex');
-        const prevHex = row.prev_mutation_hash ? Buffer.from(row.prev_mutation_hash).toString('hex') : null;
-        if (byMutation.has(mutationHex) || (prevHex && successorByPrev.has(prevHex))) {
-          nodeFailure = 'provenance_fork_or_duplicate';
-          break;
-        }
-        byMutation.set(mutationHex, row);
-        if (prevHex) successorByPrev.set(prevHex, mutationHex);
-        else genesis.push(mutationHex);
-      }
-      if (!nodeFailure && genesis.length !== 1) nodeFailure = 'provenance_genesis_invalid';
-      let visited = new Set();
-      const orderedRows = [];
-      if (!nodeFailure) {
-        let cursor = genesis[0];
-        while (cursor) {
-          if (visited.has(cursor) || !byMutation.has(cursor)) {
-            nodeFailure = 'provenance_cycle_or_missing_link';
-            break;
-          }
-          visited.add(cursor);
-          orderedRows.push(byMutation.get(cursor));
-          cursor = successorByPrev.get(cursor) || null;
-        }
-        if (!nodeFailure && visited.size !== byMutation.size) nodeFailure = 'provenance_disconnected';
+      let orderedRows = [];
+      try {
+        orderedRows = orderProvenanceRowsByOccurrenceTopology(provenanceRows, base.live_company_id);
+      } catch (error) {
+        nodeFailure = error?.message || 'provenance_occurrence_topology_invalid';
       }
       const portableBindings = orderedRows.filter(
         (row) => row.event_type === 'BIND' && [3, 4].includes(Number(row.binding_schema_version)),
@@ -1462,9 +1798,69 @@ export function createMemoryProvenanceLedger(deps = {}) {
       const retainedAttestRow = retainedAttestRows[0] || null;
       const retainedAttestIndex = retainedAttestRow ? orderedRows.indexOf(retainedAttestRow) : -1;
       let legacyUnverifiedNodes = 0;
+      const v3AuthorityByProvenance = new Map();
       if (!nodeFailure) {
         for (let index = 0; index < orderedRows.length; index += 1) {
           const row = orderedRows[index];
+          if (Number(row.sig_form_version || 1) === 3) {
+            const occurrence = verifyOccurrenceEvidenceRowV3(row);
+            if (!occurrence.valid) {
+              nodeFailure = occurrence.reason;
+              break;
+            }
+            const record = occurrence.record;
+            if (record.request_receipt_present === 0) {
+              if (!record.event_type.startsWith('INTERNAL_') || record.authorization_event_present !== 0) {
+                nodeFailure = 'occurrence_v3_internal_authority_invalid';
+                break;
+              }
+              v3AuthorityByProvenance.set(String(row.provenance_id), {
+                actorAgentId: row.provenance_agent_id,
+                actorValidFromIso: new Date(row.agent_valid_from).toISOString(),
+                actorCertFingerprint: row.cert_fingerprint,
+              });
+              continue;
+            }
+            let requestAuthority;
+            try {
+              requestAuthority = await readVerifiedRequestReceiptByMutationHash({
+                companyId: base.live_company_id,
+                requestReceiptMutationHash: record.request_receipt_mutation_hash_hex,
+                client,
+              });
+            } catch {
+              nodeFailure = 'occurrence_v3_request_receipt_invalid';
+              break;
+            }
+            if (requestAuthority.requestHash !== record.request_body_hash_hex
+                || requestAuthority.signedMethod !== record.signed_method
+                || requestAuthority.signedPath !== record.signed_path
+                || record.authorization_event_present !== 1) {
+              nodeFailure = 'occurrence_v3_request_binding_invalid';
+              break;
+            }
+            let admission;
+            try {
+              admission = await readVerifiedEventById(
+                record.authorization_event_id,
+                base.live_company_id,
+                { client },
+              );
+            } catch {
+              nodeFailure = 'occurrence_v3_authorization_event_invalid';
+              break;
+            }
+            const metadata = parseJsonObject(admission.metadata);
+            if (admission.operation !== 'request_admission_verified'
+                || admission.agent_id !== requestAuthority.actorAgentId
+                || metadata?.request_receipt_mutation_hash !== record.request_receipt_mutation_hash_hex
+                || metadata?.request_hash !== record.request_body_hash_hex) {
+              nodeFailure = 'occurrence_v3_authorization_binding_invalid';
+              break;
+            }
+            v3AuthorityByProvenance.set(String(row.provenance_id), requestAuthority);
+            continue;
+          }
           const structural = verifyRetainedMutationNode(row);
           if (!structural.valid) {
             nodeFailure = structural.reason;
@@ -1609,6 +2005,15 @@ export function createMemoryProvenanceLedger(deps = {}) {
 
       const bindingVerification = verifyRecallEvidenceRow(bindingRow);
       const signedSaveIntent = saveRow ? parseJsonObject(saveRow.body_json) : null;
+      // R7 exposes the latest independently verified reassertion as the
+      // temporal/authority witness while the content state still contributes
+      // only once to ordinary retrieval. If no successor event exists, retain
+      // the R4 legacy witness selection unchanged.
+      const successorOccurrences = orderedRows.filter(
+        (row) => Number(row.sig_form_version || 1) === 3,
+      );
+      const occurrenceRow = successorOccurrences.at(-1) || saveRow || retainedAttestRow || bindingRow;
+      const occurrenceAuthority = v3AuthorityByProvenance.get(String(occurrenceRow.provenance_id)) || null;
       const proof = {
         ...bindingVerification.proof,
         company_id: base.live_company_id,
@@ -1626,6 +2031,20 @@ export function createMemoryProvenanceLedger(deps = {}) {
         save_content_hash: saveRow ? Buffer.from(saveRow.prov_content_hash).toString('hex') : null,
         save_mutation_hash: saveRow ? Buffer.from(saveRow.mutation_hash).toString('hex') : null,
         binding_mutation_hash: Buffer.from(bindingRow.mutation_hash).toString('hex'),
+        occurrence_provenance_id: String(occurrenceRow.provenance_id),
+        occurrence_mutation_hash: Buffer.from(occurrenceRow.mutation_hash).toString('hex'),
+        occurrence_signer_agent_id: occurrenceRow.provenance_agent_id,
+        occurrence_signer_valid_from: new Date(occurrenceRow.agent_valid_from).toISOString(),
+        occurrence_cert_fingerprint: occurrenceRow.cert_fingerprint,
+        occurrence_event_type: String(occurrenceRow.event_type || 'SAVE'),
+        occurrence_sig_form_version: Number(occurrenceRow.sig_form_version || 1),
+        occurrence_ts_signed: Number(occurrenceRow.ts_signed),
+        occurrence_actor_agent_id: occurrenceAuthority?.actorAgentId || occurrenceRow.provenance_agent_id,
+        occurrence_actor_valid_from: occurrenceAuthority?.actorValidFromIso
+          || new Date(occurrenceRow.agent_valid_from).toISOString(),
+        occurrence_actor_cert_fingerprint: occurrenceAuthority?.actorCertFingerprint
+          || occurrenceRow.cert_fingerprint,
+        occurrence_count: successorOccurrences.length + 1,
         lineage_mutation_hash: signedLineageMutationHash,
         provenance_nodes: provenanceRows.length,
         binding_schema_version: Number(bindingRow.binding_schema_version),
@@ -1646,9 +2065,11 @@ export function createMemoryProvenanceLedger(deps = {}) {
 
   return {
     commitProvenance,
+    commitOccurrenceV3,
     getProvenanceRow,
     getProvenanceChain,
     getLatestMutationHash,
+    getLatestOccurrenceReference,
     verifyRecallMemories,
     verifyRecallEvidence,
   };
