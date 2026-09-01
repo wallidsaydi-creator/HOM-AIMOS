@@ -1,8 +1,8 @@
 [extend]
 useDefault = true
 
-[[allowlists]]
-description = "Local and generated paths excluded from the public release"
+[allowlist]
+description = "Local/generated paths and deterministic public conformance vectors"
 paths = [
   '''(^|/)\.git/''',
   '''(^|/)\.claude/''',
@@ -18,11 +18,6 @@ paths = [
   '''(^|/)eval/public-results/''',
   '''(^|/)eval/results/''',
   '''(^|/)db/backups/''',
-]
-
-[[allowlists]]
-description = "Synthetic MutMem conformance vectors: SHA-256 command keys, not credentials"
-paths = [
   '''(?:^|/)verifiers/mutmem-conformance/v1/MM-CV-022-A\.json$''',
   '''(?:^|/)verifiers/mutmem-conformance/v1/MM-CV-022-B\.json$''',
   '''(?:^|/)verifiers/mutmem-conformance/v1/MM-CV-022-C\.json$''',
@@ -31,7 +26,10 @@ paths = [
   '''(?:^|/)verifiers/mutmem-conformance/v1/MM-CV-024\.json$''',
 ]
 
-[[allowlists]]
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
 description = "Public P3 qualification: one-way Housekeeper key commitments, never key material"
 condition = "AND"
 paths = [

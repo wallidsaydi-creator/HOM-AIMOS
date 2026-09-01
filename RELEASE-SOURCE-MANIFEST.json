@@ -7,7 +7,7 @@
   "root_algorithm": "sha256(canonical-json(files))",
   "manifest_self_excluded": true,
   "file_count": 1000,
-  "files_root_sha256": "58d08573094b481ead8316500cb8d29d96208ca9f59fe10983181e6d1152b0bd",
+  "files_root_sha256": "6f8e4dadd0f400e4636ba51e09a2d5a706a98d0c8f2e0c566a32eec62b015923",
   "files": [
     {
       "path": ".github/dependabot.yml",
@@ -31,8 +31,8 @@
     },
     {
       "path": ".gitleaks.toml",
-      "bytes": 1416,
-      "sha256": "3dd85a94b133f1ba3f9b4c6b2a065633226730bac71c71c8146bbd3772e712ac"
+      "bytes": 1341,
+      "sha256": "de08a68b9c9bc8cb961fa8d335d76dee93562a77aa87d850002b35992c267012"
     },
     {
       "path": ".npmignore",
@@ -4466,8 +4466,8 @@
     },
     {
       "path": "tests/server/release-cleanup-source-gates.test.mjs",
-      "bytes": 9503,
-      "sha256": "22a6a2ed11cc362ad55cf3094d89df0e11c3fc69945a479289e218fcaa938282"
+      "bytes": 9942,
+      "sha256": "4be1c818be873c21328424575cbba830afe3e381066dbf4e5d745ef71cf07310"
     },
     {
       "path": "tests/server/route-registration-conformance.test.mjs",
@@ -5010,5 +5010,5 @@
       "sha256": "e3db8f047f9df1a90b08e8d37de3a2ba687488966ca923839d4815c910c15b35"
     }
   ],
-  "manifest_sha256": "8d002ff744b012375a29bd7112dc681d20065a1ed660e4ae524e732ff905149c"
+  "manifest_sha256": "f0cdb75763c70ce83bfd1e5f6c956e7502b65a812c3a43f311f8039ba0c3b7f1"
 }

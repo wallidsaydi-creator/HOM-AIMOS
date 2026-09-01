@@ -151,6 +151,15 @@ test('CI fails closed and every external action is commit-pinned', () => {
   assert.doesNotMatch(read('package.json'), /grep -v ['"]OK\$['"] \|\| echo/);
 });
 
+test('Gitleaks configuration remains compatible with the pinned release action', () => {
+  const config = read('.gitleaks.toml');
+  assert.match(config, /^\[allowlist\]$/m);
+  assert.doesNotMatch(config, /^\[\[allowlists\]\]$/m);
+  assert.match(config, /\[\[rules\]\]\nid = "generic-api-key"/);
+  assert.match(config, /\[\[rules\.allowlists\]\]\ndescription = "Public P3 qualification:/);
+  assert.match(config, /condition = "AND"/);
+});
+
 test('public dataset fetch is immutable and redistributable bytes stay untracked', () => {
   const download = read('eval/data/download.sh');
   assert.match(download, /LME_REVISION="[0-9a-f]{40}"/);
