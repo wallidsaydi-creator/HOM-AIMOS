@@ -7,12 +7,20 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
+    "verify": "node scripts/verification/verify-mutmem-v2-publication.mjs",
+    "evidence:regenerate": "node scripts/benchmark/regenerate-mutmem-v2-publication-evidence.mjs",
+    "paper:render": "node scripts/publication/render-mutmem-v2-manuscript-assets.mjs",
+    "paper:build": "cd paper && SOURCE_DATE_EPOCH=1788258481 FORCE_SOURCE_DATE=1 tectonic --only-cached --keep-logs --keep-intermediates mutmem-v2.tex",
+    "paper:verify": "node scripts/verification/verify-mutmem-v2-manuscript.mjs",
+    "reproduce": "node scripts/benchmark/run-isolated.mjs --public-reproduce",
+    "reproduce:ablation": "node scripts/benchmark/run-poisonedrag-epistemic-ablation.mjs",
     "migrate": "node migrations/run.js",
     "test": "npm run test:source",
     "test:source": "node scripts/test/run-source-tests.mjs",
     "test:benchmark:contracts": "node scripts/test/run-source-tests.mjs --benchmark-only",
     "test:security:isolated": "node scripts/test/run-isolated-security.mjs",
     "verify:mutmem:v2-s5": "node scripts/verification/verify-mutmem-v2-s5-production-corpus.mjs --read-only",
+    "verify:mutmem:reproducibility": "node scripts/verification/score-mutmem-reproducibility.mjs",
     "test:release:artifact": "node scripts/test/verify-release-artifacts.mjs",
     "test:release:public-tree": "node scripts/test/verify-public-source-tree.mjs",
     "test:release:source": "npm run lint && npm run test:source && npm run test:benchmark:contracts && npm run test:architecture-authority && node scripts/test/gate-reserved-ports.mjs && npm run test:release:artifact && npm audit --omit=dev --audit-level=high",
@@ -20,6 +28,7 @@
     "lint": "find server.js routes services jobs db middleware migrations scripts eval -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \\) -print0 | xargs -0 -n1 node --check",
     "identity:enroll-master": "node scripts/identity/enroll-master.js",
     "identity:enroll-agent": "node scripts/identity/enroll-agent.js",
+    "identity:onboard": "node scripts/identity/onboard-agent.mjs",
     "identity:revoke-agent": "node scripts/identity/revoke-agent.js",
     "identity:authorize-recall": "node scripts/identity/authorize-recall.js",
     "identity:init-authority": "node scripts/identity/init-architecture-authority.js",
@@ -35,6 +44,12 @@
     "benchmark:export:poisonedrag-epistemic": "node scripts/benchmark/export-poisonedrag-epistemic-verification.mjs",
     "benchmark:export:publication": "node scripts/benchmark/export-publication-evidence.mjs",
     "genesis:install": "node scripts/genesis-install.mjs",
+    "service:install": "node scripts/service/manage-user-service.mjs install",
+    "service:start": "node scripts/service/manage-user-service.mjs start",
+    "service:stop": "node scripts/service/manage-user-service.mjs stop",
+    "service:restart": "node scripts/service/manage-user-service.mjs restart",
+    "service:status": "node scripts/service/manage-user-service.mjs status",
+    "service:uninstall": "node scripts/service/manage-user-service.mjs uninstall",
     "ceremony:purge:dry": "node scripts/ceremony/purge-brain.mjs",
     "ceremony:purge": "node scripts/ceremony/purge-brain.mjs --live"
   },
@@ -52,6 +67,6 @@
     "sharp": "0.35.3"
   },
   "engines": {
-    "node": "^20.0.0 || ^24.0.0"
+    "node": "^20.0.0 || ^24.0.0 || ^26.0.0"
   }
 }

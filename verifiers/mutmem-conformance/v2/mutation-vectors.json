@@ -1,0 +1,1519 @@
+{
+  "schema": "hom.aimos.mutmem-portable-mutation-vectors/v2",
+  "version": 2,
+  "authority": "descriptive_conformance_only",
+  "canonicalization": "hom-aimos/canonical-json/v1",
+  "intended_n": 15,
+  "valid_n": 3,
+  "invalid_n": 12,
+  "terminal_kinds": [
+    "authorized_transition",
+    "signed_noop",
+    "occurrence_observation"
+  ],
+  "failure_codes": [
+    "MUTATION_BUNDLE_COMMITMENT_INVALID",
+    "MUTATION_OUTCOME_SCHEMA_INVALID",
+    "MUTATION_RECALL_BINDING_INVALID",
+    "MUTATION_OUTCOME_EVENT_INVALID",
+    "MUTATION_VALENCE_BINDING_INVALID",
+    "MUTATION_TERMINAL_KIND_INVALID",
+    "MUTATION_OBSERVATION_TERMINAL_INVALID",
+    "MUTATION_NOOP_TERMINAL_INVALID",
+    "MUTATION_TRANSITION_PROVENANCE_INVALID",
+    "MUTATION_PROJECTION_BINDING_INVALID",
+    "MUTATION_PROJECTION_HASH_INVALID",
+    "MUTATION_TRANSITION_HASH_INVALID"
+  ],
+  "vectors_root_sha256": "1b23a23bffdce975906b3808115612757029f1c5fc6a0f608f652b03f51deafb",
+  "summaries": [
+    {
+      "ordinal": 0,
+      "id": "P1-MUT-CV-VALID-TRANSITION",
+      "expected": "valid",
+      "reason": null,
+      "bundle_sha256": "ef14317df4a4c5845b376b6d585d7a50807405679032d7c3bef5c243a68fed33"
+    },
+    {
+      "ordinal": 1,
+      "id": "P1-MUT-CV-VALID-NOOP",
+      "expected": "valid",
+      "reason": null,
+      "bundle_sha256": "c2681d9de3a407aaf1a221e575e370fbd227543cff346bdab5f7fafc46714a8b"
+    },
+    {
+      "ordinal": 2,
+      "id": "P1-MUT-CV-VALID-OBSERVATION",
+      "expected": "valid",
+      "reason": null,
+      "bundle_sha256": "5304c0a756fbf8c33eeff318a455330963039f32a0e55f9ceeff2bd622d1a88e"
+    },
+    {
+      "ordinal": 3,
+      "id": "P1-MUT-CV-001",
+      "expected": "invalid",
+      "reason": "MUTATION_OUTCOME_SCHEMA_INVALID",
+      "bundle_sha256": "8c89e8d90ffbcd30cbe333a28d00da6390f094c6790082d2f6e4952d5ed4de71"
+    },
+    {
+      "ordinal": 4,
+      "id": "P1-MUT-CV-002",
+      "expected": "invalid",
+      "reason": "MUTATION_RECALL_BINDING_INVALID",
+      "bundle_sha256": "6088f4193168393573baf6c537fec1d6bd07729be7e8d4105be37009a30187de"
+    },
+    {
+      "ordinal": 5,
+      "id": "P1-MUT-CV-003",
+      "expected": "invalid",
+      "reason": "MUTATION_OUTCOME_EVENT_INVALID",
+      "bundle_sha256": "15ee3ffaa874a2832fc8d3a73bf7b7a291831bb9654fc66c728060934fa0a7c0"
+    },
+    {
+      "ordinal": 6,
+      "id": "P1-MUT-CV-004",
+      "expected": "invalid",
+      "reason": "MUTATION_VALENCE_BINDING_INVALID",
+      "bundle_sha256": "59072c3b1e6239a386b2397711a159ad91f439e1617f79a4fb30e44caf50eef2"
+    },
+    {
+      "ordinal": 7,
+      "id": "P1-MUT-CV-005",
+      "expected": "invalid",
+      "reason": "MUTATION_TERMINAL_KIND_INVALID",
+      "bundle_sha256": "25d2c13f7ca0b739156f9eaf93b9cf465df513205b0fcbd93171b46ac080ad06"
+    },
+    {
+      "ordinal": 8,
+      "id": "P1-MUT-CV-006",
+      "expected": "invalid",
+      "reason": "MUTATION_OBSERVATION_TERMINAL_INVALID",
+      "bundle_sha256": "30991cabcaf1935ed16e21085666f55eb017d442caf7a5f14596a309ed9612cc"
+    },
+    {
+      "ordinal": 9,
+      "id": "P1-MUT-CV-007",
+      "expected": "invalid",
+      "reason": "MUTATION_NOOP_TERMINAL_INVALID",
+      "bundle_sha256": "61bb9c58f2b84b47bfc792beafce939ffecb9deed1bbfa7d0ea820fb9caef769"
+    },
+    {
+      "ordinal": 10,
+      "id": "P1-MUT-CV-008",
+      "expected": "invalid",
+      "reason": "MUTATION_TRANSITION_PROVENANCE_INVALID",
+      "bundle_sha256": "55456a95475b2b312bbd61d9940cf2a28f9f5c1a0f08a5d0843b35f287172ab4"
+    },
+    {
+      "ordinal": 11,
+      "id": "P1-MUT-CV-009",
+      "expected": "invalid",
+      "reason": "MUTATION_PROJECTION_BINDING_INVALID",
+      "bundle_sha256": "4f11b43954093f773c6bb76a5c9365d6d8e9489540813ddfb40d5a09c675868b"
+    },
+    {
+      "ordinal": 12,
+      "id": "P1-MUT-CV-010",
+      "expected": "invalid",
+      "reason": "MUTATION_PROJECTION_HASH_INVALID",
+      "bundle_sha256": "ed95f1f02202c19b3327d26205db0bd957963b234b513427e2b9827599656b72"
+    },
+    {
+      "ordinal": 13,
+      "id": "P1-MUT-CV-011",
+      "expected": "invalid",
+      "reason": "MUTATION_TRANSITION_HASH_INVALID",
+      "bundle_sha256": "182149c5cf85d5b4010679647b928c5aa6b85fd623865f1d5122989603df3d8e"
+    },
+    {
+      "ordinal": 14,
+      "id": "P1-MUT-CV-BUNDLE-COMMITMENT",
+      "expected": "invalid",
+      "reason": "MUTATION_BUNDLE_COMMITMENT_INVALID",
+      "bundle_sha256": "7e64bd6105934d26576742fae3b08f959da6b24cebe5375cc36ca819b6028295"
+    }
+  ],
+  "vectors": [
+    {
+      "id": "P1-MUT-CV-VALID-TRANSITION",
+      "expected": "valid",
+      "reason": null,
+      "bundle": {
+        "bundle_id": "P1-MUT-CV-VALID-TRANSITION",
+        "cognitive_projection": {
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "new_weight_milli": 1100,
+          "old_weight_milli": 1000,
+          "prev_projection_hash": "1b74695689132fd416cc32059e080f1efab91bf33db205af055967981b91fe3e",
+          "projection_hash": "a9b62c67e47c9da2f833f4519db187fb8af948bf9beccc0d11f770f992140960",
+          "provenance_mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b",
+          "transition_hash": "e16f16fb4ffbecb0c3662f3f492358da5a6b5ea1f341fa19f0fd670b77c65b25",
+          "transition_signature_b64u": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ"
+        },
+        "company_id": "hom",
+        "format": {
+          "canonicalization": "hom-aimos/canonical-json/v1",
+          "hash": "sha256",
+          "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+          "signature": "ed25519",
+          "version": 2
+        },
+        "outcome_event": {
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "metadata": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+          "operation": "mutation_outcome_evidence_v2",
+          "parent_event_id": "22222222-2222-4222-8222-222222222222"
+        },
+        "outcome_evidence": {
+          "company_id": "hom",
+          "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+          "outcome_id": "33333333-3333-4333-8333-333333333333",
+          "recall_event_id": "22222222-2222-4222-8222-222222222222",
+          "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+          "target_scope": "principal_state"
+        },
+        "recall_evidence_sha256": "214ff3b0e569a1a7da28b03a7cf6e9bf2cbf38d09db77d11286599509a95b9d4",
+        "recall_receipt": {
+          "event_id": "22222222-2222-4222-8222-222222222222",
+          "evidence": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a"
+          },
+          "merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c"
+        },
+        "terminal": {
+          "kind": "authorized_transition",
+          "reweight_provenance": {
+            "body_json": {
+              "valence_row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+            },
+            "event_type": "REWEIGHT",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b"
+          }
+        },
+        "valence_evidence": {
+          "body_json": {
+            "evidence_schema": "hom.aimos.mutation-outcome-evidence/v2",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "outcome_event_id": "44444444-4444-4444-8444-444444444444",
+            "outcome_event_mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+            "outcome_id": "33333333-3333-4333-8333-333333333333",
+            "recall_event_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+            "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+            "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+            "target_live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "target_occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "reward_sign": 1,
+          "row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+        },
+        "bundle_sha256": "3d6435c2193e4a67ee2989bf85b4ddd00d14040e00950f8bf198f9dc6bf6b89b"
+      }
+    },
+    {
+      "id": "P1-MUT-CV-VALID-NOOP",
+      "expected": "valid",
+      "reason": null,
+      "bundle": {
+        "bundle_id": "P1-MUT-CV-VALID-NOOP",
+        "cognitive_projection": null,
+        "company_id": "hom",
+        "format": {
+          "canonicalization": "hom-aimos/canonical-json/v1",
+          "hash": "sha256",
+          "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+          "signature": "ed25519",
+          "version": 2
+        },
+        "outcome_event": {
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "metadata": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+          "operation": "mutation_outcome_evidence_v2",
+          "parent_event_id": "22222222-2222-4222-8222-222222222222"
+        },
+        "outcome_evidence": {
+          "company_id": "hom",
+          "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+          "outcome_id": "33333333-3333-4333-8333-333333333333",
+          "recall_event_id": "22222222-2222-4222-8222-222222222222",
+          "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+          "target_scope": "principal_state"
+        },
+        "recall_evidence_sha256": "214ff3b0e569a1a7da28b03a7cf6e9bf2cbf38d09db77d11286599509a95b9d4",
+        "recall_receipt": {
+          "event_id": "22222222-2222-4222-8222-222222222222",
+          "evidence": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a"
+          },
+          "merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c"
+        },
+        "terminal": {
+          "event": {
+            "event_id": "55555555-5555-4555-8555-555555555555",
+            "metadata": {
+              "projection_appended": false,
+              "valence_row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+            },
+            "operation": "cognitive_weight_unchanged",
+            "parent_event_id": null
+          },
+          "kind": "signed_noop"
+        },
+        "valence_evidence": {
+          "body_json": {
+            "evidence_schema": "hom.aimos.mutation-outcome-evidence/v2",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "outcome_event_id": "44444444-4444-4444-8444-444444444444",
+            "outcome_event_mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+            "outcome_id": "33333333-3333-4333-8333-333333333333",
+            "recall_event_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+            "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+            "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+            "target_live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "target_occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "reward_sign": 1,
+          "row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+        },
+        "bundle_sha256": "0abde08aadee0ab2cf34466d92bd5c5388d43f86249141e52df4223a445c97b1"
+      }
+    },
+    {
+      "id": "P1-MUT-CV-VALID-OBSERVATION",
+      "expected": "valid",
+      "reason": null,
+      "bundle": {
+        "bundle_id": "P1-MUT-CV-VALID-OBSERVATION",
+        "cognitive_projection": null,
+        "company_id": "hom",
+        "format": {
+          "canonicalization": "hom-aimos/canonical-json/v1",
+          "hash": "sha256",
+          "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+          "signature": "ed25519",
+          "version": 2
+        },
+        "outcome_event": {
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "metadata": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "occurrence_observation"
+          },
+          "mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+          "operation": "mutation_outcome_evidence_v2",
+          "parent_event_id": "22222222-2222-4222-8222-222222222222"
+        },
+        "outcome_evidence": {
+          "company_id": "hom",
+          "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+          "outcome_id": "33333333-3333-4333-8333-333333333333",
+          "recall_event_id": "22222222-2222-4222-8222-222222222222",
+          "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+          "target_scope": "occurrence_observation"
+        },
+        "recall_evidence_sha256": "214ff3b0e569a1a7da28b03a7cf6e9bf2cbf38d09db77d11286599509a95b9d4",
+        "recall_receipt": {
+          "event_id": "22222222-2222-4222-8222-222222222222",
+          "evidence": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a"
+          },
+          "merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c"
+        },
+        "terminal": {
+          "event": {
+            "event_id": "55555555-5555-4555-8555-555555555555",
+            "metadata": {
+              "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+              "outcome_id": "33333333-3333-4333-8333-333333333333",
+              "projection_appended": false
+            },
+            "operation": "mutation_occurrence_observation_retained",
+            "parent_event_id": "44444444-4444-4444-8444-444444444444"
+          },
+          "kind": "occurrence_observation"
+        },
+        "valence_evidence": {
+          "body_json": {
+            "evidence_schema": "hom.aimos.mutation-outcome-evidence/v2",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "outcome_event_id": "44444444-4444-4444-8444-444444444444",
+            "outcome_event_mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+            "outcome_id": "33333333-3333-4333-8333-333333333333",
+            "recall_event_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+            "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+            "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+            "target_live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "target_occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "occurrence_observation"
+          },
+          "reward_sign": 1,
+          "row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+        },
+        "bundle_sha256": "5911468816845ee87a6acd82235ac3f76d258999c074c208489e3bfe49e24e41"
+      }
+    },
+    {
+      "id": "P1-MUT-CV-001",
+      "expected": "invalid",
+      "reason": "MUTATION_OUTCOME_SCHEMA_INVALID",
+      "bundle": {
+        "bundle_id": "P1-MUT-CV-001",
+        "cognitive_projection": {
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "new_weight_milli": 1100,
+          "old_weight_milli": 1000,
+          "prev_projection_hash": "1b74695689132fd416cc32059e080f1efab91bf33db205af055967981b91fe3e",
+          "projection_hash": "a9b62c67e47c9da2f833f4519db187fb8af948bf9beccc0d11f770f992140960",
+          "provenance_mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b",
+          "transition_hash": "e16f16fb4ffbecb0c3662f3f492358da5a6b5ea1f341fa19f0fd670b77c65b25",
+          "transition_signature_b64u": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ"
+        },
+        "company_id": "hom",
+        "format": {
+          "canonicalization": "hom-aimos/canonical-json/v1",
+          "hash": "sha256",
+          "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+          "signature": "ed25519",
+          "version": 2
+        },
+        "outcome_event": {
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "metadata": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+          "operation": "mutation_outcome_evidence_v2",
+          "parent_event_id": "22222222-2222-4222-8222-222222222222"
+        },
+        "outcome_evidence": {
+          "company_id": "hom",
+          "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+          "outcome_id": "33333333-3333-4333-8333-333333333333",
+          "recall_event_id": "22222222-2222-4222-8222-222222222222",
+          "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "schema": "wrong",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+          "target_scope": "principal_state"
+        },
+        "recall_evidence_sha256": "214ff3b0e569a1a7da28b03a7cf6e9bf2cbf38d09db77d11286599509a95b9d4",
+        "recall_receipt": {
+          "event_id": "22222222-2222-4222-8222-222222222222",
+          "evidence": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a"
+          },
+          "merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c"
+        },
+        "terminal": {
+          "kind": "authorized_transition",
+          "reweight_provenance": {
+            "body_json": {
+              "valence_row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+            },
+            "event_type": "REWEIGHT",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b"
+          }
+        },
+        "valence_evidence": {
+          "body_json": {
+            "evidence_schema": "hom.aimos.mutation-outcome-evidence/v2",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "outcome_event_id": "44444444-4444-4444-8444-444444444444",
+            "outcome_event_mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+            "outcome_id": "33333333-3333-4333-8333-333333333333",
+            "recall_event_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+            "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+            "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+            "target_live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "target_occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "reward_sign": 1,
+          "row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+        },
+        "bundle_sha256": "80a4087e462bd49c31acb18b0dc6b05f0364838a1f34b073e662f17956a20528"
+      }
+    },
+    {
+      "id": "P1-MUT-CV-002",
+      "expected": "invalid",
+      "reason": "MUTATION_RECALL_BINDING_INVALID",
+      "bundle": {
+        "bundle_id": "P1-MUT-CV-002",
+        "cognitive_projection": {
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "new_weight_milli": 1100,
+          "old_weight_milli": 1000,
+          "prev_projection_hash": "1b74695689132fd416cc32059e080f1efab91bf33db205af055967981b91fe3e",
+          "projection_hash": "a9b62c67e47c9da2f833f4519db187fb8af948bf9beccc0d11f770f992140960",
+          "provenance_mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b",
+          "transition_hash": "e16f16fb4ffbecb0c3662f3f492358da5a6b5ea1f341fa19f0fd670b77c65b25",
+          "transition_signature_b64u": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ"
+        },
+        "company_id": "hom",
+        "format": {
+          "canonicalization": "hom-aimos/canonical-json/v1",
+          "hash": "sha256",
+          "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+          "signature": "ed25519",
+          "version": 2
+        },
+        "outcome_event": {
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "metadata": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+          "operation": "mutation_outcome_evidence_v2",
+          "parent_event_id": "22222222-2222-4222-8222-222222222222"
+        },
+        "outcome_evidence": {
+          "company_id": "hom",
+          "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+          "outcome_id": "33333333-3333-4333-8333-333333333333",
+          "recall_event_id": "22222222-2222-4222-8222-222222222222",
+          "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+          "target_scope": "principal_state"
+        },
+        "recall_evidence_sha256": "3395fe0b49ad10ab758f8461bc06553bd5236525c475571c676cbfc09b313a75",
+        "recall_receipt": {
+          "event_id": "22222222-2222-4222-8222-222222222222",
+          "evidence": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a"
+          },
+          "merkle_root": "8810ad581e59f2bc3928b261707a71308f7e139eb04820366dc4d5c18d980225",
+          "mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c"
+        },
+        "terminal": {
+          "kind": "authorized_transition",
+          "reweight_provenance": {
+            "body_json": {
+              "valence_row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+            },
+            "event_type": "REWEIGHT",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b"
+          }
+        },
+        "valence_evidence": {
+          "body_json": {
+            "evidence_schema": "hom.aimos.mutation-outcome-evidence/v2",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "outcome_event_id": "44444444-4444-4444-8444-444444444444",
+            "outcome_event_mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+            "outcome_id": "33333333-3333-4333-8333-333333333333",
+            "recall_event_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+            "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+            "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+            "target_live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "target_occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "reward_sign": 1,
+          "row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+        },
+        "bundle_sha256": "7e2dcaa7252729c4730bfe2da2d9b14d1f4c8c2585174f6c88237c6e990e7c29"
+      }
+    },
+    {
+      "id": "P1-MUT-CV-003",
+      "expected": "invalid",
+      "reason": "MUTATION_OUTCOME_EVENT_INVALID",
+      "bundle": {
+        "bundle_id": "P1-MUT-CV-003",
+        "cognitive_projection": {
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "new_weight_milli": 1100,
+          "old_weight_milli": 1000,
+          "prev_projection_hash": "1b74695689132fd416cc32059e080f1efab91bf33db205af055967981b91fe3e",
+          "projection_hash": "a9b62c67e47c9da2f833f4519db187fb8af948bf9beccc0d11f770f992140960",
+          "provenance_mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b",
+          "transition_hash": "e16f16fb4ffbecb0c3662f3f492358da5a6b5ea1f341fa19f0fd670b77c65b25",
+          "transition_signature_b64u": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ"
+        },
+        "company_id": "hom",
+        "format": {
+          "canonicalization": "hom-aimos/canonical-json/v1",
+          "hash": "sha256",
+          "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+          "signature": "ed25519",
+          "version": 2
+        },
+        "outcome_event": {
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "metadata": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+          "operation": "mutation_outcome_evidence_v2",
+          "parent_event_id": "33333333-3333-4333-8333-333333333333"
+        },
+        "outcome_evidence": {
+          "company_id": "hom",
+          "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+          "outcome_id": "33333333-3333-4333-8333-333333333333",
+          "recall_event_id": "22222222-2222-4222-8222-222222222222",
+          "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+          "target_scope": "principal_state"
+        },
+        "recall_evidence_sha256": "214ff3b0e569a1a7da28b03a7cf6e9bf2cbf38d09db77d11286599509a95b9d4",
+        "recall_receipt": {
+          "event_id": "22222222-2222-4222-8222-222222222222",
+          "evidence": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a"
+          },
+          "merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c"
+        },
+        "terminal": {
+          "kind": "authorized_transition",
+          "reweight_provenance": {
+            "body_json": {
+              "valence_row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+            },
+            "event_type": "REWEIGHT",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b"
+          }
+        },
+        "valence_evidence": {
+          "body_json": {
+            "evidence_schema": "hom.aimos.mutation-outcome-evidence/v2",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "outcome_event_id": "44444444-4444-4444-8444-444444444444",
+            "outcome_event_mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+            "outcome_id": "33333333-3333-4333-8333-333333333333",
+            "recall_event_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+            "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+            "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+            "target_live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "target_occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "reward_sign": 1,
+          "row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+        },
+        "bundle_sha256": "46a7824dd669e25dfd6d9728334ee8a110b8625b69ae9a1d665598065a789b90"
+      }
+    },
+    {
+      "id": "P1-MUT-CV-004",
+      "expected": "invalid",
+      "reason": "MUTATION_VALENCE_BINDING_INVALID",
+      "bundle": {
+        "bundle_id": "P1-MUT-CV-004",
+        "cognitive_projection": {
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "new_weight_milli": 1100,
+          "old_weight_milli": 1000,
+          "prev_projection_hash": "1b74695689132fd416cc32059e080f1efab91bf33db205af055967981b91fe3e",
+          "projection_hash": "a9b62c67e47c9da2f833f4519db187fb8af948bf9beccc0d11f770f992140960",
+          "provenance_mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b",
+          "transition_hash": "e16f16fb4ffbecb0c3662f3f492358da5a6b5ea1f341fa19f0fd670b77c65b25",
+          "transition_signature_b64u": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ"
+        },
+        "company_id": "hom",
+        "format": {
+          "canonicalization": "hom-aimos/canonical-json/v1",
+          "hash": "sha256",
+          "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+          "signature": "ed25519",
+          "version": 2
+        },
+        "outcome_event": {
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "metadata": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+          "operation": "mutation_outcome_evidence_v2",
+          "parent_event_id": "22222222-2222-4222-8222-222222222222"
+        },
+        "outcome_evidence": {
+          "company_id": "hom",
+          "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+          "outcome_id": "33333333-3333-4333-8333-333333333333",
+          "recall_event_id": "22222222-2222-4222-8222-222222222222",
+          "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+          "target_scope": "principal_state"
+        },
+        "recall_evidence_sha256": "214ff3b0e569a1a7da28b03a7cf6e9bf2cbf38d09db77d11286599509a95b9d4",
+        "recall_receipt": {
+          "event_id": "22222222-2222-4222-8222-222222222222",
+          "evidence": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a"
+          },
+          "merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c"
+        },
+        "terminal": {
+          "kind": "authorized_transition",
+          "reweight_provenance": {
+            "body_json": {
+              "valence_row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+            },
+            "event_type": "REWEIGHT",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b"
+          }
+        },
+        "valence_evidence": {
+          "body_json": {
+            "evidence_schema": "hom.aimos.mutation-outcome-evidence/v2",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "outcome_event_id": "44444444-4444-4444-8444-444444444444",
+            "outcome_event_mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+            "outcome_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+            "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+            "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+            "target_live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "target_occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "reward_sign": 1,
+          "row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+        },
+        "bundle_sha256": "725d9823ac8008e5e54daaf274f0c1ea3477a669a548c8484d3b13bc89442b4f"
+      }
+    },
+    {
+      "id": "P1-MUT-CV-005",
+      "expected": "invalid",
+      "reason": "MUTATION_TERMINAL_KIND_INVALID",
+      "bundle": {
+        "bundle_id": "P1-MUT-CV-005",
+        "cognitive_projection": {
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "new_weight_milli": 1100,
+          "old_weight_milli": 1000,
+          "prev_projection_hash": "1b74695689132fd416cc32059e080f1efab91bf33db205af055967981b91fe3e",
+          "projection_hash": "a9b62c67e47c9da2f833f4519db187fb8af948bf9beccc0d11f770f992140960",
+          "provenance_mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b",
+          "transition_hash": "e16f16fb4ffbecb0c3662f3f492358da5a6b5ea1f341fa19f0fd670b77c65b25",
+          "transition_signature_b64u": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ"
+        },
+        "company_id": "hom",
+        "format": {
+          "canonicalization": "hom-aimos/canonical-json/v1",
+          "hash": "sha256",
+          "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+          "signature": "ed25519",
+          "version": 2
+        },
+        "outcome_event": {
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "metadata": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+          "operation": "mutation_outcome_evidence_v2",
+          "parent_event_id": "22222222-2222-4222-8222-222222222222"
+        },
+        "outcome_evidence": {
+          "company_id": "hom",
+          "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+          "outcome_id": "33333333-3333-4333-8333-333333333333",
+          "recall_event_id": "22222222-2222-4222-8222-222222222222",
+          "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+          "target_scope": "principal_state"
+        },
+        "recall_evidence_sha256": "214ff3b0e569a1a7da28b03a7cf6e9bf2cbf38d09db77d11286599509a95b9d4",
+        "recall_receipt": {
+          "event_id": "22222222-2222-4222-8222-222222222222",
+          "evidence": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a"
+          },
+          "merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c"
+        },
+        "terminal": {
+          "kind": "unknown",
+          "reweight_provenance": {
+            "body_json": {
+              "valence_row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+            },
+            "event_type": "REWEIGHT",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b"
+          }
+        },
+        "valence_evidence": {
+          "body_json": {
+            "evidence_schema": "hom.aimos.mutation-outcome-evidence/v2",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "outcome_event_id": "44444444-4444-4444-8444-444444444444",
+            "outcome_event_mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+            "outcome_id": "33333333-3333-4333-8333-333333333333",
+            "recall_event_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+            "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+            "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+            "target_live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "target_occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "reward_sign": 1,
+          "row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+        },
+        "bundle_sha256": "4e406a9fea054bcfc034ad333fb85685c8e6c8a742623e9fd0cbfefa176607e9"
+      }
+    },
+    {
+      "id": "P1-MUT-CV-006",
+      "expected": "invalid",
+      "reason": "MUTATION_OBSERVATION_TERMINAL_INVALID",
+      "bundle": {
+        "bundle_id": "P1-MUT-CV-006",
+        "cognitive_projection": null,
+        "company_id": "hom",
+        "format": {
+          "canonicalization": "hom-aimos/canonical-json/v1",
+          "hash": "sha256",
+          "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+          "signature": "ed25519",
+          "version": 2
+        },
+        "outcome_event": {
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "metadata": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "occurrence_observation"
+          },
+          "mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+          "operation": "mutation_outcome_evidence_v2",
+          "parent_event_id": "22222222-2222-4222-8222-222222222222"
+        },
+        "outcome_evidence": {
+          "company_id": "hom",
+          "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+          "outcome_id": "33333333-3333-4333-8333-333333333333",
+          "recall_event_id": "22222222-2222-4222-8222-222222222222",
+          "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+          "target_scope": "occurrence_observation"
+        },
+        "recall_evidence_sha256": "214ff3b0e569a1a7da28b03a7cf6e9bf2cbf38d09db77d11286599509a95b9d4",
+        "recall_receipt": {
+          "event_id": "22222222-2222-4222-8222-222222222222",
+          "evidence": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a"
+          },
+          "merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c"
+        },
+        "terminal": {
+          "event": {
+            "event_id": "55555555-5555-4555-8555-555555555555",
+            "metadata": {
+              "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+              "outcome_id": "33333333-3333-4333-8333-333333333333",
+              "projection_appended": false
+            },
+            "operation": "mutation_occurrence_observation_retained",
+            "parent_event_id": "22222222-2222-4222-8222-222222222222"
+          },
+          "kind": "occurrence_observation"
+        },
+        "valence_evidence": {
+          "body_json": {
+            "evidence_schema": "hom.aimos.mutation-outcome-evidence/v2",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "outcome_event_id": "44444444-4444-4444-8444-444444444444",
+            "outcome_event_mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+            "outcome_id": "33333333-3333-4333-8333-333333333333",
+            "recall_event_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+            "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+            "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+            "target_live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "target_occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "occurrence_observation"
+          },
+          "reward_sign": 1,
+          "row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+        },
+        "bundle_sha256": "f93adfee81165a9ea77c7acc10d8e01703cf7df526b729d61bad1fb6f9abde91"
+      }
+    },
+    {
+      "id": "P1-MUT-CV-007",
+      "expected": "invalid",
+      "reason": "MUTATION_NOOP_TERMINAL_INVALID",
+      "bundle": {
+        "bundle_id": "P1-MUT-CV-007",
+        "cognitive_projection": null,
+        "company_id": "hom",
+        "format": {
+          "canonicalization": "hom-aimos/canonical-json/v1",
+          "hash": "sha256",
+          "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+          "signature": "ed25519",
+          "version": 2
+        },
+        "outcome_event": {
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "metadata": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+          "operation": "mutation_outcome_evidence_v2",
+          "parent_event_id": "22222222-2222-4222-8222-222222222222"
+        },
+        "outcome_evidence": {
+          "company_id": "hom",
+          "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+          "outcome_id": "33333333-3333-4333-8333-333333333333",
+          "recall_event_id": "22222222-2222-4222-8222-222222222222",
+          "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+          "target_scope": "principal_state"
+        },
+        "recall_evidence_sha256": "214ff3b0e569a1a7da28b03a7cf6e9bf2cbf38d09db77d11286599509a95b9d4",
+        "recall_receipt": {
+          "event_id": "22222222-2222-4222-8222-222222222222",
+          "evidence": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a"
+          },
+          "merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c"
+        },
+        "terminal": {
+          "event": {
+            "event_id": "55555555-5555-4555-8555-555555555555",
+            "metadata": {
+              "projection_appended": true,
+              "valence_row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+            },
+            "operation": "cognitive_weight_unchanged",
+            "parent_event_id": null
+          },
+          "kind": "signed_noop"
+        },
+        "valence_evidence": {
+          "body_json": {
+            "evidence_schema": "hom.aimos.mutation-outcome-evidence/v2",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "outcome_event_id": "44444444-4444-4444-8444-444444444444",
+            "outcome_event_mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+            "outcome_id": "33333333-3333-4333-8333-333333333333",
+            "recall_event_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+            "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+            "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+            "target_live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "target_occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "reward_sign": 1,
+          "row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+        },
+        "bundle_sha256": "7145f1f2d0978aaa323566a442743a3c10759f7024b6968be71b711a3fb9c851"
+      }
+    },
+    {
+      "id": "P1-MUT-CV-008",
+      "expected": "invalid",
+      "reason": "MUTATION_TRANSITION_PROVENANCE_INVALID",
+      "bundle": {
+        "bundle_id": "P1-MUT-CV-008",
+        "cognitive_projection": {
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "new_weight_milli": 1100,
+          "old_weight_milli": 1000,
+          "prev_projection_hash": "1b74695689132fd416cc32059e080f1efab91bf33db205af055967981b91fe3e",
+          "projection_hash": "a9b62c67e47c9da2f833f4519db187fb8af948bf9beccc0d11f770f992140960",
+          "provenance_mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b",
+          "transition_hash": "e16f16fb4ffbecb0c3662f3f492358da5a6b5ea1f341fa19f0fd670b77c65b25",
+          "transition_signature_b64u": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ"
+        },
+        "company_id": "hom",
+        "format": {
+          "canonicalization": "hom-aimos/canonical-json/v1",
+          "hash": "sha256",
+          "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+          "signature": "ed25519",
+          "version": 2
+        },
+        "outcome_event": {
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "metadata": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+          "operation": "mutation_outcome_evidence_v2",
+          "parent_event_id": "22222222-2222-4222-8222-222222222222"
+        },
+        "outcome_evidence": {
+          "company_id": "hom",
+          "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+          "outcome_id": "33333333-3333-4333-8333-333333333333",
+          "recall_event_id": "22222222-2222-4222-8222-222222222222",
+          "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+          "target_scope": "principal_state"
+        },
+        "recall_evidence_sha256": "214ff3b0e569a1a7da28b03a7cf6e9bf2cbf38d09db77d11286599509a95b9d4",
+        "recall_receipt": {
+          "event_id": "22222222-2222-4222-8222-222222222222",
+          "evidence": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a"
+          },
+          "merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c"
+        },
+        "terminal": {
+          "kind": "authorized_transition",
+          "reweight_provenance": {
+            "body_json": {
+              "valence_row_hash": "8810ad581e59f2bc3928b261707a71308f7e139eb04820366dc4d5c18d980225"
+            },
+            "event_type": "REWEIGHT",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b"
+          }
+        },
+        "valence_evidence": {
+          "body_json": {
+            "evidence_schema": "hom.aimos.mutation-outcome-evidence/v2",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "outcome_event_id": "44444444-4444-4444-8444-444444444444",
+            "outcome_event_mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+            "outcome_id": "33333333-3333-4333-8333-333333333333",
+            "recall_event_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+            "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+            "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+            "target_live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "target_occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "reward_sign": 1,
+          "row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+        },
+        "bundle_sha256": "7ee79d3b341dca51d24ece69870eeedf2072f2f077a34f4513734636ca87ab0f"
+      }
+    },
+    {
+      "id": "P1-MUT-CV-009",
+      "expected": "invalid",
+      "reason": "MUTATION_PROJECTION_BINDING_INVALID",
+      "bundle": {
+        "bundle_id": "P1-MUT-CV-009",
+        "cognitive_projection": {
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "new_weight_milli": 1100,
+          "old_weight_milli": 99,
+          "prev_projection_hash": "1b74695689132fd416cc32059e080f1efab91bf33db205af055967981b91fe3e",
+          "projection_hash": "a9b62c67e47c9da2f833f4519db187fb8af948bf9beccc0d11f770f992140960",
+          "provenance_mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b",
+          "transition_hash": "e16f16fb4ffbecb0c3662f3f492358da5a6b5ea1f341fa19f0fd670b77c65b25",
+          "transition_signature_b64u": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ"
+        },
+        "company_id": "hom",
+        "format": {
+          "canonicalization": "hom-aimos/canonical-json/v1",
+          "hash": "sha256",
+          "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+          "signature": "ed25519",
+          "version": 2
+        },
+        "outcome_event": {
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "metadata": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+          "operation": "mutation_outcome_evidence_v2",
+          "parent_event_id": "22222222-2222-4222-8222-222222222222"
+        },
+        "outcome_evidence": {
+          "company_id": "hom",
+          "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+          "outcome_id": "33333333-3333-4333-8333-333333333333",
+          "recall_event_id": "22222222-2222-4222-8222-222222222222",
+          "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+          "target_scope": "principal_state"
+        },
+        "recall_evidence_sha256": "214ff3b0e569a1a7da28b03a7cf6e9bf2cbf38d09db77d11286599509a95b9d4",
+        "recall_receipt": {
+          "event_id": "22222222-2222-4222-8222-222222222222",
+          "evidence": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a"
+          },
+          "merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c"
+        },
+        "terminal": {
+          "kind": "authorized_transition",
+          "reweight_provenance": {
+            "body_json": {
+              "valence_row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+            },
+            "event_type": "REWEIGHT",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b"
+          }
+        },
+        "valence_evidence": {
+          "body_json": {
+            "evidence_schema": "hom.aimos.mutation-outcome-evidence/v2",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "outcome_event_id": "44444444-4444-4444-8444-444444444444",
+            "outcome_event_mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+            "outcome_id": "33333333-3333-4333-8333-333333333333",
+            "recall_event_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+            "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+            "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+            "target_live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "target_occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "reward_sign": 1,
+          "row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+        },
+        "bundle_sha256": "f93aeea6d9a5eb804a831b59af7e081252108fbc1e4a15712fa7242fddd80917"
+      }
+    },
+    {
+      "id": "P1-MUT-CV-010",
+      "expected": "invalid",
+      "reason": "MUTATION_PROJECTION_HASH_INVALID",
+      "bundle": {
+        "bundle_id": "P1-MUT-CV-010",
+        "cognitive_projection": {
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "new_weight_milli": 1100,
+          "old_weight_milli": 1000,
+          "prev_projection_hash": "1b74695689132fd416cc32059e080f1efab91bf33db205af055967981b91fe3e",
+          "projection_hash": "8810ad581e59f2bc3928b261707a71308f7e139eb04820366dc4d5c18d980225",
+          "provenance_mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b",
+          "transition_hash": "e16f16fb4ffbecb0c3662f3f492358da5a6b5ea1f341fa19f0fd670b77c65b25",
+          "transition_signature_b64u": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ"
+        },
+        "company_id": "hom",
+        "format": {
+          "canonicalization": "hom-aimos/canonical-json/v1",
+          "hash": "sha256",
+          "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+          "signature": "ed25519",
+          "version": 2
+        },
+        "outcome_event": {
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "metadata": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+          "operation": "mutation_outcome_evidence_v2",
+          "parent_event_id": "22222222-2222-4222-8222-222222222222"
+        },
+        "outcome_evidence": {
+          "company_id": "hom",
+          "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+          "outcome_id": "33333333-3333-4333-8333-333333333333",
+          "recall_event_id": "22222222-2222-4222-8222-222222222222",
+          "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+          "target_scope": "principal_state"
+        },
+        "recall_evidence_sha256": "214ff3b0e569a1a7da28b03a7cf6e9bf2cbf38d09db77d11286599509a95b9d4",
+        "recall_receipt": {
+          "event_id": "22222222-2222-4222-8222-222222222222",
+          "evidence": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a"
+          },
+          "merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c"
+        },
+        "terminal": {
+          "kind": "authorized_transition",
+          "reweight_provenance": {
+            "body_json": {
+              "valence_row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+            },
+            "event_type": "REWEIGHT",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b"
+          }
+        },
+        "valence_evidence": {
+          "body_json": {
+            "evidence_schema": "hom.aimos.mutation-outcome-evidence/v2",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "outcome_event_id": "44444444-4444-4444-8444-444444444444",
+            "outcome_event_mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+            "outcome_id": "33333333-3333-4333-8333-333333333333",
+            "recall_event_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+            "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+            "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+            "target_live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "target_occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "reward_sign": 1,
+          "row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+        },
+        "bundle_sha256": "0466ebb3c7b5a941a65e06294233400804c471be6ca613079fb8e3e2ae26aac2"
+      }
+    },
+    {
+      "id": "P1-MUT-CV-011",
+      "expected": "invalid",
+      "reason": "MUTATION_TRANSITION_HASH_INVALID",
+      "bundle": {
+        "bundle_id": "P1-MUT-CV-011",
+        "cognitive_projection": {
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "new_weight_milli": 1100,
+          "old_weight_milli": 1000,
+          "prev_projection_hash": "1b74695689132fd416cc32059e080f1efab91bf33db205af055967981b91fe3e",
+          "projection_hash": "a9b62c67e47c9da2f833f4519db187fb8af948bf9beccc0d11f770f992140960",
+          "provenance_mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b",
+          "transition_hash": "8810ad581e59f2bc3928b261707a71308f7e139eb04820366dc4d5c18d980225",
+          "transition_signature_b64u": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ"
+        },
+        "company_id": "hom",
+        "format": {
+          "canonicalization": "hom-aimos/canonical-json/v1",
+          "hash": "sha256",
+          "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+          "signature": "ed25519",
+          "version": 2
+        },
+        "outcome_event": {
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "metadata": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+          "operation": "mutation_outcome_evidence_v2",
+          "parent_event_id": "22222222-2222-4222-8222-222222222222"
+        },
+        "outcome_evidence": {
+          "company_id": "hom",
+          "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+          "outcome_id": "33333333-3333-4333-8333-333333333333",
+          "recall_event_id": "22222222-2222-4222-8222-222222222222",
+          "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+          "target_scope": "principal_state"
+        },
+        "recall_evidence_sha256": "214ff3b0e569a1a7da28b03a7cf6e9bf2cbf38d09db77d11286599509a95b9d4",
+        "recall_receipt": {
+          "event_id": "22222222-2222-4222-8222-222222222222",
+          "evidence": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a"
+          },
+          "merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c"
+        },
+        "terminal": {
+          "kind": "authorized_transition",
+          "reweight_provenance": {
+            "body_json": {
+              "valence_row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+            },
+            "event_type": "REWEIGHT",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b"
+          }
+        },
+        "valence_evidence": {
+          "body_json": {
+            "evidence_schema": "hom.aimos.mutation-outcome-evidence/v2",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "outcome_event_id": "44444444-4444-4444-8444-444444444444",
+            "outcome_event_mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+            "outcome_id": "33333333-3333-4333-8333-333333333333",
+            "recall_event_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+            "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+            "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+            "target_live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "target_occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "reward_sign": 1,
+          "row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+        },
+        "bundle_sha256": "63d58abe12c02cfa548b356a1d93d475162d5d2bc73c7cec01c4537cff1e5431"
+      }
+    },
+    {
+      "id": "P1-MUT-CV-BUNDLE-COMMITMENT",
+      "expected": "invalid",
+      "reason": "MUTATION_BUNDLE_COMMITMENT_INVALID",
+      "bundle": {
+        "bundle_id": "P1-MUT-CV-VALID-TRANSITION",
+        "cognitive_projection": {
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "new_weight_milli": 1100,
+          "old_weight_milli": 1000,
+          "prev_projection_hash": "1b74695689132fd416cc32059e080f1efab91bf33db205af055967981b91fe3e",
+          "projection_hash": "a9b62c67e47c9da2f833f4519db187fb8af948bf9beccc0d11f770f992140960",
+          "provenance_mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b",
+          "transition_hash": "e16f16fb4ffbecb0c3662f3f492358da5a6b5ea1f341fa19f0fd670b77c65b25",
+          "transition_signature_b64u": "CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQ"
+        },
+        "company_id": "hom",
+        "format": {
+          "canonicalization": "hom-aimos/canonical-json/v1",
+          "hash": "sha256",
+          "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+          "signature": "ed25519",
+          "version": 2
+        },
+        "outcome_event": {
+          "event_id": "44444444-4444-4444-8444-444444444444",
+          "metadata": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+          "operation": "mutation_outcome_evidence_v2",
+          "parent_event_id": "22222222-2222-4222-8222-222222222222"
+        },
+        "outcome_evidence": {
+          "company_id": "hom",
+          "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+          "memory_id": "11111111-1111-4111-8111-111111111111",
+          "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+          "outcome_id": "33333333-3333-4333-8333-333333333333",
+          "recall_event_id": "22222222-2222-4222-8222-222222222222",
+          "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "schema": "hom.aimos.mutation-outcome-evidence/v2",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+          "target_scope": "principal_state"
+        },
+        "recall_evidence_sha256": "214ff3b0e569a1a7da28b03a7cf6e9bf2cbf38d09db77d11286599509a95b9d4",
+        "recall_receipt": {
+          "event_id": "22222222-2222-4222-8222-222222222222",
+          "evidence": {
+            "live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a"
+          },
+          "merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+          "mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+          "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c"
+        },
+        "terminal": {
+          "kind": "authorized_transition",
+          "reweight_provenance": {
+            "body_json": {
+              "valence_row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+            },
+            "event_type": "REWEIGHT",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "mutation_hash": "c45a65b8d6d1ee3df3d0aa6adb7e1c105b50a18d95fffff0984ca9ac036fce8b"
+          }
+        },
+        "valence_evidence": {
+          "body_json": {
+            "evidence_schema": "hom.aimos.mutation-outcome-evidence/v2",
+            "memory_id": "11111111-1111-4111-8111-111111111111",
+            "outcome_event_id": "44444444-4444-4444-8444-444444444444",
+            "outcome_event_mutation_hash": "9258f5955bdd9b7de7fe3422e3c3c6a02f4935e36a46df05374c590a43b67231",
+            "outcome_id": "33333333-3333-4333-8333-333333333333",
+            "recall_event_id": "22222222-2222-4222-8222-222222222222",
+            "recall_event_mutation_hash": "da3da96bd2bc7eab35ee3a66bb180bb0bf83b2a40708f36cf208add2ffde901a",
+            "recall_merkle_root": "a3205fff05b6a93d64b82c7d4ab092c32fb9a8aa91fc56ad87b12604c8e38ed4",
+            "security_closure_sha256": "f362156fa5e9baccb9319f383d38892cc21f21b689800bc7c10e0a0569c0b06c",
+            "target_live_content_hash": "1ad6ec50d4a211e9abe33b16c19011a4cc01b3c74014496842c7c3d4d10e9602",
+            "target_occurrence_ref": "5363303936b0117594a93ddd2e18bc4aa959195dd8fc54146b6096831381b96a",
+            "target_scope": "principal_state"
+          },
+          "reward_sign": 1,
+          "row_hash": "392b788286fd9a935d616aaec9c5dde62f0d985ae50a7547c74b2fdb7f666599"
+        },
+        "bundle_sha256": "d121be3103007b41edf96f8262925f8c7d61894afe9a041843b631f69445bc57"
+      }
+    }
+  ],
+  "manifest_sha256": "ec6327c1f33bf93aa7c407b75d95f29d0d64f6d27580fe7453c6d60d2117a537"
+}

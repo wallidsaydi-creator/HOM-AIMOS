@@ -24,8 +24,8 @@ test('tool save and recall consume signed native authorities without raw memory 
   const recallStart = registry.indexOf('async function aimosRecall');
   const saveStart = registry.indexOf('async function aimosSave');
   const recallSource = registry.slice(recallStart, saveStart);
-  assert.match(recallSource, /resolveNativeRecallAuthority/);
-  assert.match(recallSource, /executeNativeRecall/);
+  assert.match(recallSource, /executeCanonicalRecall/);
+  assert.doesNotMatch(recallSource, /resolveNativeRecallAuthority|executeNativeRecall\(/);
   assert.doesNotMatch(recallSource, /FROM\s+aimos_memories|is_active\s*=\s*true|getEmbedding/);
   assert.match(registry, /tool:\s*'aimos_save_commit'/);
   assert.match(registry, /master_signed_memory_write_grant_required/);
@@ -50,8 +50,8 @@ test('v1 ASMR recall is signed POST over native-admitted evidence only', async (
   ]);
   assert.match(route, /router\.get\('\/recall',[\s\S]*405/);
   assert.match(route, /router\.post\('\/recall'/);
-  assert.match(route, /resolveNativeRecallAuthority/);
-  assert.match(route, /executeNativeRecall/);
+  assert.match(route, /executeCanonicalRecall/);
+  assert.doesNotMatch(route, /resolveNativeRecallAuthority|executeNativeRecall\(/);
   assert.match(route, /asmrAnswerFromEvidence/);
   assert.match(nativeRecall, /transportBinding\.transport === 'v1'/);
   assert.match(asmr, /asmr_admitted_evidence_required/);

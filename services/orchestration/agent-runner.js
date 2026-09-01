@@ -35,7 +35,7 @@ import { agents, ensureAgent } from './agent-store.js';
 import { getToolsForAgent, executeTool } from './tool-registry.js';
 import { query } from '../../db/connection.js';
 import { getEmbedding } from '../core/embeddings.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 import { getConversationHistory, addConversationTurn } from './session-runner.js';
 import { buildModelAllocationDiagnostics, resolveModelForRequest } from './model-preferences.js';
 import { resolveProviderForModel } from '../core/providers.js';
@@ -181,6 +181,36 @@ export { pruneModelFailureHistory, isModelCircuitBroken, recordModelFailure, res
 export { extractConfidence } from './agent-confidence-calibration.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
+
+async function saveLearnedProceduralSkill({
+  agentId,
+  skillName,
+  triggerPattern,
+  steps,
+  expectedOutcome,
+  tags = [],
+  observation,
+  parentEventId = null,
+}) {
+  return executeHousekeeperCanonicalSave({
+    company_id: COMPANY,
+    agent_id: agentId,
+    key: `procedural_skill:${agentId}:${String(skillName).toLowerCase().replace(/[^a-z0-9_-]+/g, '_')}`,
+    value: JSON.stringify({
+      skill_name: skillName,
+      trigger_pattern: triggerPattern || null,
+      steps: Array.isArray(steps) ? steps : [],
+      expected_outcome: expectedOutcome || null,
+      tags: Array.isArray(tags) ? tags : [],
+      observation,
+    }),
+    scope: 'agent',
+    memory_type: 'procedural',
+    clearance_level: 3,
+    source: 'agent-runner:procedural-learning',
+    securityParentEventId: parentEventId,
+  });
+}
 
 const MAX_AGENT_RECURSION_DEPTH = 2;
 const MAX_EXECUTIVE_RECURSION_DEPTH = Math.max(MAX_AGENT_RECURSION_DEPTH, 5);
@@ -389,7 +419,7 @@ export async function postAdvisory(agentId, advice, fromAgent = 'human') {
     advice: String(advice).slice(0, 2000),
     posted_at: new Date().toISOString()
   });
-  await persistMemory({
+  await executeHousekeeperCanonicalSave({
     company_id: COMPANY,
     agent_id: agentId,
     key,
@@ -398,7 +428,6 @@ export async function postAdvisory(agentId, advice, fromAgent = 'human') {
     memory_type: 'advisory',
     clearance_level: 5,
     source: 'agent-runner',
-    mutation_authority: 'housekeeper',
   });
   return { key, agentId };
 }
@@ -422,7 +451,7 @@ async function logMandatoryRunEvent(agentId, { success, model, taskType, confide
       promptSnippet ? `  prompt: ${String(promptSnippet).slice(0, 120)}` : null
     ].filter(Boolean).join('\n');
 
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: COMPANY,
       agent_id: agentId,
       key,
@@ -431,7 +460,6 @@ async function logMandatoryRunEvent(agentId, { success, model, taskType, confide
       memory_type: 'event_log',
       clearance_level: 5,
       source: 'agent-runner',
-      mutation_authority: 'housekeeper',
     });
 
     // Phase 4: Also log to aimos_events with parent_event_id for trace tree
@@ -586,7 +614,7 @@ export async function sendAgentMessage(fromAgentId, toAgentId, message, metadata
 
   const msgType = metadata.messageType || 'directive';
   const key = `agent_msg:${fromAgentId}:${toAgentId}:${Date.now()}`;
-  await persistMemory({
+  await executeHousekeeperCanonicalSave({
     company_id: COMPANY,
     agent_id: toAgentId,
     key,
@@ -602,7 +630,6 @@ export async function sendAgentMessage(fromAgentId, toAgentId, message, metadata
     scope: 'agent',
     memory_type: 'agent_message',
     source: 'agent-runner',
-    mutation_authority: 'housekeeper',
   });
 
   return { sent: true, key, messageType: msgType };
@@ -671,7 +698,7 @@ async function updateWorkingContext(agentId, newFacts) {
     if (!newFacts || String(newFacts).length < 10) return;
     const key = `working_context:${agentId}`;
     const sanitized = sanitizeMemoryValue(String(newFacts).slice(0, 4000));
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: COMPANY,
       agent_id: agentId,
       key,
@@ -680,7 +707,6 @@ async function updateWorkingContext(agentId, newFacts) {
       memory_type: 'working_context',
       clearance_level: 3,
       source: 'agent-runner',
-      mutation_authority: 'housekeeper',
     });
   } catch { /* best-effort */ }
 }
@@ -1189,7 +1215,16 @@ Entity identifiers in the current user prompt were replaced with anonymous codes
 
   // ─── AGENT STATE: mark executing ──────────────────────────────────────────
   if (!fastLane) {
-    await updateAgentState(runtimeAgent.id, 'executing', String(userPrompt).slice(0, 120), null, null, null);
+    await updateAgentState(
+      runtimeAgent.id,
+      'executing',
+      String(userPrompt).slice(0, 120),
+      null,
+      null,
+      null,
+      {},
+      { runId: options.runId, authority: options.executionContext, parentEventId: options._parentEventId },
+    );
   }
 
   const rawToolDefs = fastLane
@@ -1243,6 +1278,7 @@ Entity identifiers in the current user prompt were replaced with anonymous codes
           observedAt: new Date(runStartTime).toISOString(),
           sourceRef: runId,
           persist: !options.skipAimos,
+          autonomousHousekeeper: true,
         });
         await addConversationTurn(conversationSessionKey, 'assistant', response, {
           companyId: COMPANY,
@@ -1251,6 +1287,7 @@ Entity identifiers in the current user prompt were replaced with anonymous codes
           observedAt: new Date().toISOString(),
           sourceRef: runId,
           persist: !options.skipAimos,
+          autonomousHousekeeper: true,
         });
 
         persistedAgent.isActive = false;
@@ -1777,6 +1814,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
       observedAt: new Date(runStartTime).toISOString(),
       sourceRef: runId,
       persist: !options.skipAimos,
+      autonomousHousekeeper: true,
     });
     await addConversationTurn(conversationSessionKey, 'assistant', response, {
       companyId: COMPANY,
@@ -1785,6 +1823,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
       observedAt: new Date().toISOString(),
       sourceRef: runId,
       persist: !options.skipAimos,
+      autonomousHousekeeper: true,
     });
 
     // ─── PROCEDURAL MEMORY: Skill learning + usage tracking ─────────────────
@@ -1795,21 +1834,16 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
         if (usedTools.length >= 2) {
           const skillName = `auto_${runtimeAgent.id}_${(options.intent || options.taskType || 'general').replace(/[^a-z0-9]/gi, '_')}`;
           const skillDesc = `${skillName}: ${options.intent || options.taskType || 'general'} task using ${usedTools.join(', ')}`;
-          let skillEmbedding = null;
-          try { skillEmbedding = await getEmbedding(skillDesc); } catch { /* embedding optional */ }
-          await query(
-            `INSERT INTO procedural_skills (company_id, agent_id, skill_name, trigger_pattern, steps, expected_outcome, success_count, last_used, tags, skill_embedding)
-             VALUES ($1, $2, $3, $4, $5, $6, 1, NOW(), $7, $8::vector)
-             ON CONFLICT (company_id, skill_name)
-             DO UPDATE SET success_count = procedural_skills.success_count + 1, last_used = NOW(), updated_at = NOW(),
-               skill_embedding = COALESCE(EXCLUDED.skill_embedding, procedural_skills.skill_embedding)`,
-            [COMPANY, runtimeAgent.id, skillName,
-             (options.intent || options.taskType || '').toLowerCase(),
-             JSON.stringify(usedTools.map(t => `use ${t}`)),
-             `Automated pattern from ${options.intent || 'general'} task`,
-             JSON.stringify(usedTools),
-             skillEmbedding ? JSON.stringify(skillEmbedding) : null]
-          );
+          await saveLearnedProceduralSkill({
+            agentId: runtimeAgent.id,
+            skillName,
+            triggerPattern: (options.intent || options.taskType || '').toLowerCase(),
+            steps: usedTools.map((tool) => `use ${tool}`),
+            expectedOutcome: `Automated pattern from ${options.intent || 'general'} task`,
+            tags: usedTools,
+            observation: 'success',
+            parentEventId: securityDecisionReceipt?.event_id || options._parentEventId || null,
+          });
         }
       } catch { /* skill learning is best-effort */ }
     }
@@ -1827,15 +1861,21 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
         const skillConfidence = heuristicConf;
         for (const skillId of proceduralSkills.skillIds) {
           if (skillConfidence >= 0.5) {
-            await query(
-              `UPDATE procedural_skills SET success_count = success_count + 1, last_used = NOW(), updated_at = NOW() WHERE id = $1`,
-              [skillId]
-            );
+            await logEvent(COMPANY, runtimeAgent.id, 'procedural_skill_outcome', String(skillId), {
+              schema: 'hom.aimos.procedural-skill-outcome/v1',
+              memory_id: String(skillId),
+              outcome: 'success',
+              run_id: options.runId || null,
+              reasoning: 'The completed run retained one positive observation for a recalled procedural skill.',
+            }, securityDecisionReceipt?.event_id || options._parentEventId || null, { returnReceipt: true });
           } else {
-            await query(
-              `UPDATE procedural_skills SET fail_count = fail_count + 1, last_used = NOW(), updated_at = NOW() WHERE id = $1`,
-              [skillId]
-            );
+            await logEvent(COMPANY, runtimeAgent.id, 'procedural_skill_outcome', String(skillId), {
+              schema: 'hom.aimos.procedural-skill-outcome/v1',
+              memory_id: String(skillId),
+              outcome: 'failure',
+              run_id: options.runId || null,
+              reasoning: 'The completed run retained one negative observation for a recalled procedural skill.',
+            }, securityDecisionReceipt?.event_id || options._parentEventId || null, { returnReceipt: true });
           }
         }
       } catch { /* best effort */ }
@@ -1927,7 +1967,8 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
         },
         desires: { goal: `Complete ${taskType} task successfully`, quality_target: taskRoute?.confidence_threshold || 0.6 },
         intentions: mergedIntentions
-      }
+      },
+      { runId: options.runId, authority: options.executionContext, parentEventId: options._parentEventId },
     );
 
     let reasoningSignals = [];
@@ -1963,7 +2004,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
             timestamp: new Date().toISOString()
           });
           // Quality gate is enforced inside persistMemory, no need to pre-check
-          await persistMemory({
+          await executeHousekeeperCanonicalSave({
             company_id: COMPANY,
             agent_id: runtimeAgent.id,
             key: chainKey,
@@ -1972,7 +2013,6 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
             memory_type: 'reasoning_chain',
             clearance_level: 3,
             source: 'agent-runner',
-            mutation_authority: 'housekeeper',
           });
         }
       } catch { /* reasoning capture is best-effort */ }
@@ -1990,7 +2030,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           last_model: executedModel,
           timestamp: new Date().toISOString()
         });
-        await persistMemory({
+        await executeHousekeeperCanonicalSave({
           company_id: COMPANY,
           agent_id: runtimeAgent.id,
           key: stateKey,
@@ -1999,7 +2039,6 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           memory_type: 'reasoning_state',
           clearance_level: 3,
           source: 'agent-runner',
-          mutation_authority: 'housekeeper',
         });
       } catch (err) { console.warn(`[agent-runner] reasoning state write failed: ${err.message}`); }
     }
@@ -2162,16 +2201,21 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
     if (taskType && taskType !== 'chat') {
       try {
         const skillName = `${runtimeAgent.id}_${taskType}_workflow`;
-        await query(
-          `INSERT INTO procedural_skills (company_id, agent_id, skill_name, steps, trigger_pattern, expected_outcome, success_count, fail_count, last_used)
-           VALUES ($1, $2, $3, $4, $5, $6, 1, 0, NOW())
-           ON CONFLICT (company_id, skill_name)
-           DO UPDATE SET success_count = procedural_skills.success_count + 1, last_used = NOW(), updated_at = NOW()`,
-          [COMPANY, runtimeAgent.id, skillName, JSON.stringify({
-            taskType, model: executedModel, avgConfidence: finalConfidence,
-            tools: allowedToolNames.slice(0, 10), lastRun: new Date().toISOString()
-          }), taskType, `Successful ${taskType} run`]
-        );
+        await saveLearnedProceduralSkill({
+          agentId: runtimeAgent.id,
+          skillName,
+          triggerPattern: taskType,
+          steps: [{
+            taskType,
+            model: executedModel,
+            avgConfidence: finalConfidence,
+            tools: allowedToolNames.slice(0, 10),
+          }],
+          expectedOutcome: `Successful ${taskType} run`,
+          tags: ['lifelong_learning', taskType],
+          observation: 'success',
+          parentEventId: _successTraceEvent || securityDecisionReceipt?.event_id || options._parentEventId || null,
+        });
       } catch { /* skill deposit is best-effort */ }
     }
 
@@ -2282,7 +2326,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           const knowledgeValue = extractions.slice(0, 8).join('\n').slice(0, 3000);
           const knowledgeKey = `cortex:${runtimeAgent.id}:${taskType}:${Date.now()}`;
           // Quality gate is enforced inside persistMemory
-          await persistMemory({
+          await executeHousekeeperCanonicalSave({
             company_id: COMPANY,
             agent_id: runtimeAgent.id,
             key: knowledgeKey,
@@ -2291,7 +2335,6 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
             memory_type: 'tacit_knowledge',
             clearance_level: 5,
             source: 'agent-runner',
-            mutation_authority: 'housekeeper',
           });
         }
       } catch { /* cortex extraction is best-effort */ }
@@ -2300,7 +2343,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
     // ─── TEAM LEARNING: low-confidence success = soft failure for others ─────
     if (taskType && taskType !== 'chat' && finalConfidence < 0.5 && response) {
       try {
-        await persistMemory({
+        await executeHousekeeperCanonicalSave({
           company_id: COMPANY,
           agent_id: runtimeAgent.id,
           key: `soft_fail:${runtimeAgent.id}:${taskType}:${Date.now()}`,
@@ -2317,7 +2360,6 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           memory_type: 'shared_failure',
           clearance_level: 3,
           source: 'agent-runner',
-          mutation_authority: 'housekeeper',
         });
       } catch { /* soft failure tracking is best-effort */ }
     }
@@ -2743,13 +2785,16 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
     if (failTaskType && failTaskType !== 'chat') {
       try {
         const skillName = `${runtimeAgent.id}_${failTaskType}_workflow`;
-        await query(
-          `INSERT INTO procedural_skills (company_id, agent_id, skill_name, steps, trigger_pattern, expected_outcome, success_count, fail_count, last_used)
-           VALUES ($1, $2, $3, $4, $5, $6, 0, 1, NOW())
-           ON CONFLICT (company_id, skill_name)
-           DO UPDATE SET fail_count = procedural_skills.fail_count + 1, last_used = NOW(), updated_at = NOW()`,
-          [COMPANY, runtimeAgent.id, skillName, JSON.stringify({ taskType: failTaskType, error: err?.message, lastFail: new Date().toISOString() }), failTaskType, `Failed ${failTaskType} run`]
-        );
+        await saveLearnedProceduralSkill({
+          agentId: runtimeAgent.id,
+          skillName,
+          triggerPattern: failTaskType,
+          steps: [{ taskType: failTaskType, error_class: err?.name || 'agent_run_failure' }],
+          expectedOutcome: `Avoid or repair failed ${failTaskType} run`,
+          tags: ['lifelong_learning', 'failure', failTaskType],
+          observation: 'failure',
+          parentEventId: _errorTraceEvent || options._parentEventId || null,
+        });
       } catch { /* skill fail tracking is best-effort */ }
     }
 
@@ -2779,7 +2824,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
 
     // ─── SENGE #3: TEAM LEARNING — save failure for cross-agent learning ──
     try {
-      await persistMemory({
+      await executeHousekeeperCanonicalSave({
         company_id: COMPANY,
         agent_id: runtimeAgent.id,
         key: `failure:${runtimeAgent.id}:${failTaskType}:${Date.now()}`,
@@ -2794,7 +2839,6 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
         memory_type: 'shared_failure',
         clearance_level: 3,
         source: 'agent-runner',
-        mutation_authority: 'housekeeper',
       });
     } catch { /* team learning write is best-effort */ }
 

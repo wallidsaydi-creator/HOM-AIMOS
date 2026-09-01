@@ -106,6 +106,18 @@ test('task model preference is one signed composite value, never a torn provider
   assert.doesNotMatch(preferences, /readConfigString\(`\$\{prefix\}_PROVIDER`\)/);
   assert.doesNotMatch(preferences, /readConfigString\(`\$\{prefix\}_MODEL`\)/);
   assert.match(preferences, /preference\.authority === 'signed_task_preference'/);
+  assert.doesNotMatch(preferences, /pickActiveProvider|LLM_PROVIDER|runtime_default'/);
+
+  const governance = await source('services/orchestration/governance-resolver.js');
+  assert.doesNotMatch(governance, /FROM agent_model_policy|agent_model_policy'/);
+  assert.match(governance, /modelPolicyAuthority: 'master_signed_system_config'/);
+
+  const registry = await source('services/observe/architecture-registry.js');
+  const registerStart = registry.indexOf('export async function registerModel');
+  const registerEnd = registry.indexOf('export async function getModelRegistry', registerStart);
+  const registerBody = registry.slice(registerStart, registerEnd);
+  assert.match(registerBody, /model_registry_mutation_retired_use_signed_model_preference/);
+  assert.doesNotMatch(registerBody, /INSERT INTO model_registry|UPDATE model_registry/);
 
   const settings = await source('routes/settings.js');
   assert.match(settings, /const preference = JSON\.stringify\(\{ provider, model \}\)/);

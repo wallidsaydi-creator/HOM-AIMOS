@@ -5,6 +5,8 @@ import { fileURLToPath } from 'url';
 
 import { query } from '../db/connection.js';
 import { validatePipelines } from '../services/pipeline-manifest.js';
+import { logEvent } from '../services/observe/event-ledger.js';
+import { verifiedRequestAuthorityFromRequest } from '../services/security/auth-gate.js';
 
 import {
   getCommandCenterSnapshot,
@@ -136,8 +138,46 @@ function buildOperatorActions() {
       path: '/command-center/aimos-control-center',
       auth: 'native_certificate_envelope',
       mutation: false
+    },
+    {
+      id: 'observe.executable_topology',
+      label: 'Ledger current executable topology',
+      method: 'POST',
+      path: '/command-center/executable-topology/observe',
+      body: {},
+      auth: 'native_certificate_envelope',
+      mutation: false,
+      durable_evidence: true
     }
   ];
+}
+
+function buildExecutableTopologyProjection(pipelineValidation) {
+  const topology = pipelineValidation?.topology;
+  const validation = pipelineValidation?.topology_validation;
+  if (!topology || !validation) throw new Error('executable_topology_projection_missing');
+  return {
+    schema: topology.schema,
+    topology_root_sha256: topology.topology_root_sha256,
+    valid: Boolean(validation.valid),
+    failures: [...validation.failures],
+    module_availability: {
+      valid: Number(pipelineValidation?.total || 0) === Number(pipelineValidation?.ok || 0),
+      total: Number(pipelineValidation?.total || 0),
+      ok: Number(pipelineValidation?.ok || 0),
+      failures: (pipelineValidation?.results || [])
+        .filter((result) => result.status !== 'OK')
+        .map((result) => ({ ...result })),
+    },
+    declared_total: topology.declared_total,
+    classified_total: validation.classified_total,
+    disposition_definitions: topology.dispositions,
+    disposition_counts: topology.disposition_counts,
+    disposition_members: topology.disposition_members,
+    pipeline_contracts: topology.pipeline_contracts,
+    pipelines: topology.pipelines,
+    records: topology.records,
+  };
 }
 
 export async function buildAimosControlCenterSnapshot({
@@ -159,7 +199,8 @@ export async function buildAimosControlCenterSnapshot({
       path: 'services/pipeline-manifest.js',
       valid: Boolean(pipelineValidation?.valid),
       total: Number(pipelineValidation?.total || 0),
-      ok: Number(pipelineValidation?.ok || 0)
+      ok: Number(pipelineValidation?.ok || 0),
+      executable_topology: buildExecutableTopologyProjection(pipelineValidation)
     },
     operator_actions: buildOperatorActions()
   };
@@ -177,6 +218,41 @@ router.get('/aimos-control-center', async (_req, res) => {
       error: error?.message || String(error),
       snapshot: null
     });
+  }
+});
+
+router.post('/executable-topology/observe', async (req, res, next) => {
+  try {
+    const authority = verifiedRequestAuthorityFromRequest(req);
+    const pipelineValidation = await validatePipelines();
+    const projection = buildExecutableTopologyProjection(pipelineValidation);
+    if (!pipelineValidation.valid || !projection.valid) {
+      return res.status(409).json({
+        success: false,
+        error: 'executable_topology_invalid',
+        projection,
+      });
+    }
+    const receipt = await logEvent(
+      authority.companyId,
+      authority.agentId,
+      'executable_topology_observed',
+      projection.topology_root_sha256,
+      {
+        reasoning: 'Record the server-derived E0 executable topology partition before changing runtime ownership.',
+        source_knowledge: 'live HOM-AIMOS source graph and pipeline manifest loaded by the canonical server',
+        projection,
+      },
+      null,
+      {
+        returnReceipt: true,
+        authority,
+      },
+    );
+    return res.status(201).json({ success: true, projection, receipt });
+  } catch (error) {
+    error.statusCode = error?.message === 'event_operation_key_exists' ? 409 : 500;
+    return next(error);
   }
 });
 

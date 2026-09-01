@@ -538,8 +538,8 @@ export function readConceptPprPolicy() {
     : null;
 }
 
-async function verifySelectedBuild(company, selected) {
-  const result = await query(
+async function verifySelectedBuild(company, selected, { queryFn = query } = {}) {
+  const result = await queryFn(
     `SELECT build_id, corpus_root_sha256, graph_root_sha256, concept_count,
             passage_edge_count, relation_edge_count, authority_event_id
        FROM public.concept_graph_builds
@@ -557,7 +557,9 @@ async function verifySelectedBuild(company, selected) {
     || Number(build.concept_count) > selected.policy.max_ppr_nodes
     || Number(build.relation_edge_count) > selected.policy.max_ppr_edges
   ) throw new Error('concept_selected_build_policy_binding_invalid');
-  const event = await readVerifiedEventById(build.authority_event_id, company);
+  const event = await readVerifiedEventById(build.authority_event_id, company, {
+    client: Object.freeze({ query: queryFn }),
+  });
   if (
     event.operation !== BUILD_EVENT_OPERATION
     || event.key !== graphRoot
@@ -575,13 +577,14 @@ async function mapQueryAnchorsToNodes(
   policy,
   eligibleNodeIds,
   requestSpecificityByNode,
+  queryFn,
 ) {
   let anchors = extractQueryEntityAnchors(queryText, policy.entity_seed_limit);
   if (anchors.length === 0) anchors = [{ name: String(queryText || '').trim().toLowerCase(), type: 'query' }];
   const best = new Map();
   for (const anchor of anchors.slice(0, policy.entity_seed_limit)) {
     const embedding = assertEmbedding(await getEmbedding(anchor.name), 'concept_query_embedding_invalid');
-    const match = await query(
+    const match = await queryFn(
       `SELECT node_id, normalized_label, specificity,
               1 - (embedding <=> $3::vector) AS similarity
          FROM public.concept_graph_nodes
@@ -607,7 +610,7 @@ export async function conceptPprLookup(
   queryText,
   companyId = COMPANY,
   limit = 10,
-  { admittedStates = [] } = {},
+  { admittedStates = [], queryFn = query } = {},
 ) {
   const selected = readConceptPprPolicy();
   if (!selected) throw new Error('concept_ppr_signed_build_policy_missing');
@@ -629,8 +632,8 @@ export async function conceptPprLookup(
   if (requestStateHashes.length > CONCEPT_PPR_MAX_REQUEST_STATES) {
     throw new Error('concept_ppr_request_state_bound_exceeded');
   }
-  const build = await verifySelectedBuild(company, selected);
-  const eligiblePassageNodes = await query(
+  const build = await verifySelectedBuild(company, selected, { queryFn });
+  const eligiblePassageNodes = await queryFn(
     `SELECT concept_node_id AS node_id, COUNT(DISTINCT memory_id)::int AS request_passage_degree
       FROM public.concept_passage_edges
       WHERE company_id=$1 AND build_id=$2::uuid
@@ -657,17 +660,18 @@ export async function conceptPprLookup(
     selected.policy,
     eligibleNodeIds,
     requestSpecificityByNode,
+    queryFn,
   );
   if (seedWeights.size === 0) return [];
   const [nodesResult, edgesResult] = await Promise.all([
-    query(
+    queryFn(
       `SELECT node_id FROM public.concept_graph_nodes
         WHERE company_id=$1 AND build_id=$2::uuid
           AND node_id = ANY($3::uuid[])
         ORDER BY node_identity_sha256`,
       [company, build.build_id, eligibleNodeIds],
     ),
-    query(
+    queryFn(
       `SELECT source_concept_node_id AS source, target_concept_node_id AS target,
               relation_type, weight
         FROM public.concept_relation_edges
@@ -711,7 +715,7 @@ export async function conceptPprLookup(
   if (activeConcepts.length === 0) return [];
   const conceptIds = activeConcepts.map(([nodeId]) => nodeId);
   const scoreValues = activeConcepts.map(([, score]) => score);
-  const passages = await query(
+  const passages = await queryFn(
     `SELECT encode(edge.source_content_sha256, 'hex') AS state_hash,
             SUM(score.value * edge.weight)::float8 AS ppr_score,
             COUNT(*)::int AS concept_hits

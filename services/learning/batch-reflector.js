@@ -25,7 +25,7 @@
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { query } from '../../db/connection.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -67,16 +67,16 @@ export async function createRunState(pipelineId, companyId = COMPANY) {
       updatedAt: new Date().toISOString()
     };
 
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: companyId,
       agent_id: 'batch-reflector',
-      mutation_authority: 'housekeeper',
       key: runStateId,
       value: JSON.stringify(state),
       scope: 'system',
       memory_type: 'pipeline_run_state',
       memory_tier: 'short-term',
-      clearance_level: 5
+      clearance_level: 5,
+      source: 'batch-reflector',
     });
 
     return { runStateId, created: true };
@@ -213,10 +213,9 @@ export async function runQualityLoop(hypothesis, maxIterations = DEFAULT_QUALITY
   const gateStatus = passed ? 'pending_human_approval' : 'failed_screening';
 
   try {
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: companyId,
       agent_id: 'batch-reflector',
-      mutation_authority: 'housekeeper',
       key: `gate1_${Date.now()}`,
       value: JSON.stringify({
         gateNumber: 1,
@@ -229,7 +228,8 @@ export async function runQualityLoop(hypothesis, maxIterations = DEFAULT_QUALITY
       scope: 'system',
       memory_type: 'human_gate',
       memory_tier: 'short-term',
-      clearance_level: 6
+      clearance_level: 6,
+      source: 'batch-reflector',
     });
   } catch (err) {
     console.warn(`[BATCH-REFLECTOR] Failed to record gate 1: ${err.message}`);
@@ -346,10 +346,9 @@ async function loadRunState(runStateId, companyId) {
 }
 
 async function persistRunState(runStateId, state, companyId) {
-  await persistMemory({
+  await executeHousekeeperCanonicalSave({
     company_id: companyId,
     agent_id: 'batch-reflector',
-    mutation_authority: 'housekeeper',
     key: runStateId,
     value: JSON.stringify(state),
     scope: 'system',

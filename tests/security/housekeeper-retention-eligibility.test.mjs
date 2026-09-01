@@ -33,12 +33,20 @@ test('SPICED retained-memory reads remain tenant-bound', async () => {
 
   assert.match(
     text,
-    /SELECT id, retrieval_weight FROM aimos_memories WHERE company_id = \$1 AND id = ANY\(\$2::uuid\[\]\)/,
+    /SELECT id,retrieval_weight FROM aimos_memories WHERE company_id=\$1 AND id=ANY\(\$2::uuid\[\]\)/,
   );
   assert.match(
     text,
-    /FROM aimos_memories\s+WHERE company_id = \$1\s+ORDER BY replay_priority DESC\s+LIMIT \$2/,
+    /FROM aimos_memories\s+WHERE company_id=\$1 AND id=ANY\(\$2::uuid\[\]\)\s+AND retrieval_weight >= \$3 AND retrieval_weight < \$4/,
   );
+  assert.match(text, /buildVerifiedHebbianAssociationSnapshot/);
+  assert.match(text, /verified_receipt_root_sha256/);
+  assert.match(text, /spiced_verified_recall_activation_required/);
+  assert.doesNotMatch(text, /export async function amplifyConsolidated/);
+  assert.doesNotMatch(text, /export async function formEdges(?:Batch)?/);
+  assert.match(text, /spiced_consolidation_started/);
+  assert.match(text, /spiced_consolidation_terminal/);
+  assert.doesNotMatch(text, /FROM aimos_memories[\s\S]{0,160}FOR SHARE/);
   assert.match(
     text,
     /FROM aimos_memories\s+WHERE company_id = \$1 AND id = ANY\(\$4\)/,

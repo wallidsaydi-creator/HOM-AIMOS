@@ -1,0 +1,66 @@
+{
+  "schema": "hom.aimos.canary-cross-transport-public-evidence/v1",
+  "classification": "PUBLIC_RELEASE_EVIDENCE_NON_RECONSTRUCTIVE",
+  "protocol_id": "hom-aimos-canary-cross-transport-v12",
+  "source_run_id": "20260818073039_8103b4",
+  "authority": "independent_read_only_verifier",
+  "population": {
+    "intended_n": 120,
+    "terminal_n": 120,
+    "valid_n": 120,
+    "invalid_n": 0,
+    "indeterminate_n": 0
+  },
+  "marked": {
+    "intended_n": 60,
+    "detected_n": 60,
+    "detection_rate": 1,
+    "wilson_95": {
+      "lower": 0.93982815,
+      "upper": 1
+    }
+  },
+  "clean": {
+    "intended_n": 60,
+    "flagged_n": 0,
+    "false_positive_rate": 0,
+    "wilson_95": {
+      "lower": 0,
+      "upper": 0.06017185
+    }
+  },
+  "transport_cells": {
+    "rest_persisted": 24,
+    "mcp_persisted": 24,
+    "relay_blocked": 24,
+    "executed": 24,
+    "exposed": 24
+  },
+  "signed_request_receipts_verified": 144,
+  "signed_event_receipts_verified": 499,
+  "signed_parent_link_units_valid": 120,
+  "rest_mcp_semantic_parity": true,
+  "aladdin_postconditions_valid": true,
+  "canonical_noninterference_valid": true,
+  "conformance_valid": true,
+  "automatic_policy_activation": false,
+  "promotion_eligible": true,
+  "marker_scope_statement": "Explicit marker traversal only; not arbitrary poison, prompt-injection, or semantic social-engineering detection.",
+  "source_commitments": {
+    "source_final_result_file_sha256": "66e100782c67536b5d8d8311dc9e005cf136d0fdd8df7eceb1b5a39ba769e3e8",
+    "source_report_root_sha256": "affa51052e77b8b3963ca69549419589ded3f0b584386b8e84aec1c16e0b69b5",
+    "source_final_result_root_sha256": "1e4de62e7067d2631667230882a2417ad3d913be110d1fdfa3ed039f49049430",
+    "unit_outcome_merkle_root_sha256": "2dfef13e4ccea7c6cbc03a496c8cae0b7347ece4e5aa995dd80520eb237680c2",
+    "unit_verdict_root_sha256": "bb074b39a0b1ff6f8c4be0799dd27875f408873222a86beb136bea366e3cd8d8"
+  },
+  "omitted_private_fields": [
+    "absolute_paths",
+    "storage_locators",
+    "credential_references",
+    "identity_material",
+    "record_identifiers",
+    "tenant_content"
+  ],
+  "terminal_state": "COMPLETE",
+  "public_evidence_sha256": "f35e4633679b4252ab489b31baf61b4a7666180b0ab504de95fe596abe8f6a74"
+}

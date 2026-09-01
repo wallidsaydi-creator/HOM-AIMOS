@@ -1,6 +1,8 @@
 /**
  * Native time-horizon operator from:
  * - StreamingQA.pdf
+ * Status: Native structural projection in canonical /aimos/recall with zero
+ * rank influence pending calibration.
  *
  * Implemented formulas / techniques:
  * - Q = {(dq_i, q_i, a_i)} and C = {(dc_j, c_j)}
@@ -11,7 +13,7 @@
  * - recall@k diagnostic helper
  *
  * Aimos adaptation:
- * - no future-evidence deletion; future evidence receives a bounded low score
+ * - no future-evidence deletion or uncalibrated rank change
  * - no pruning, decay, or canonical memory mutation
  */
 

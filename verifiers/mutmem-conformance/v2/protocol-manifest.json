@@ -1,0 +1,236 @@
+{
+  "schema": "hom.aimos.mutmem-portable-protocol-manifest/v2",
+  "version": 2,
+  "status": "p1_protocol_versioned",
+  "canonicalization": "hom-aimos/canonical-json/v1",
+  "hash": "sha256",
+  "signature": "ed25519",
+  "external_trust_root_required": true,
+  "authority_profiles": [
+    "master_signed_recall_grant",
+    "housekeeper_system_principal"
+  ],
+  "schemas": {
+    "trust_anchor": "hom.aimos.mutmem-trust-anchor/v2",
+    "actor_identity_epoch": "hom.aimos.mutmem-actor-identity-epoch/v2",
+    "actor_revocation_state": "hom.aimos.mutmem-actor-revocation-state/v2",
+    "housekeeper_identity_epoch": "hom.aimos.mutmem-housekeeper-identity-epoch/v2",
+    "housekeeper_revocation_state": "hom.aimos.mutmem-housekeeper-revocation-state/v2",
+    "effective_recall_grant": "hom.aimos.mutmem-effective-recall-grant/v2",
+    "request_envelope": "hom.aimos.mutmem-request-envelope/v2",
+    "request_receipt": "hom.aimos.mutmem-request-receipt/v2",
+    "content_state_projection": "hom.aimos.mutmem-content-state-projection/v2",
+    "epistemic_recall_decision": "hom.aimos.mutmem-epistemic-recall-decision/v2",
+    "final_security_closure": "hom.aimos.mutmem-final-security-closure/v2",
+    "return_projection": "hom-aimos/native-recall-return-projection/v1",
+    "native_recall_receipt": "hom.aimos.mutmem-native-recall-receipt/v2",
+    "memory_state": "hom.aimos.mutmem-memory-state/v2",
+    "provenance_chain": "hom.aimos.mutmem-provenance-chain/v2",
+    "occurrence": "hom.aimos.mutmem-occurrence-evidence/v2",
+    "epistemic_projection": "hom.aimos.mutmem-epistemic-projection/v2",
+    "receipt_evidence": "hom.aimos.mutmem-recall-evidence-entry/v2"
+  },
+  "domain_hex": {
+    "portable_object_v2": "686f6d2e61696d6f732e6d75746d656d2d706f727461626c652d6f626a6563742f763200",
+    "portable_bundle_v2": "686f6d2e61696d6f732e6d75746d656d2d706f727461626c652d65766964656e63652f763200",
+    "recall_authorization_v1": "61696d6f732d726563616c6c2d617574686f72697a6174696f6e2d763100",
+    "request_receipt_v1": "61696d6f732d726571756573742d726563656970742d763100",
+    "event_link_v1": "41494d4f532d4556454e542d4c494e4b2d763100",
+    "recall_leaf": "00",
+    "recall_node": "01",
+    "occurrence_v3": "686f6d2e61696d6f732e6d656d6f72792d6f6363757272656e63652f763300",
+    "occurrence_signature_v3": "686f6d2e61696d6f732e6d656d6f72792d6f6363757272656e63652d7369676e61747572652f763300"
+  },
+  "singleton_order": [
+    "trust_anchor",
+    "actor_identity_epoch",
+    "actor_revocation_state",
+    "housekeeper_identity_epoch",
+    "housekeeper_revocation_state",
+    "effective_recall_grant",
+    "request_envelope",
+    "request_receipt",
+    "content_state_projection",
+    "epistemic_recall_decision",
+    "final_security_closure",
+    "return_projection",
+    "native_recall_receipt"
+  ],
+  "result_object_order": [
+    "memory_state",
+    "provenance_chain",
+    "occurrence",
+    "epistemic_projection",
+    "receipt_evidence"
+  ],
+  "object_count_formula": "13 + 5 * result_count",
+  "maximum_result_count": 200,
+  "failure_codes": [
+    "ENVELOPE_COMMITMENT_INVALID",
+    "OBJECT_SCHEMA_INVALID",
+    "TRUST_ROOT_MISMATCH",
+    "TRUST_ANCHOR_KEY_MISMATCH",
+    "IDENTITY_SCOPE_MISMATCH",
+    "IDENTITY_CERTIFICATE_BINDING_INVALID",
+    "IDENTITY_EPOCH_INVALID",
+    "REVOCATION_STATE_INVALID",
+    "HOUSEKEEPER_IDENTITY_INVALID",
+    "HOUSEKEEPER_REVOCATION_STATE_INVALID",
+    "HOUSEKEEPER_SYSTEM_PRINCIPAL_INVALID",
+    "GRANT_SCOPE_MISMATCH",
+    "GRANT_NOT_EFFECTIVE",
+    "GRANT_COMMITMENT_INVALID",
+    "REQUEST_CONTEXT_INVALID",
+    "REQUEST_BODY_HASH_MISMATCH",
+    "COMMAND_HASH_MISMATCH",
+    "REQUEST_RECEIPT_BINDING_INVALID",
+    "REQUEST_RECEIPT_COMMITMENT_INVALID",
+    "AUTHORITY_MUTATION_BINDING_INVALID",
+    "DECISION_HASH_MALFORMED",
+    "CONTENT_STATE_BINDING_INVALID",
+    "EPISTEMIC_BINDING_INVALID",
+    "SECURITY_CLOSURE_BINDING_INVALID",
+    "RETURN_PROJECTION_BINDING_INVALID",
+    "RESULT_CARDINALITY_INVALID",
+    "RESULT_IDENTITY_BINDING_INVALID",
+    "PROVENANCE_BINDING_INVALID",
+    "OCCURRENCE_BINDING_INVALID",
+    "OCCURRENCE_NATIVE_BODY_INVALID",
+    "EPISTEMIC_PROJECTION_BINDING_INVALID",
+    "RECEIPT_EVIDENCE_BINDING_INVALID",
+    "MERKLE_ENTRY_BINDING_INVALID",
+    "MERKLE_ROOT_MISMATCH",
+    "EVENT_RECEIPT_BINDING_INVALID",
+    "EVENT_RECEIPT_COMMITMENT_INVALID",
+    "REVOCATION_EVENT_BINDING_INVALID"
+  ],
+  "vectors": {
+    "schema": "hom.aimos.mutmem-portable-predicate-vectors/v2",
+    "intended_n": 39,
+    "valid_n": 2,
+    "invalid_n": 37,
+    "vectors_root_sha256": "93a8e38c53eb54b34ebdcffe0c3b647f02210439df59c6907f3473de1b18107d",
+    "manifest_sha256": "b9dc091af3bbcc87a4d4dd19b5ce8682a43ff2db17fddb84e6111cf361aaa2f0",
+    "file_sha256": "9b277332fbc944b8ceb272b0f714b9212c1e569d97086916b4c786a84536be0a"
+  },
+  "live_projection": {
+    "schema": "hom.aimos.mutmem-p1-live-projection-public/v1",
+    "event_id": "10217fc3-2c04-418c-8f8f-61346e29a88b",
+    "bundle_sha256": "57b0285f2624af4b3bccfac992390b589779fa663cf2b3b40725ce6a821b02b1",
+    "object_root_sha256": "f4dbffca1f728e6ced2e3db000a8e981eaa03b35e32cec0bd6ee8a8198c92a61",
+    "manifest_sha256": "011ca6425c562ffcc62f6435026879b406e59b1f80645bb464ddcf2451bf9520",
+    "file_sha256": "5116f8515df01a9e61919c837d4357625699bff2dbe9da90ae44dcc5808eddd2",
+    "private_artifact_sha256": "f5b19f8cf5fc7ccd444f65417932cb53b6d4bf8e559047fc948b6cc85f2a9631",
+    "private_artifact_distributed": false
+  },
+  "mutation_profile": {
+    "schema": "hom.aimos.mutmem-portable-mutation-evidence/v2",
+    "native_outcome_schema": "hom.aimos.mutation-outcome-evidence/v2",
+    "domain_hex": "686f6d2e61696d6f732e6d75746d656d2d706f727461626c652d6d75746174696f6e2d65766964656e63652f763200",
+    "terminal_kinds": [
+      "authorized_transition",
+      "signed_noop",
+      "occurrence_observation"
+    ],
+    "failure_codes": [
+      "MUTATION_BUNDLE_COMMITMENT_INVALID",
+      "MUTATION_OUTCOME_SCHEMA_INVALID",
+      "MUTATION_RECALL_BINDING_INVALID",
+      "MUTATION_OUTCOME_EVENT_INVALID",
+      "MUTATION_VALENCE_BINDING_INVALID",
+      "MUTATION_TERMINAL_KIND_INVALID",
+      "MUTATION_OBSERVATION_TERMINAL_INVALID",
+      "MUTATION_NOOP_TERMINAL_INVALID",
+      "MUTATION_TRANSITION_PROVENANCE_INVALID",
+      "MUTATION_PROJECTION_BINDING_INVALID",
+      "MUTATION_PROJECTION_HASH_INVALID",
+      "MUTATION_TRANSITION_HASH_INVALID"
+    ],
+    "vectors": {
+      "schema": "hom.aimos.mutmem-portable-mutation-vectors/v2",
+      "intended_n": 15,
+      "valid_n": 3,
+      "invalid_n": 12,
+      "vectors_root_sha256": "1b23a23bffdce975906b3808115612757029f1c5fc6a0f608f652b03f51deafb",
+      "manifest_sha256": "ec6327c1f33bf93aa7c407b75d95f29d0d64f6d27580fe7453c6d60d2117a537",
+      "file_sha256": "c71a12eb20b12a73e2179585602bd8cd67ed9d86a04eefb07e5f567c5ad12315"
+    },
+    "live_projection": {
+      "schema": "hom.aimos.mutmem-p1-live-mutation-public/v1",
+      "terminal_kinds": [
+        "authorized_transition",
+        "signed_noop",
+        "occurrence_observation"
+      ],
+      "bundle_sha256s": [
+        "7b1302780672a97f5ff20e7db93cbc2312613f61749cc78077d5d9d2d9cd4a81",
+        "36e2c96fd9a6a4886e0801a7c762ba8a121179c9c8b86ec60e8d75af3ced2ba3",
+        "046a93589cb1ccbe7d95b0ddce932d68129d75fe559d0bfdea9100751e0e5971"
+      ],
+      "manifest_sha256": "7d943338a984e537a74fe40e434cdef5a782917afbef6314a51e8e1ff3e4faeb",
+      "file_sha256": "071493e6736606bf874312bf7d0f9b70efebde70663c93ec412f90cbf20d137a",
+      "private_artifact_sha256": "64e723e3cae6c1bbdcdb7b0da7d5c0c4f80292f8e636c02d98200b41ee062c09",
+      "private_artifact_distributed": false
+    }
+  },
+  "source_files": [
+    {
+      "path": "services/security/protocol/canonical-json.js",
+      "sha256": "9bb4bb2171027f9ee0b30f897503bc968f5cf6c6a2d42ea826f02df637b23c4b"
+    },
+    {
+      "path": "services/security/protocol/mutmem-protocol.js",
+      "sha256": "b3c23fa66d07ea25931d94e0b88cfe8be606e397f8575029dea9c989fb78836a"
+    },
+    {
+      "path": "services/security/protocol/content-state-occurrence-v3.js",
+      "sha256": "9592316e412c27e40f62df325ff07c8979f8308ea4d6a407b4603b0a72ebdd80"
+    },
+    {
+      "path": "services/security/protocol/mutmem-portable-evidence-v2.js",
+      "sha256": "eead9508577c316b8496354e3e348c2f22ef2af4905653f9dc9e09d7f93890ef"
+    },
+    {
+      "path": "services/security/protocol/mutmem-portable-predicates-v2.js",
+      "sha256": "bb75ba9bf0555705ea068184e280350d1256a3c0a170b234b6a0682855bb8e61"
+    },
+    {
+      "path": "services/security/protocol/mutmem-portable-mutation-v2.js",
+      "sha256": "51284d511d63db4680326ea921d0617b1787c8dfaa45f55957a4db9abad944a3"
+    },
+    {
+      "path": "scripts/verification/mutmem-portable-predicate-fixture-factory.mjs",
+      "sha256": "d91cf1b50d01bf5b5d700c26424328bcc51114747430b82d5fa9ce97966bbbf2"
+    },
+    {
+      "path": "scripts/verification/generate-mutmem-portable-predicate-vectors.mjs",
+      "sha256": "f0960da29463836d0e1b9544c773f9a941f01bc3572e01d6453646716c9b5950"
+    },
+    {
+      "path": "scripts/verification/mutmem-portable-mutation-fixture-factory.mjs",
+      "sha256": "9e109f2ad8c663e88ae908865af47f00a0b8e65da07066a0e29277ab56a8cf24"
+    },
+    {
+      "path": "scripts/verification/generate-mutmem-portable-mutation-vectors.mjs",
+      "sha256": "392c97a47c4464839decef40a94ef45159c1bad424e4d770c6a9c86862bccc6f"
+    },
+    {
+      "path": "scripts/verification/generate-mutmem-p1-protocol-manifest.mjs",
+      "sha256": "8b6cb2775a75064a8ab4a1e9bdae22e30dd4f8268dcd10d32f65fc60999e1c21"
+    },
+    {
+      "path": "scripts/verification/prove-mutmem-p1-live-projection.mjs",
+      "sha256": "7e762903c1ab3672b9d9bcf2ddca411fe842abc952ade5a16d7f1d0435b90971"
+    },
+    {
+      "path": "scripts/verification/prove-mutmem-p1-live-mutation-projection.mjs",
+      "sha256": "c63bbcf8aa4f9427d2fdd233d617a31ed251227b8eba739e463b27c6c9caca08"
+    }
+  ],
+  "source_root_sha256": "a651c98bf4950ece317d81efe047b3502f70d29dea594353ea1e809559567dea",
+  "production_runtime_importers": 0,
+  "memory_write": false,
+  "domain_database_mutation": false,
+  "independent_crypto_verification_owner": "P2",
+  "protocol_root_sha256": "663174ea3373d7f7eab816254a119a3da83b157709e190a93f3caef1094b6874"
+}

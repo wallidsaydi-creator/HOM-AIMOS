@@ -66,7 +66,12 @@ const GENERIC_UNSAFE_PATTERNS = [
  * @returns {{valid: boolean, reason?: string, retryable: boolean}}
  */
 export async function validateWrite(agentId, targetKey, newValue, existingValue, opts = {}) {
-  const diagnostics = buildWriteValidationDiagnostics({ agentId, targetKey, newValue, existingValue });
+  const diagnostics = buildWriteValidationDiagnostics({
+    agentId,
+    targetKey,
+    newValue,
+    existingValue,
+  });
 
   // Key format validation
   const keyValidation = validateKeyFormat(targetKey);
@@ -94,7 +99,13 @@ export async function validateWrite(agentId, targetKey, newValue, existingValue,
         valid: false,
         reason: permissionCheck.reason,
         retryable: true,
-        diagnostics: buildWriteValidationDiagnostics({ agentId, targetKey, newValue, existingValue, permission: permissionCheck }),
+        diagnostics: buildWriteValidationDiagnostics({
+          agentId,
+          targetKey,
+          newValue,
+          existingValue,
+          permission: permissionCheck,
+        }),
       };
     }
   } catch (err) {
@@ -200,10 +211,17 @@ function checkInjectionPatterns(value) {
 
   for (const pattern of SQL_STRUCTURAL_INJECTION_PATTERNS) {
     if (pattern.test(text)) {
-      if (isNonExecutableEvidence) {
-        return { clean: true, class: 'non_executable_evidence_sql_vocabulary', pattern: pattern.source };
-      }
-      return { clean: false, pattern: pattern.source, class: 'sql_structural' };
+      // Memory values are bound PostgreSQL parameters and are never executed as
+      // SQL. SQL vocabulary is therefore diagnostic evidence, not a write
+      // authorization gate. Prompt/canary governance remains at its own native
+      // owners; this validator continues to reject byte-level unsafe input.
+      return {
+        clean: true,
+        class: isNonExecutableEvidence
+          ? 'non_executable_evidence_sql_vocabulary'
+          : 'bound_parameter_sql_vocabulary',
+        pattern: pattern.source,
+      };
     }
   }
 
@@ -284,6 +302,7 @@ export function buildWriteValidationDiagnostics({
  * @returns {Promise<{permitted: boolean, reason?: string}>}
  */
 export async function checkWritePermission(agentId, targetKey, opts = {}) {
+  const appendEvent = opts.logEvent || logEvent;
   // ── R11b: first-class system-self write authority (BEFORE the session lookup) ──
   // If the request authenticated under either verified housekeeper system tier
   // and the acting identity is the exact housekeeper principal, it holds
@@ -296,7 +315,7 @@ export async function checkWritePermission(agentId, targetKey, opts = {}) {
   if (HOUSEKEEPER_SYSTEM_TIERS.has(String(identityTier || '').toUpperCase())
       && verifiedAgentId === 'housekeeper') {
         // Never silent: record the intrinsic system-self write path in the ledger.
-        logEvent(COMPANY, verifiedAgentId, 'system_self_write_authorized', targetKey, {
+        appendEvent(COMPANY, verifiedAgentId, 'system_self_write_authorized', targetKey, {
           stage: 'write_validator',
           reason: 'verified_housekeeper_system_identity',
           tier: identityTier,

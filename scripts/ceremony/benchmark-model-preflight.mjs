@@ -20,6 +20,7 @@ import {
   AIMOS_COMPANY_ID,
   resolveAimosDatabaseName,
 } from '../../services/core/runtime-config.js';
+import { readInstalledUserServiceDefinition } from '../service/manage-user-service.mjs';
 
 const BRAIN_ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..', '..');
 const LIVE = process.argv.includes('--live');
@@ -450,8 +451,17 @@ async function main() {
     throw new Error(`unsupported_benchmark_generator_model:${GENERATOR_MODEL}`);
   }
   const databaseName = resolveAimosDatabaseName();
-  if (databaseName !== 'aimos') {
+  const installedService = process.argv.includes('--installed-service');
+  if (!installedService && databaseName !== 'aimos') {
     throw new Error('benchmark_model_preflight_requires_canonical_aimos_database');
+  }
+  if (installedService) {
+    const instance = String(cliValue('--aimos-instance') || '').trim();
+    const definition = readInstalledUserServiceDefinition(instance);
+    if (definition.instance !== instance || definition.database !== databaseName
+      || definition.instance === 'canonical' || definition.database === 'aimos') {
+      throw new Error('benchmark_model_preflight_installed_service_mismatch');
+    }
   }
   const authPath = path.resolve(cliValue('--auth-file') || path.join(os.homedir(), '.codex', 'auth.json'));
   const codexBinaryPath = path.resolve(
@@ -465,6 +475,7 @@ async function main() {
   const dryRun = {
     mode: LIVE ? 'LIVE' : 'DRY_RUN',
     database: databaseName,
+    execution_mode: installedService ? 'installed-service' : 'canonical-custody',
     provider: 'codex',
     auth_source: {
       source_sha256: auth.sourceSha256,
@@ -505,7 +516,18 @@ async function main() {
     source_file_sha256: auth.sourceSha256,
     source_last_refresh: auth.lastRefresh,
   };
-  const existing = await getLatestIntegrationToken(AIMOS_COMPANY_ID, 'codex');
+  let existing = null;
+  try {
+    existing = await getLatestIntegrationToken(AIMOS_COMPANY_ID, 'codex');
+  } catch (error) {
+    if (!installedService || error?.message !== 'identity_vault_lifecycle_binding_invalid:codex') throw error;
+    // A same-user clean installation can see an already-custodied Keychain
+    // value before its own database has a lifecycle chain. Treat that exact
+    // state as first onboarding for this database and let appendIntegrationToken
+    // commit and independently verify the local lifecycle. No secret or
+    // authority is copied from another database.
+    existing = null;
+  }
   const reuseExistingLifecycle = Boolean(
     existing?.credential_integrity
     && existing.access_token_hash === sha256(Buffer.from(auth.accessToken, 'utf8'))

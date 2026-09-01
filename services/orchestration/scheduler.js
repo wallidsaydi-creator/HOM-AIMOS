@@ -18,7 +18,7 @@ import { createHash, randomUUID } from 'crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { agentPool, query, withTransaction } from '../../db/connection.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 import {
   logEvent,
   readVerifiedEventById,
@@ -39,8 +39,8 @@ import {
 const COMPANY = 'hom';
 const CRON_TIMEZONE = 'UTC';
 const scheduledJobs = new Map();
-const LOOP_CHECKER_JOB_ID = '__loop_checker__';
-const LOOP_CHECKER_CRON = '*/5 * * * *';
+const SYSTEM_HEARTBEAT_JOB_ID = '__system_heartbeat__';
+const SYSTEM_HEARTBEAT_CRON = '*/30 * * * *';
 const BOTTLENECK_SCAN_JOB_ID = '__bottleneck_scan__';
 const BOTTLENECK_SCAN_CRON = '0 * * * *';
 const WEEKLY_ASSESSMENT_JOB_ID = '__weekly_assessment__';
@@ -51,6 +51,18 @@ const NIGHTLY_DREAM_JOB_ID = '__nightly_dream__';
 const NIGHTLY_DREAM_CRON = '0 2 * * *';
 const BRAIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCHEDULE_EVENT_SCHEMA = 'hom.aimos.schedule/v1';
+const SYSTEM_JOB_EVENT_SCHEMA = 'hom.aimos.system-job-run/v1';
+const SYSTEM_JOB_STARTED = 'system_job_started';
+const SYSTEM_JOB_TERMINAL = 'system_job_terminal';
+const MAX_SYSTEM_JOB_RECOVERY_EVENTS = 100_000;
+const REQUIRED_SYSTEM_JOBS = Object.freeze([
+  [SYSTEM_HEARTBEAT_JOB_ID, SYSTEM_HEARTBEAT_CRON],
+  [BOTTLENECK_SCAN_JOB_ID, BOTTLENECK_SCAN_CRON],
+  [NIGHTLY_DREAM_JOB_ID, NIGHTLY_DREAM_CRON],
+  [WEEKLY_ASSESSMENT_JOB_ID, WEEKLY_ASSESSMENT_CRON],
+  [WEEKLY_AUDIT_JOB_ID, WEEKLY_AUDIT_CRON],
+]);
+let schedulerReadiness = Object.freeze({ ready: false, state: 'not_started', required_jobs: REQUIRED_SYSTEM_JOBS.length });
 export const AGENTICCACHE_SOURCE = 'AGENTICCACHE: Cache-Driven Asynchronous Planning for Embodied AI Agents';
 export const AGENTPULSE_SOURCE = 'AgentPulse: A Continuous Multi-Signal Framework for Evaluating AI Agents in Deployment';
 
@@ -301,6 +313,7 @@ export async function verifySchedulerGenesisReadiness({
 // lock leaks into a pooled connection.
 async function withJobLock(jobKey, fn) {
   let client;
+  let releaseError = null;
   try {
     client = await agentPool.connect();
   } catch (err) {
@@ -318,13 +331,175 @@ async function withJobLock(jobKey, fn) {
     try {
       return await fn();
     } finally {
-      await client.query('SELECT pg_advisory_unlock(hashtext($1))', [jobKey]).catch(
-        e => console.warn('[scheduler] advisory-unlock failed', { jobKey, err: e?.message })
-      );
+      try {
+        await client.query('SELECT pg_advisory_unlock(hashtext($1))', [jobKey]);
+      } catch (error) {
+        releaseError = error;
+        console.warn('[scheduler] advisory-unlock failed; destroying lock session', { jobKey, err: error?.message });
+      }
     }
   } finally {
-    client.release();
+    client.release(releaseError || undefined);
   }
+}
+
+function schedulerProjectionHash(value) {
+  return createHash('sha256').update(Buffer.from(canonicalJson(value ?? null), 'utf8')).digest('hex');
+}
+
+function systemJobMetadata(event) {
+  if (event?.metadata && typeof event.metadata === 'object') return event.metadata;
+  try { return JSON.parse(event?.metadata || '{}'); } catch { return {}; }
+}
+
+function systemJobMutationHash(event) {
+  return typeof event?.mutation_hash === 'string'
+    ? event.mutation_hash
+    : Buffer.from(event?.mutation_hash || []).toString('hex');
+}
+
+export function reconstructSystemJobRuns(events = []) {
+  if (!Array.isArray(events) || events.length > MAX_SYSTEM_JOB_RECOVERY_EVENTS) {
+    throw new Error('system_job_recovery_limit');
+  }
+  const runs = new Map();
+  for (const event of events) {
+    if (![SYSTEM_JOB_STARTED, SYSTEM_JOB_TERMINAL].includes(event?.operation)) continue;
+    const metadata = systemJobMetadata(event);
+    if (metadata.schema !== SYSTEM_JOB_EVENT_SCHEMA) continue;
+    const runId = String(metadata.run_id || event.key || '');
+    if (!runId || String(event.key || '') !== runId) throw new Error('system_job_run_key_mismatch');
+    const trace = runs.get(runId) || { runId, start: null, terminal: null };
+    if (event.operation === SYSTEM_JOB_STARTED) {
+      if (trace.start) throw new Error('system_job_start_fork');
+      trace.start = event;
+    } else {
+      if (trace.terminal) throw new Error('system_job_terminal_fork');
+      trace.terminal = event;
+    }
+    runs.set(runId, trace);
+  }
+  const ordered = [...runs.values()].sort((left, right) => left.runId.localeCompare(right.runId));
+  for (const trace of ordered) {
+    if (!trace.start) throw new Error('system_job_terminal_without_start');
+    if (!trace.terminal) continue;
+    const start = systemJobMetadata(trace.start);
+    const terminal = systemJobMetadata(trace.terminal);
+    if (String(trace.terminal.parent_event_id || '') !== String(trace.start.id || trace.start.event_id || '')
+        || terminal.start_event_id !== String(trace.start.id || trace.start.event_id || '')
+        || terminal.start_mutation_hash !== systemJobMutationHash(trace.start)
+        || terminal.job_id !== start.job_id
+        || terminal.cron_expression !== start.cron_expression
+        || !['SUCCEEDED', 'FAILED', 'INDETERMINATE', 'INDETERMINATE_PROCESS_RESTART'].includes(terminal.disposition)
+        || !/^[0-9a-f]{64}$/.test(String(terminal.result_sha256 || ''))) {
+      throw new Error('system_job_terminal_start_binding_invalid');
+    }
+  }
+  return Object.freeze({
+    complete: Object.freeze(ordered.filter((trace) => trace.terminal)),
+    open: Object.freeze(ordered.filter((trace) => !trace.terminal)),
+    timeComplexity: 'O(n)',
+    spaceComplexity: 'O(n)',
+  });
+}
+
+export async function executeSystemJob({
+  jobId,
+  cronExpression,
+  runFn,
+  lockFn = withJobLock,
+  logEventFn = logEvent,
+  runIdFn = randomUUID,
+} = {}) {
+  if (!jobId || !cronExpression || typeof runFn !== 'function') throw new Error('system_job_definition_invalid');
+  return lockFn(jobId, async () => {
+    const runId = runIdFn();
+    const start = await logEventFn(COMPANY, 'housekeeper', SYSTEM_JOB_STARTED, runId, {
+      schema: SYSTEM_JOB_EVENT_SCHEMA,
+      run_id: runId,
+      job_id: jobId,
+      cron_expression: cronExpression,
+      actor_agent_id: 'housekeeper',
+      reasoning: `Housekeeper reserved one exact autonomous ${jobId} execution after overlap protection succeeded.`,
+    }, null, { returnReceipt: true, exclusiveOperationKey: true });
+    let result;
+    try {
+      result = await runFn();
+    } catch (error) {
+      await logEventFn(COMPANY, 'housekeeper', SYSTEM_JOB_TERMINAL, runId, {
+        schema: SYSTEM_JOB_EVENT_SCHEMA,
+        run_id: runId,
+        job_id: jobId,
+        cron_expression: cronExpression,
+        actor_agent_id: 'housekeeper',
+        start_event_id: start.event_id,
+        start_mutation_hash: start.mutation_hash,
+        disposition: 'INDETERMINATE',
+        result_sha256: schedulerProjectionHash({ error_class: error?.name || 'system_job_error' }),
+        reasoning: `Housekeeper retained an indeterminate ${jobId} terminal because complete autonomous job effects could not be proven.`,
+      }, start.event_id, { returnReceipt: true, exclusiveOperationKey: true });
+      throw error;
+    }
+    const terminal = await logEventFn(COMPANY, 'housekeeper', SYSTEM_JOB_TERMINAL, runId, {
+      schema: SYSTEM_JOB_EVENT_SCHEMA,
+      run_id: runId,
+      job_id: jobId,
+      cron_expression: cronExpression,
+      actor_agent_id: 'housekeeper',
+      start_event_id: start.event_id,
+      start_mutation_hash: start.mutation_hash,
+      disposition: 'SUCCEEDED',
+      result_sha256: schedulerProjectionHash(result),
+      reasoning: `Housekeeper retained one successful ${jobId} terminal bound to its exact result projection.`,
+    }, start.event_id, { returnReceipt: true, exclusiveOperationKey: true });
+    return Object.freeze({ skipped: false, runId, result, start, terminal });
+  });
+}
+
+export async function reconcileOpenSystemJobs({
+  events = null,
+  readHistoryFn = readVerifiedEventHistory,
+  logEventFn = logEvent,
+} = {}) {
+  const load = async () => events || readHistoryFn(COMPANY, { signerAgentId: 'housekeeper' });
+  const before = reconstructSystemJobRuns(await load());
+  const reconciled = [];
+  for (const trace of before.open) {
+    const start = systemJobMetadata(trace.start);
+    const startId = String(trace.start.id || trace.start.event_id || '');
+    try {
+      const receipt = await logEventFn(COMPANY, 'housekeeper', SYSTEM_JOB_TERMINAL, trace.runId, {
+        schema: SYSTEM_JOB_EVENT_SCHEMA,
+        run_id: trace.runId,
+        job_id: start.job_id,
+        cron_expression: start.cron_expression,
+        actor_agent_id: 'housekeeper',
+        start_event_id: startId,
+        start_mutation_hash: systemJobMutationHash(trace.start),
+        disposition: 'INDETERMINATE_PROCESS_RESTART',
+        result_sha256: schedulerProjectionHash({
+          recovery_reason: 'process_restart_orphan',
+          job_replayed: false,
+        }),
+        reasoning: `Housekeeper closed orphaned ${start.job_id} execution after restart without rerunning the job.`,
+      }, startId, { returnReceipt: true, exclusiveOperationKey: true });
+      reconciled.push(Object.freeze({ runId: trace.runId, receipt }));
+    } catch (error) {
+      if (error?.message !== 'event_operation_key_exists') throw error;
+      const raced = reconstructSystemJobRuns(await load()).complete.find((entry) => entry.runId === trace.runId);
+      if (!raced) throw new Error('system_job_recovery_race_unverified');
+      reconciled.push(Object.freeze({ runId: trace.runId, existing: true }));
+    }
+  }
+  const after = reconstructSystemJobRuns(await load());
+  return Object.freeze({
+    scanned: before.complete.length + before.open.length,
+    reconciled: Object.freeze(reconciled),
+    remainingOpen: after.open.length,
+    jobsReplayed: 0,
+    timeComplexity: 'O(n)',
+    spaceComplexity: 'O(n)',
+  });
 }
 
 function rowToSchedule(row) {
@@ -381,49 +556,6 @@ async function ensureSchedulerSchema() {
 // 30 minutes. Both the stub and its registration were removed (defect 14). If a
 // real maintenance job is ever needed, register it explicitly here.
 
-async function runLoopChecker() {
-  try {
-    const stuck = await query(
-      `SELECT * FROM session_lanes
-       WHERE run_status = 'running'
-         AND last_run_at < NOW() - INTERVAL '5 minutes'
-         AND company_id = $1`,
-      [COMPANY]
-    );
-
-    const stuckRows = stuck.rows || [];
-
-    for (const lane of stuckRows) {
-      const runningFor = Math.round(
-        (Date.now() - new Date(lane.last_run_at).getTime()) / 1000
-      );
-
-      await query(
-        `UPDATE session_lanes
-         SET run_status = 'stuck',
-             updated_at = NOW()
-         WHERE company_id = $1 AND session_key = $2`,
-        [lane.company_id, lane.session_key]
-      );
-
-      await logEvent(
-        COMPANY,
-        'system',
-        'loop_checker_stuck',
-        LOOP_CHECKER_JOB_ID,
-        {
-          session_key: lane.session_key,
-          running_for_seconds: runningFor
-        }
-      );
-    }
-
-    console.log(`[scheduler] Loop checker: ${stuckRows.length} stuck lane(s) detected and marked`);
-  } catch (error) {
-    console.warn('[scheduler] Loop checker failed:', error?.message || String(error));
-  }
-}
-
 export async function runBottleneckScan() {
   try {
     const errorAgents = await query(
@@ -477,7 +609,7 @@ export async function runBottleneckScan() {
 
     await logEvent(
       COMPANY,
-      'system',
+      'housekeeper',
       'bottleneck_scan',
       BOTTLENECK_SCAN_JOB_ID,
       {
@@ -494,8 +626,10 @@ export async function runBottleneckScan() {
     console.log(
       `[scheduler] Bottleneck scan: ${topErrorAgents.length} error(s), ${slowestAgents.length} latency, constraint=${constraintId || 'none'}, WIP=${currentWip}`
     );
+    return { top_error_agents: topErrorAgents, slowest_agents: slowestAgents, system_constraint: constraintId, current_wip: currentWip };
   } catch (error) {
     console.warn('[scheduler] Bottleneck scan failed:', error?.message || String(error));
+    throw error;
   }
 }
 
@@ -544,7 +678,7 @@ async function runWeeklyAssessment() {
       }))
     };
 
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: COMPANY,
       agent_id: 'system',
       memory_type: 'weekly_assessment',
@@ -553,12 +687,12 @@ async function runWeeklyAssessment() {
       scope: 'global',
       clearance_level: 5,
       memory_tier: 'long-term',
-      mutation_authority: 'housekeeper',
+      source: 'scheduler:weekly-assessment',
     });
 
     await logEvent(
       COMPANY,
-      'system',
+      'housekeeper',
       'weekly_assessment',
       WEEKLY_ASSESSMENT_JOB_ID,
       { health_score: healthScore, total_events: totalEvents, week_ending: weekLabel }
@@ -567,8 +701,10 @@ async function runWeeklyAssessment() {
     console.log(
       `[scheduler] Weekly assessment: health_score=${healthScore}, total_events=${totalEvents}, corrections=${totalCorrections}`
     );
+    return report;
   } catch (error) {
     console.warn('[scheduler] Weekly assessment failed:', error?.message || String(error));
+    throw error;
   }
 }
 
@@ -593,21 +729,20 @@ async function runWeeklyAudit() {
     );
 
     const proceduralSkills = await query(
-      `SELECT COUNT(*) as cnt FROM procedural_skills WHERE company_id = $1`,
+      `SELECT COUNT(*) as cnt FROM aimos_memories WHERE company_id = $1 AND memory_type = 'procedural'`,
       [COMPANY]
-    ).catch(() => ({ rows: [{ cnt: 0 }] }));
+    );
 
     const memoryTypes = (memoryDist.rows || []).map(r => r.memory_type);
-    const stuckLanes = await query(
-      `SELECT COUNT(*) as cnt FROM session_lanes WHERE company_id = $1 AND run_status = 'stuck'`,
-      [COMPANY]
-    ).catch(() => ({ rows: [{ cnt: 0 }] }));
+    const { reconstructSessionLaneTraces } = await import('./session-runner.js');
+    const sessionEvents = await readVerifiedEventHistory(COMPANY);
+    const openSessionLanes = reconstructSessionLaneTraces(sessionEvents).open.length;
 
     const hasEventLog = parseInt(recentEvents.rows[0]?.cnt || 0, 10) > 0;
     const hasActiveLoops = parseInt(activeLoops.rows[0]?.cnt || 0, 10) > 0;
     const hasProceduralSkills = parseInt(proceduralSkills.rows[0]?.cnt || 0, 10) > 0;
     const hasDistributedMemory = memoryTypes.length > 3;
-    const noStuckLanes = parseInt(stuckLanes.rows[0]?.cnt || 0, 10) === 0;
+    const noStuckLanes = openSessionLanes === 0;
 
     const complianceScore =
       (hasEventLog ? 20 : 0) +
@@ -634,7 +769,7 @@ async function runWeeklyAudit() {
       }))
     };
 
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: COMPANY,
       agent_id: 'system',
       memory_type: 'audit_report',
@@ -643,20 +778,22 @@ async function runWeeklyAudit() {
       scope: 'global',
       clearance_level: 5,
       memory_tier: 'long-term',
-      mutation_authority: 'housekeeper',
+      source: 'scheduler:audit-report',
     });
 
     await logEvent(
       COMPANY,
-      'system',
+      'housekeeper',
       'weekly_audit',
       WEEKLY_AUDIT_JOB_ID,
       { compliance_score: complianceScore, audit_date: auditLabel }
     );
 
     console.log(`[scheduler] Weekly audit: compliance_score=${complianceScore}/100, date=${auditLabel}`);
+    return auditReport;
   } catch (error) {
     console.warn('[scheduler] Weekly audit failed:', error?.message || String(error));
+    throw error;
   }
 }
 
@@ -749,7 +886,103 @@ async function readScheduleProjections(client) {
   });
 }
 
-async function markScheduleStatus(schedule, { operation, status, error = null } = {}) {
+export function reconstructDelegatedScheduleRuns(events = []) {
+  if (!Array.isArray(events) || events.length > MAX_SYSTEM_JOB_RECOVERY_EVENTS) {
+    throw new Error('schedule_run_recovery_limit');
+  }
+  const runs = new Map();
+  for (const event of events) {
+    if (!['schedule_run_reserved', 'schedule_run_completed', 'schedule_run_failed'].includes(event?.operation)) continue;
+    const metadata = parseEventMetadata(event);
+    if (metadata?.schema !== SCHEDULE_EVENT_SCHEMA || !metadata.schedule_id) continue;
+    const runId = String(metadata.run_id || '');
+    if (!runId) continue; // retained pre-CR8 status evidence; not current run authority
+    const trace = runs.get(runId) || { runId, scheduleId: String(metadata.schedule_id), start: null, terminal: null };
+    if (trace.scheduleId !== String(metadata.schedule_id)) throw new Error('schedule_run_scope_mismatch');
+    if (event.operation === 'schedule_run_reserved') {
+      if (trace.start) throw new Error('schedule_run_start_fork');
+      trace.start = event;
+    } else {
+      if (trace.terminal) throw new Error('schedule_run_terminal_fork');
+      trace.terminal = event;
+    }
+    runs.set(runId, trace);
+  }
+  const ordered = [...runs.values()].sort((left, right) => left.runId.localeCompare(right.runId));
+  for (const trace of ordered) {
+    if (!trace.start) throw new Error('schedule_run_terminal_without_start');
+    if (!trace.terminal) continue;
+    const terminal = parseEventMetadata(trace.terminal);
+    const startId = String(trace.start.id || '');
+    if (String(trace.terminal.parent_event_id || '') !== startId
+        || terminal.start_event_id !== startId
+        || terminal.start_mutation_hash !== systemJobMutationHash(trace.start)
+        || String(terminal.schedule_id) !== trace.scheduleId) {
+      throw new Error('schedule_run_terminal_start_binding_invalid');
+    }
+  }
+  return Object.freeze({
+    complete: Object.freeze(ordered.filter((trace) => trace.terminal)),
+    open: Object.freeze(ordered.filter((trace) => !trace.terminal)),
+    timeComplexity: 'O(n)',
+    spaceComplexity: 'O(n)',
+  });
+}
+
+export async function reconcileOpenDelegatedSchedules({
+  schedules = [],
+  events = null,
+  readHistoryFn = readVerifiedEventHistory,
+  markStatusFn = markScheduleStatus,
+} = {}) {
+  const normalizeRecoveryEvents = (rows) => {
+    const latestLegacyOpen = new Map(
+      schedules
+        .filter((schedule) => schedule?.verified && schedule.lastStatus === 'running' && schedule.statusEventId)
+        .map((schedule) => [String(schedule.statusEventId), `legacy:${schedule.statusEventId}`]),
+    );
+    return rows.map((event) => {
+      const runId = latestLegacyOpen.get(String(event.id || ''));
+      if (!runId || event.operation !== 'schedule_run_reserved') return event;
+      return { ...event, metadata: { ...parseEventMetadata(event), run_id: runId } };
+    });
+  };
+  const load = async () => normalizeRecoveryEvents(events || await readHistoryFn(COMPANY, { signerAgentId: 'housekeeper' }));
+  const before = reconstructDelegatedScheduleRuns(await load());
+  const byId = new Map(schedules.filter((schedule) => schedule?.verified).map((schedule) => [String(schedule.id), schedule]));
+  const reconciled = [];
+  for (const trace of before.open) {
+    const schedule = byId.get(trace.scheduleId);
+    if (!schedule) throw new Error(`schedule_run_recovery_projection_missing:${trace.scheduleId}`);
+    const receipt = await markStatusFn(schedule, {
+      operation: 'schedule_run_failed',
+      status: 'indeterminate_process_restart',
+      error: 'process_restart_orphan_reconciled_without_job_replay',
+      runId: trace.runId,
+      parentEventId: String(trace.start.id || ''),
+      startMutationHash: systemJobMutationHash(trace.start),
+    });
+    reconciled.push(Object.freeze({ runId: trace.runId, receipt }));
+  }
+  const after = reconstructDelegatedScheduleRuns(await load());
+  return Object.freeze({
+    scanned: before.complete.length + before.open.length,
+    reconciled: Object.freeze(reconciled),
+    remainingOpen: after.open.length,
+    jobsReplayed: 0,
+    timeComplexity: 'O(n)',
+    spaceComplexity: 'O(n)',
+  });
+}
+
+async function markScheduleStatus(schedule, {
+  operation,
+  status,
+  error = null,
+  runId = null,
+  parentEventId = null,
+  startMutationHash = null,
+} = {}) {
   const allowedOperations = new Set([
     'schedule_run_reserved',
     'schedule_run_completed',
@@ -757,6 +990,11 @@ async function markScheduleStatus(schedule, { operation, status, error = null } 
     'schedule_invalid',
   ]);
   if (!allowedOperations.has(operation)) throw new Error('schedule_status_operation_invalid');
+  if (operation.startsWith('schedule_run_') && !runId) throw new Error('schedule_run_id_required');
+  if (['schedule_run_completed', 'schedule_run_failed'].includes(operation)
+      && (!parentEventId || !/^[0-9a-f]{64}$/.test(String(startMutationHash || '')))) {
+    throw new Error('schedule_run_start_binding_required');
+  }
   const occurredAt = new Date();
   return withTransaction(async (client) => {
     const verified = (await readScheduleProjections(client)).find((item) => item.id === schedule.id);
@@ -772,23 +1010,30 @@ async function markScheduleStatus(schedule, { operation, status, error = null } 
       [schedule.id, COMPANY, occurredAt, status || null, error],
     );
     if (updated.rowCount !== 1) throw new Error('schedule_projection_missing');
-    return logEvent(COMPANY, schedule.agentId, operation, schedule.id, {
+    return logEvent(COMPANY, 'housekeeper', operation, schedule.id, {
       schema: SCHEDULE_EVENT_SCHEMA,
       schedule_id: schedule.id,
+      run_id: runId,
+      start_event_id: parentEventId,
+      start_mutation_hash: startMutationHash,
+      actor_agent_id: 'housekeeper',
+      target_agent_id: schedule.agentId,
       last_run_at: occurredAt.toISOString(),
       last_status: status || null,
       last_error: error,
       updated_at: occurredAt.toISOString(),
       reasoning: `housekeeper recorded ${operation} for retained schedule ${schedule.id}`,
-    }, null, { client, returnReceipt: true });
+    }, parentEventId, { client, returnReceipt: true });
   }, { restricted: true, clientId: COMPANY, agentId: 'housekeeper' });
 }
 
 async function executeScheduledTask(schedule) {
+  const runId = randomUUID();
   const reservationReceipt = await markScheduleStatus(schedule, {
     operation: 'schedule_run_reserved',
     status: 'running',
     error: null,
+    runId,
   });
   try {
     let result;
@@ -810,13 +1055,19 @@ async function executeScheduledTask(schedule) {
       operation: 'schedule_run_completed',
       status: 'success',
       error: null,
+      runId,
+      parentEventId: reservationReceipt.event_id,
+      startMutationHash: reservationReceipt.mutation_hash,
     });
     return result;
   } catch (error) {
     await markScheduleStatus(schedule, {
       operation: 'schedule_run_failed',
-      status: 'failed',
-      error: error?.message || String(error)
+      status: 'indeterminate',
+      error: error?.message || String(error),
+      runId,
+      parentEventId: reservationReceipt.event_id,
+      startMutationHash: reservationReceipt.mutation_hash,
     });
     throw error;
   }
@@ -843,6 +1094,27 @@ function scheduleInMemory(schedule) {
     }
   );
   scheduledJobs.set(schedule.id, task);
+}
+
+function registerSystemJob(jobId, cronExpression, runFn) {
+  if (scheduledJobs.has(jobId)) return;
+  if (!cron.validate(cronExpression)) throw new Error(`system_job_cron_invalid:${jobId}`);
+  const task = cron.schedule(
+    cronExpression,
+    () => {
+      void executeSystemJob({ jobId, cronExpression, runFn })
+        .catch((error) => console.warn('[scheduler] system job failed', {
+          jobId,
+          error: error?.message || String(error),
+        }));
+    },
+    { timezone: CRON_TIMEZONE },
+  );
+  scheduledJobs.set(jobId, task);
+}
+
+export function getSchedulerReadiness() {
+  return schedulerReadiness;
 }
 
 export function buildSchedulerRuntimeDiagnostics({
@@ -888,133 +1160,95 @@ export function buildSchedulerRuntimeDiagnostics({
   };
 }
 
-export async function startScheduler() {
-  const genesisReadiness = await verifySchedulerGenesisReadiness();
-  if (!genesisReadiness.ok) {
-    const error = new Error(`scheduler_genesis_not_ready:${genesisReadiness.reason}`);
-    error.code = 'SCHEDULER_GENESIS_NOT_READY';
-    error.readiness = genesisReadiness;
+export async function startScheduler({ bootRecoveryComplete = false } = {}) {
+  schedulerReadiness = Object.freeze({ ready: false, state: 'starting', required_jobs: REQUIRED_SYSTEM_JOBS.length });
+  try {
+    if (bootRecoveryComplete !== true) throw new Error('scheduler_boot_recovery_incomplete');
+    const genesisReadiness = await verifySchedulerGenesisReadiness();
+    if (!genesisReadiness.ok) {
+      const error = new Error(`scheduler_genesis_not_ready:${genesisReadiness.reason}`);
+      error.code = 'SCHEDULER_GENESIS_NOT_READY';
+      error.readiness = genesisReadiness;
+      throw error;
+    }
+    await ensureSchedulerSchema();
+    const recoveryEvents = await readVerifiedEventHistory(COMPANY, { signerAgentId: 'housekeeper' });
+    const systemJobSnapshot = reconstructSystemJobRuns(recoveryEvents);
+    const recovery = systemJobSnapshot.open.length
+      ? await reconcileOpenSystemJobs()
+      : Object.freeze({ scanned: recoveryEvents.length, reconciled: Object.freeze([]), remainingOpen: 0, jobsReplayed: 0 });
+    if (recovery.remainingOpen !== 0) throw new Error(`scheduler_orphan_recovery_incomplete:${recovery.remainingOpen}`);
+    let schedules = await withTransaction(
+      (client) => readScheduleProjections(client),
+      { restricted: true, clientId: COMPANY, agentId: 'housekeeper' },
+    );
+    const delegatedSnapshot = reconstructDelegatedScheduleRuns(recoveryEvents);
+    const delegatedRecovery = delegatedSnapshot.open.length
+      ? await reconcileOpenDelegatedSchedules({ schedules })
+      : Object.freeze({ scanned: recoveryEvents.length, reconciled: Object.freeze([]), remainingOpen: 0, jobsReplayed: 0 });
+    if (delegatedRecovery.remainingOpen !== 0) {
+      throw new Error(`scheduler_delegated_orphan_recovery_incomplete:${delegatedRecovery.remainingOpen}`);
+    }
+    if (delegatedRecovery.reconciled.length) {
+      schedules = await withTransaction(
+        (client) => readScheduleProjections(client),
+        { restricted: true, clientId: COMPANY, agentId: 'housekeeper' },
+      );
+    }
+    let delegatedRegistered = 0;
+    for (const schedule of schedules) {
+      if (!schedule.verified || !schedule.isActive) continue;
+      if (!cron.validate(schedule.cronExpression)) {
+        await markScheduleStatus(schedule, {
+          operation: 'schedule_invalid',
+          status: 'invalid_cron',
+          error: `Invalid cron expression: ${schedule.cronExpression}`,
+        });
+        continue;
+      }
+      scheduleInMemory(schedule);
+      delegatedRegistered += 1;
+    }
+    registerSystemJob(SYSTEM_HEARTBEAT_JOB_ID, SYSTEM_HEARTBEAT_CRON, async () => {
+      const { runHeartbeat } = await import('../../jobs/heartbeat.js');
+      return runHeartbeat(COMPANY);
+    });
+    registerSystemJob(BOTTLENECK_SCAN_JOB_ID, BOTTLENECK_SCAN_CRON, () => runBottleneckScan());
+    registerSystemJob(NIGHTLY_DREAM_JOB_ID, NIGHTLY_DREAM_CRON, async () => {
+      const { runNightlyDream } = await import('../../jobs/nightly-dream.js');
+      return runNightlyDream(COMPANY);
+    });
+    registerSystemJob(WEEKLY_ASSESSMENT_JOB_ID, WEEKLY_ASSESSMENT_CRON, () => runWeeklyAssessment());
+    registerSystemJob(WEEKLY_AUDIT_JOB_ID, WEEKLY_AUDIT_CRON, () => runWeeklyAudit());
+    const missingRequired = REQUIRED_SYSTEM_JOBS
+      .map(([jobId]) => jobId)
+      .filter((jobId) => !scheduledJobs.has(jobId));
+    if (missingRequired.length) throw new Error(`scheduler_required_jobs_missing:${missingRequired.join(',')}`);
+    schedulerReadiness = Object.freeze({
+      ready: true,
+      state: 'ready',
+      required_jobs: REQUIRED_SYSTEM_JOBS.length,
+      registered_required_jobs: REQUIRED_SYSTEM_JOBS.length,
+      delegated_jobs: delegatedRegistered,
+      boot_recovery_complete: true,
+      orphan_reconciled: recovery.reconciled.length + delegatedRecovery.reconciled.length,
+      genesis_manifest_version: genesisReadiness.manifestVersion,
+      genesis_corpus_root: genesisReadiness.corpusRoot,
+      local_model_required: false,
+      tenant_dependency: false,
+    });
+    return schedulerReadiness;
+  } catch (error) {
+    for (const task of scheduledJobs.values()) task.stop();
+    scheduledJobs.clear();
+    schedulerReadiness = Object.freeze({
+      ready: false,
+      state: 'failed',
+      reason: error?.message || String(error),
+      required_jobs: REQUIRED_SYSTEM_JOBS.length,
+    });
     throw error;
   }
-  console.log(`[scheduler] Genesis ready: manifest v${genesisReadiness.manifestVersion}, ${genesisReadiness.guideMemories} Guide memories, root=${genesisReadiness.corpusRoot}`);
-
-  await ensureSchedulerSchema();
-  const schedules = await withTransaction(
-    (client) => readScheduleProjections(client),
-    { restricted: true, clientId: COMPANY, agentId: 'housekeeper' },
-  );
-
-  for (const schedule of schedules) {
-    if (!schedule.verified || !schedule.isActive) {
-      console.warn('[scheduler] retained schedule not activated because its authority is unverified', {
-        id: schedule.id,
-        reason: schedule.proofError || 'schedule_inactive',
-      });
-      continue;
-    }
-    if (!cron.validate(schedule.cronExpression)) {
-      await markScheduleStatus(schedule, {
-        operation: 'schedule_invalid',
-        status: 'invalid_cron',
-        error: `Invalid cron expression: ${schedule.cronExpression}`
-      });
-      continue;
-    }
-    scheduleInMemory(schedule);
-  }
-
-  // NOTE: the no-op memory-maintenance */30 cron was removed (defect 14) — it
-  // was a pure no-op stub burning a timer slot every 30 minutes.
-
-  if (!scheduledJobs.has(LOOP_CHECKER_JOB_ID)) {
-    const loopCheckerTask = cron.schedule(
-      LOOP_CHECKER_CRON,
-      () => {
-        void withJobLock(LOOP_CHECKER_JOB_ID, () => runLoopChecker())
-          .catch(e => console.warn('[scheduler] loop checker failed', e?.message));
-      },
-      { timezone: CRON_TIMEZONE }
-    );
-    scheduledJobs.set(LOOP_CHECKER_JOB_ID, loopCheckerTask);
-  }
-
-  // System heartbeat — replaces old runReviewerHeartbeat() that burned LLM tokens on kimi
-  // New heartbeat: zero LLM calls, 6 DB/process checks, saves to Aimos
-  if (!scheduledJobs.has('__system_heartbeat__')) {
-    const heartbeatTask = cron.schedule(
-      '*/30 * * * *',
-      () => {
-        void withJobLock('__system_heartbeat__', async () => {
-          const { runHeartbeat } = await import('../../jobs/heartbeat.js');
-          await runHeartbeat(COMPANY);
-        }).catch(async (err) => {
-          console.warn('[scheduler] System heartbeat failed:', err?.message || String(err));
-          // Defect 15: a persistently failing heartbeat must be LOUD. A silent
-          // heartbeat is indistinguishable from "nothing to report" — the worst
-          // failure mode for a health monitor. Emit a distinct, alertable event.
-          await logEvent('hom', 'system', 'heartbeat_failed_alert', '__system_heartbeat__', {
-            severity: 'alert',
-            reason: 'heartbeat cron threw — health signal is going dark',
-            error: err?.message || String(err),
-            source_knowledge: 'scheduler.js heartbeat wrapper (defect 15) — monitor-goes-dark detection'
-          }).catch(e => console.error('[scheduler] CRITICAL: heartbeat failed AND its alert failed to log', e?.message));
-        });
-      },
-      { timezone: CRON_TIMEZONE }
-    );
-    scheduledJobs.set('__system_heartbeat__', heartbeatTask);
-  }
-
-  if (!scheduledJobs.has(BOTTLENECK_SCAN_JOB_ID)) {
-    const bottleneckTask = cron.schedule(
-      BOTTLENECK_SCAN_CRON,
-      () => {
-        void withJobLock(BOTTLENECK_SCAN_JOB_ID, () => runBottleneckScan())
-          .catch(e => console.warn('[scheduler] bottleneck scan failed', e?.message));
-      },
-      { timezone: CRON_TIMEZONE }
-    );
-    scheduledJobs.set(BOTTLENECK_SCAN_JOB_ID, bottleneckTask);
-  }
-
-  if (!scheduledJobs.has(NIGHTLY_DREAM_JOB_ID)) {
-    const nightlyDreamTask = cron.schedule(
-      NIGHTLY_DREAM_CRON,
-      () => {
-        void withJobLock(NIGHTLY_DREAM_JOB_ID, async () => {
-          const { runNightlyDream } = await import('../../jobs/nightly-dream.js');
-          await runNightlyDream(COMPANY);
-        }).catch((err) => console.warn('[scheduler] Nightly Dream failed:', err?.message || String(err)));
-      },
-      { timezone: CRON_TIMEZONE }
-    );
-    scheduledJobs.set(NIGHTLY_DREAM_JOB_ID, nightlyDreamTask);
-  }
-
-  if (!scheduledJobs.has(WEEKLY_ASSESSMENT_JOB_ID)) {
-    const weeklyAssessmentTask = cron.schedule(
-      WEEKLY_ASSESSMENT_CRON,
-      () => {
-        void withJobLock(WEEKLY_ASSESSMENT_JOB_ID, () => runWeeklyAssessment())
-          .catch(e => console.warn('[scheduler] weekly assessment failed', e?.message));
-      },
-      { timezone: CRON_TIMEZONE }
-    );
-    scheduledJobs.set(WEEKLY_ASSESSMENT_JOB_ID, weeklyAssessmentTask);
-  }
-
-  if (!scheduledJobs.has(WEEKLY_AUDIT_JOB_ID)) {
-    const weeklyAuditTask = cron.schedule(
-      WEEKLY_AUDIT_CRON,
-      () => {
-        void withJobLock(WEEKLY_AUDIT_JOB_ID, () => runWeeklyAudit())
-          .catch(e => console.warn('[scheduler] weekly audit failed', e?.message));
-      },
-      { timezone: CRON_TIMEZONE }
-    );
-    scheduledJobs.set(WEEKLY_AUDIT_JOB_ID, weeklyAuditTask);
-  }
-
 }
 
 export function stopScheduler() {
@@ -1022,6 +1256,7 @@ export function stopScheduler() {
     task.stop();
   }
   scheduledJobs.clear();
+  schedulerReadiness = Object.freeze({ ready: false, state: 'stopped', required_jobs: REQUIRED_SYSTEM_JOBS.length });
 }
 
 export async function createScheduledTask({

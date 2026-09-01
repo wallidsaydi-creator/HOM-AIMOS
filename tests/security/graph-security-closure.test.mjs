@@ -27,15 +27,16 @@ test('one final security closure follows graph fusion and epistemic selection be
   const epistemic = source.indexOf("markStage('epistemic_trust_selection')", graph);
   const closure = source.indexOf('const finalSecurityClosure = await governCanaryRecallFinalClosure({', epistemic);
   const workingMemory = source.indexOf('workingMemory = disclosureMemories', closure);
-  const reinforcement = source.indexOf('reinforceRetrievedPheromones(disclosureMemories', closure);
+  const readOnlyDecision = source.indexOf('readOnlyRecallPheromoneDecision(disclosureMemories', closure);
   const receipt = source.indexOf('calibratedRecallResponse = await calibrateAndFinalizeNativeRecallReturn({', closure);
 
   assert.ok(graph >= 0);
   assert.ok(epistemic > graph);
   assert.ok(closure > epistemic);
   assert.ok(workingMemory > closure);
-  assert.ok(reinforcement > closure);
-  assert.ok(receipt > reinforcement);
+  assert.ok(readOnlyDecision > closure);
+  assert.ok(receipt > readOnlyDecision);
+  assert.doesNotMatch(source, /reinforceRetrievedPheromones\(disclosureMemories/);
 });
 
 test('final closure records one Canary/Aladdin receipt while keeping SABER outside runtime authority', async () => {

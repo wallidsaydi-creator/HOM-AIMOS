@@ -37,15 +37,15 @@ test('campaigns include benign calibration and compute false-positive rate', asy
   assert.equal(validateDefense(campaign).falsePositiveRate, 0);
 });
 
-test('all built-in protocols meet their operation-aware decision contract', async () => {
+test('all built-in protocols meet the explicit diagnostic contract without runtime authority', async () => {
   for (const attackClass of ['prompt_injection', 'memory_poisoning', 'privilege_escalation', 'data_exfiltration']) {
     const campaign = await runCampaign(attackClass, async (payload, vector) => {
       if (vector.expectedBehavior === 'retained_quarantine') {
         const decision = evaluateSecurityContent({ text: payload, operation: 'memory_save' });
         return { action: decision.action, quarantine: decision.quarantine };
       }
-      const result = await filterCybersecContent(payload);
-      return { allowed: result.allowed, action: result.security_decision.action };
+      const decision = evaluateSecurityContent({ text: payload, operation: 'agent_prompt' });
+      return { allowed: !decision.blockExecution, action: decision.action, runtime_authority: false };
     });
     const validation = validateDefense(campaign);
     assert.equal(validation.blockRate, 100, attackClass);
@@ -66,6 +66,7 @@ test('red-team reports no longer write stale tables and the route uses native pe
     readFile(new URL('../../routes/security.js', import.meta.url), 'utf8'),
   ]);
   assert.doesNotMatch(toolkit, /INSERT INTO memories/);
-  assert.match(route, /await persistMemory\(/);
-  assert.match(route, /mutation_authority: 'housekeeper'/);
+  assert.match(route, /await executeCanonicalSave\(/);
+  assert.match(route, /mutation_authority: requestAuthority/);
+  assert.doesNotMatch(route, /mutation_authority: 'housekeeper'/);
 });

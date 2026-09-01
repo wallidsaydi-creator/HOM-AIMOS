@@ -1,0 +1,23 @@
+{
+  "schema": "hom.aimos.mutmem-p1-live-mutation-public/v1",
+  "terminal_kinds": [
+    "authorized_transition",
+    "signed_noop",
+    "occurrence_observation"
+  ],
+  "bundle_sha256s": [
+    "7b1302780672a97f5ff20e7db93cbc2312613f61749cc78077d5d9d2d9cd4a81",
+    "36e2c96fd9a6a4886e0801a7c762ba8a121179c9c8b86ec60e8d75af3ced2ba3",
+    "046a93589cb1ccbe7d95b0ddce932d68129d75fe559d0bfdea9100751e0e5971"
+  ],
+  "valence_row_ids": [
+    "12",
+    "14",
+    "16"
+  ],
+  "private_artifact_sha256": "64e723e3cae6c1bbdcdb7b0da7d5c0c4f80292f8e636c02d98200b41ee062c09",
+  "private_artifact_distributed": false,
+  "memory_write": false,
+  "domain_database_mutation": false,
+  "manifest_sha256": "7d943338a984e537a74fe40e434cdef5a782917afbef6314a51e8e1ff3e4faeb"
+}

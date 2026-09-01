@@ -213,7 +213,8 @@ export async function lookupIdentifierCandidates({
   const result = await queryFn(
     `SELECT id, key, value, agent_id, memory_type, scope, source, clearance_level,
             retrieval_weight, created_at, updated_at, last_verified_at,
-            verified_by, verification_basis, freshness_state
+            verified_by, verification_basis, freshness_state,
+            embedding::text AS embedding
      FROM aimos_memories
      WHERE ${whereClause}
      ORDER BY

@@ -98,7 +98,7 @@ async function mintBearerFromKeySecret(useContext = {}) {
       const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
         credentialLedger.finalizeCredentialUse({
           reservation,
-          outcome: 'failed',
+          outcome: 'indeterminate',
           outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'transport_error' }),
           outcomeClass: 'transport_error',
           errorClass: error?.name || 'transport_error',
@@ -109,22 +109,25 @@ async function mintBearerFromKeySecret(useContext = {}) {
       continue;
     }
 
+    const data = await response.json().catch(() => ({}));
+    const responseSucceeded = response.ok && Boolean(data.access_token);
     const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
       credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'completed',
+        outcome: responseSucceeded ? 'completed' : 'failed',
         outcomeHash: credentialUseEvidenceHash({
           status: response.status,
           x_request_id: response.headers.get('x-request-id') || null,
+          response_hash: credentialUseEvidenceHash(data),
         }),
         outcomeClass: `http_${response.status}`,
+        errorClass: responseSucceeded ? null : `http_${response.status}`,
       })
     )));
     const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
     if (terminalFailure) throw terminalFailure.reason;
 
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.access_token) continue;
+    if (!responseSucceeded) continue;
     cachedBearerFromKeys = Object.freeze({
       value: data.access_token,
       credentials: Object.freeze([key, secret]),
@@ -210,7 +213,7 @@ export async function xSearchRecent({ query, maxResults = 10, useContext = {} })
       const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
         credentialLedger.finalizeCredentialUse({
           reservation,
-          outcome: 'failed',
+          outcome: 'indeterminate',
           outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'transport_error' }),
           outcomeClass: 'transport_error',
           errorClass: error?.name || 'transport_error',
@@ -222,15 +225,24 @@ export async function xSearchRecent({ query, maxResults = 10, useContext = {} })
       continue;
     }
 
+    const responseText = await response.text().catch(() => '');
+    let data = null;
+    if (response.ok) {
+      try { data = JSON.parse(responseText); }
+      catch (error) { lastError = error?.message || String(error); }
+    }
+    const responseSucceeded = response.ok && Boolean(data);
     const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
       credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'completed',
+        outcome: responseSucceeded ? 'completed' : 'failed',
         outcomeHash: credentialUseEvidenceHash({
           status: response.status,
           x_request_id: response.headers.get('x-request-id') || null,
+          response_hash: credentialUseEvidenceHash(responseText),
         }),
         outcomeClass: `http_${response.status}`,
+        errorClass: responseSucceeded ? null : `http_${response.status}`,
       })
     )));
     const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
@@ -245,7 +257,6 @@ export async function xSearchRecent({ query, maxResults = 10, useContext = {} })
     }
 
     if (!response.ok) {
-      const responseText = await response.text().catch(() => '');
       const lowered = responseText.toLowerCase();
       if (
         lowered.includes('fund')
@@ -260,10 +271,6 @@ export async function xSearchRecent({ query, maxResults = 10, useContext = {} })
       continue;
     }
 
-    const data = await response.json().catch((error) => {
-      lastError = error?.message || String(error);
-      return null;
-    });
     if (!data) continue;
     const users = new Map((data.includes?.users || []).map(u => [u.id, u]));
 

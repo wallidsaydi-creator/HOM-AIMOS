@@ -1,10 +1,10 @@
 import { AIMOS_COMPANY_ID } from '../services/core/runtime-config.js';
 import express from 'express';
-import { execFile } from 'child_process';
 import {
   imessageSend,
   imessageSearchContact,
   imessageListChats,
+  imessageRequestAccess,
   listIntegrationStatus,
 } from '../services/integrations/integration-tools.js';
 import { peekCachedCredential } from '../services/security/credential-cache.js';
@@ -86,22 +86,11 @@ router.post('/telegram/send', async (req, res, next) => {
   }
 });
 
-// ─── iMESSAGE via AppleScript (node is already registered in TCC) ────────────
-
-function runAppleScript(script) {
-  return new Promise((resolve, reject) => {
-    execFile('osascript', ['-e', script], { timeout: 10000 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(stderr || err.message));
-      else resolve(stdout.trim());
-    });
-  });
-}
-
 // Request Automation permission — first call triggers macOS TCC prompt
 router.post('/imessage/request-access', async (req, res, next) => {
   try {
-    const result = await runAppleScript('tell application "Messages" to count of chats');
-    res.json({ success: true, connected: true, chatCount: parseInt(result) || 0 });
+    const chatCount = await imessageRequestAccess(req.executionContext || {});
+    res.json({ success: true, connected: true, chatCount });
   } catch (err) {
     err.statusCode = 500;
     next(err);
@@ -111,7 +100,7 @@ router.post('/imessage/request-access', async (req, res, next) => {
 // Read recent chats — delegates to service layer which validates + caps limit
 router.get('/imessage/chats', async (req, res, next) => {
   try {
-    const chats = await imessageListChats({ limit: req.query.limit });
+    const chats = await imessageListChats({ limit: req.query.limit }, req.executionContext || {});
     res.json({ success: true, chats });
   } catch (err) {
     err.statusCode = 500;
@@ -124,7 +113,7 @@ router.post('/imessage/send', async (req, res, next) => {
   const { to, message } = req.body || {};
   if (!to || !message) return res.status(400).json({ error: 'to and message required' });
   try {
-    const result = await imessageSend({ to, message });
+    const result = await imessageSend({ to, message }, req.executionContext || {});
     res.json(result);
   } catch (err) {
     err.statusCode = 500;
@@ -136,7 +125,7 @@ router.get('/imessage/search-contact', async (req, res, next) => {
   const q = String(req.query.q || req.query.query || '').trim();
   if (!q) return res.status(400).json({ success: false, error: 'q is required' });
   try {
-    const matches = await imessageSearchContact({ query: q });
+    const matches = await imessageSearchContact({ query: q }, req.executionContext || {});
     res.json({ success: true, matches });
   } catch (err) {
     err.statusCode = 500;

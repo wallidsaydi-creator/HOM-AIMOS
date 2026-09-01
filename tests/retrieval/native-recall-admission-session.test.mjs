@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   NATIVE_RECALL_SESSION_SCALE_CONTRACT,
+  admitNativeRecallCandidatesInVerifiedSession,
   createRequestLocalRecallEvidenceCache,
   openNativeRecallAdmissionSession,
 } from '../../services/retrieval/native-recall.js';
@@ -147,5 +148,78 @@ test('native recall shared read interface rejects mutation statements before SQL
     /recall_admission_read_only_statement_required/,
   );
   assert.equal(statements.some((text) => /DELETE FROM aimos_memories/.test(text)), false);
+  await session.close({ commit: false });
+});
+
+test('candidate admission is atomic: one unauthorized proposal rejects the complete lane', async () => {
+  const allowedId = MEMORY_ID;
+  const deniedId = '22222222-2222-4222-8222-222222222222';
+  const authority = {
+    companyId: 'hom', actorAgentId: 'codex-auditor',
+    actorValidFromIso: '2026-08-10T00:00:00.000Z', identityTier: 'T2_AGENT',
+    clearanceCeiling: 4, dataClassCeiling: 'confidential', command: {},
+  };
+  const client = { query: async () => ({ rows: [] }) };
+  const proof = (clearanceLevel) => ({
+    company_id: 'hom', subject_agent_id: 'codex-auditor', scope: 'agent',
+    cube_scope: 'private', memory_type: 'fact', clearance_level: clearanceLevel,
+    data_class: 'confidential', source: 'fixture', version_status: 'current',
+  });
+
+  await assert.rejects(
+    admitNativeRecallCandidatesInVerifiedSession(
+      [
+        { id: allowedId, key: 'allowed', value: 'admissible proposal' },
+        { id: deniedId, key: 'denied', value: 'over-clearance proposal' },
+      ],
+      authority,
+      client,
+      async () => ({
+        rejected: [],
+        verified: new Set([allowedId, deniedId]),
+        proofs: new Map([[allowedId, proof(2)], [deniedId, proof(12)]]),
+      }),
+    ),
+    (error) => {
+      assert.match(error.message, /recall_candidate_authorization_failed/);
+      assert.deepEqual(error.rejected, [{
+        memory_id: deniedId,
+        reason: 'recall_proof_not_allowed',
+      }]);
+      return true;
+    },
+  );
+});
+
+test('optional recall reads recover a failed SQL statement without aborting the shared snapshot', async () => {
+  const statements = [];
+  const client = {
+    async query(text) {
+      statements.push(text);
+      if (/FROM agent_identity/.test(text)) return { rows: [{ active: 1 }] };
+      if (/optional_failure/.test(text)) throw new Error('fixture_optional_sql_failure');
+      if (/required_after_failure/.test(text)) return { rows: [{ value: 1 }] };
+      return { rows: [] };
+    },
+    release() {},
+  };
+  const session = await openNativeRecallAdmissionSession({
+    authority: {
+      companyId: 'hom', actorAgentId: 'housekeeper',
+      actorValidFromIso: '2026-08-10T00:00:00.000Z', identityTier: 'T1_SYSTEM_SELF',
+      clearanceCeiling: 12, dataClassCeiling: 'restricted',
+      authorityMutationHash: Buffer.alloc(32, 7), isHousekeeper: true, command: {},
+    },
+    connectFn: async () => client,
+  });
+  await assert.rejects(
+    session.optionalRead('SELECT * FROM optional_failure'),
+    /fixture_optional_sql_failure/,
+  );
+  const after = await session.read('SELECT * FROM required_after_failure');
+  assert.equal(after.rows[0].value, 1);
+  assert.ok(statements.some((text) => /^SAVEPOINT recall_optional_read_1$/.test(text)));
+  assert.ok(statements.some((text) => /^ROLLBACK TO SAVEPOINT recall_optional_read_1$/.test(text)));
+  assert.ok(statements.some((text) => /^RELEASE SAVEPOINT recall_optional_read_1$/.test(text)));
   await session.close({ commit: false });
 });

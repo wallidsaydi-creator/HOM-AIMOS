@@ -1,0 +1,55 @@
+{
+  "schema": "hom.canonical-benchmark-corpus-manifest/v1",
+  "inputs": {
+    "locomo": {
+      "file": "official-locomo10.json",
+      "sha256": "79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4"
+    },
+    "longmemeval": {
+      "file": "official-longmemeval-oracle.json",
+      "sha256": "821a2034d219ab45846873dd14c14f12cfe7776e73527a483f9dac095d38620c"
+    }
+  },
+  "outputs": [
+    {
+      "file": "locomo-sessions.json",
+      "sha256": "168c5cdf010a5d4c0bbff3ba6e7a16889f07cfe478a687469bf3eb3ccd2dfbe8",
+      "bytes": 2813377
+    },
+    {
+      "file": "locomo-questions.json",
+      "sha256": "c7205385b5171885cef7dc9c93928554cee6819f2f4f27f00a54e0353cd51998",
+      "bytes": 770949
+    },
+    {
+      "file": "longmemeval-sessions.json",
+      "sha256": "d62e2afedd2842d5967262f53e5edd107bd9b9db6a9e22a1d8fc90c784bbec69",
+      "bytes": 16578263
+    },
+    {
+      "file": "longmemeval-questions.json",
+      "sha256": "ae68281820edefbd2a283f6fcd9cb52b8d76146d246d3e07306ffbab2ed4f223",
+      "bytes": 271851
+    }
+  ],
+  "answer_key_boundary": {
+    "replay_inputs": [
+      "locomo-sessions.json",
+      "longmemeval-sessions.json"
+    ],
+    "scorer_inputs": [
+      "locomo-questions.json",
+      "longmemeval-questions.json"
+    ],
+    "diagnostic_inputs": [],
+    "forbidden_session_keys": [
+      "answer",
+      "answer_session_ids",
+      "has_answer",
+      "question",
+      "question_id",
+      "question_type"
+    ],
+    "verified": true
+  }
+}

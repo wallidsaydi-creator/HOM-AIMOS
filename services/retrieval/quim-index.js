@@ -484,8 +484,8 @@ export function readQuimPolicy() {
     : null;
 }
 
-async function verifySelectedBuild(company, selected) {
-  const result = await query(
+async function verifySelectedBuild(company, selected, { queryFn = query } = {}) {
+  const result = await queryFn(
     `SELECT build_id, corpus_root_sha256, index_root_sha256, prototype_count,
             max_bucket_size, authority_event_id
        FROM public.quim_index_builds
@@ -503,7 +503,9 @@ async function verifySelectedBuild(company, selected) {
     || Number(build.prototype_count) !== selected.policy.prototype_count
     || Number(build.max_bucket_size) > selected.policy.max_bucket_scan
   ) throw new Error('quim_selected_build_policy_binding_invalid');
-  const event = await readVerifiedEventById(build.authority_event_id, company);
+  const event = await readVerifiedEventById(build.authority_event_id, company, {
+    client: Object.freeze({ query: queryFn }),
+  });
   if (
     event.operation !== BUILD_EVENT_OPERATION
     || event.key !== indexRoot
@@ -515,13 +517,15 @@ async function verifySelectedBuild(company, selected) {
 }
 
 /** Query-time paper-shaped QuIM contribution. */
-export async function quimLookup(queryText, companyId = COMPANY, limit = 10) {
+export async function quimLookup(queryText, companyId = COMPANY, limit = 10, {
+  queryFn = query,
+} = {}) {
   const selected = readQuimPolicy();
   if (!selected) throw new Error('quim_signed_build_policy_missing');
   const company = String(companyId || '').trim();
-  const build = await verifySelectedBuild(company, selected);
+  const build = await verifySelectedBuild(company, selected, { queryFn });
   const queryEmbedding = assertEmbedding(await getEmbedding(String(queryText || '')), 'quim_query_embedding_invalid');
-  const nearest = await query(
+  const nearest = await queryFn(
     `SELECT prototype_id
        FROM public.quim_prototypes
       WHERE company_id = $1 AND build_id = $2::uuid
@@ -530,7 +534,7 @@ export async function quimLookup(queryText, companyId = COMPANY, limit = 10) {
     [company, build.build_id, JSON.stringify(queryEmbedding)],
   );
   if (nearest.rowCount !== 1) throw new Error('quim_selected_build_prototypes_missing');
-  const matches = await query(
+  const matches = await queryFn(
     `SELECT chunk_id AS id, question_text,
             1 - (question_embedding_vector <=> $4::vector) AS score,
             chunk_preview, row_identity_sha256

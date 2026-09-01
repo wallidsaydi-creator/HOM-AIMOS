@@ -18,7 +18,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { query } from '../../db/connection.js';
-import { logEvent } from '../observe/event-ledger.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 const TRUST_INCREMENT = 0.03;   // reward on success
@@ -77,20 +76,8 @@ export async function getAgentTrust(agentId, companyId = COMPANY) {
  * @param {string} companyId
  */
 export async function recordSuccess(agentId, latencyMs, companyId = COMPANY) {
-  await ensureSchema();
-  const current = await getAgentTrust(agentId, companyId);
-
-  const newTrust = Math.min(1.0, current.trustScore + TRUST_INCREMENT);
-  const newLatency = (1 - EWMA_BETA) * current.estimatedLatency + EWMA_BETA * latencyMs;
-
-  await query(
-    `INSERT INTO agent_trust (agent_id, company_id, trust_score, estimated_latency_ms, liveness, success_count, last_success_at, updated_at)
-     VALUES ($1, $2, $3, $4, true, 1, NOW(), NOW())
-     ON CONFLICT (agent_id, company_id) DO UPDATE SET
-       trust_score = $3, estimated_latency_ms = $4, liveness = true,
-       success_count = agent_trust.success_count + 1, last_success_at = NOW(), updated_at = NOW()`,
-    [agentId, companyId, newTrust, newLatency]
-  );
+  void agentId; void latencyMs; void companyId;
+  throw new Error('agent_trust_mutation_retired_no_verified_caller');
 }
 
 /**
@@ -101,29 +88,8 @@ export async function recordSuccess(agentId, latencyMs, companyId = COMPANY) {
  * @param {string} companyId
  */
 export async function recordFailure(agentId, latencyMs, companyId = COMPANY) {
-  await ensureSchema();
-  const current = await getAgentTrust(agentId, companyId);
-
-  const newTrust = Math.max(0.0, current.trustScore - TRUST_DECREMENT);
-  const newLatency = (1 - EWMA_BETA) * current.estimatedLatency + EWMA_BETA * latencyMs;
-
-  await query(
-    `INSERT INTO agent_trust (agent_id, company_id, trust_score, estimated_latency_ms, failure_count, last_failure_at, updated_at)
-     VALUES ($1, $2, $3, $4, 1, NOW(), NOW())
-     ON CONFLICT (agent_id, company_id) DO UPDATE SET
-       trust_score = $3, estimated_latency_ms = $4,
-       failure_count = agent_trust.failure_count + 1, last_failure_at = NOW(), updated_at = NOW()`,
-    [agentId, companyId, newTrust, newLatency]
-  );
-
-  // Log trust degradation event
-  if (newTrust < DEFAULT_TRUST_FLOOR) {
-    logEvent(companyId, agentId, 'trust_below_floor', `trust_low:${agentId}`, {
-      reasoning: `Agent ${agentId} trust dropped to ${newTrust.toFixed(3)}, below floor ${DEFAULT_TRUST_FLOOR}. Agent will be excluded from routing until trust recovers.`,
-      trust_score: newTrust,
-      failure_count: current.failureCount + 1
-    }).catch(() => {});
-  }
+  void agentId; void latencyMs; void companyId;
+  throw new Error('agent_trust_mutation_retired_no_verified_caller');
 }
 
 /**

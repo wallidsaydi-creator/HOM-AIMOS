@@ -23,6 +23,12 @@ function validCommit(overrides = {}) {
     valid_from: '2026-07-11T00:00:00.000Z',
     valid_until: null,
     signer_agent_id: 'housekeeper',
+    custody_action_id: 'custody-action',
+    custody_start_event_id: 'custody-start',
+    custody_start_mutation_hash: 'b'.repeat(64),
+    custody_readback_event_id: 'custody-readback',
+    custody_readback_mutation_hash: 'c'.repeat(64),
+    custody_version_slot_sha256: 'd'.repeat(64),
     ts_signed: 1783728000,
   };
   return {
@@ -39,6 +45,42 @@ function validCommit(overrides = {}) {
     identityTier: 'T1_SYSTEM_SELF',
     eventType: 'STORE',
     ...overrides,
+  };
+}
+
+function verifiedCustodyEvent(eventId) {
+  if (eventId === 'custody-start') {
+    return {
+      operation: 'credential_custody_started',
+      key: 'custody-action',
+      mutation_hash: Buffer.from('b'.repeat(64), 'hex'),
+      metadata: {
+        schema: 'hom.aimos.credential-custody-start/v1',
+        custody_action_id: 'custody-action',
+        lifecycle_event_type: 'STORE',
+        service_name: 'test-service',
+        slot_id: 'com.aimos.credentials.test-service',
+        material_commitment_sha256: 'a'.repeat(64),
+      },
+    };
+  }
+  return {
+    operation: 'credential_custody_readback_verified',
+    key: 'custody-action',
+    parent_event_id: 'custody-start',
+    mutation_hash: Buffer.from('c'.repeat(64), 'hex'),
+    metadata: {
+      schema: 'hom.aimos.credential-custody-readback/v1',
+      custody_action_id: 'custody-action',
+      start_event_id: 'custody-start',
+      start_mutation_hash: 'b'.repeat(64),
+      lifecycle_event_type: 'STORE',
+      service_name: 'test-service',
+      slot_id: 'com.aimos.credentials.test-service',
+      version_slot_sha256: 'd'.repeat(64),
+      material_commitment_sha256: 'a'.repeat(64),
+      readback_verified: true,
+    },
   };
 }
 
@@ -102,6 +144,7 @@ test('credential lifecycle insert carries epoch and certificate fingerprint', as
   const ledger = createCredentialLedger({
     pool: { connect: async () => { throw new Error('pool must not be used'); } },
     verifyAuthorityFn: async () => ({ ok: true }),
+    verifyAutonomousEventFn: async (eventId) => verifiedCustodyEvent(eventId),
   });
   const result = await ledger.commitCredentialLifecycle(validCommit({ client }));
   assert.equal(result.ok, true);
@@ -123,6 +166,96 @@ test('credential lifecycle rejects an unverified signature before SQL', async ()
   const result = await ledger.commitCredentialLifecycle(validCommit());
   assert.deepEqual(result, { ok: false, reason: 'sig_invalid' });
   assert.equal(queried, false);
+});
+
+test('credential custody starts before Keychain, verifies readback, and emits one bound terminal', async () => {
+  const calls = [];
+  const slot = 'com.aimos.credentials.test-service';
+  const hash = 'c'.repeat(64);
+  const versionSlot = `${slot}.${hash}`;
+  const events = [];
+  const ledger = createCredentialLedger({
+    appendAutonomousAuthorityFn: async (...args) => {
+      const operation = args[2];
+      calls.push(operation);
+      const receipt = operation === 'credential_custody_started'
+        ? { event_id: 'start-event', mutation_hash: 'd'.repeat(64) }
+        : operation === 'credential_custody_readback_verified'
+          ? { event_id: 'readback-event', mutation_hash: 'e'.repeat(64) }
+          : { event_id: 'terminal-event', mutation_hash: 'f'.repeat(64) };
+      events.push({ args, receipt });
+      return receipt;
+    },
+    credentialStore: {
+      credentialSlotId: () => slot,
+      computeCredentialHash: () => hash,
+      storeCredential: async () => {
+        calls.push('keychain_store');
+        return { slot, versionSlot, hash };
+      },
+      readCredential: async () => {
+        calls.push('keychain_readback');
+        return { slot, versionSlot, hash, value: 'not-observed-by-ledger' };
+      },
+      revokeCredential: async () => { throw new Error('not used'); },
+    },
+  });
+  const stored = await ledger.beginCredentialCustodyMutation({
+    serviceName: 'test-service',
+    value: 'opaque-test-value',
+    eventType: 'STORE',
+  });
+  assert.deepEqual(calls, [
+    'credential_custody_started',
+    'keychain_store',
+    'keychain_readback',
+    'credential_custody_readback_verified',
+  ]);
+  assert.equal(stored.custodyTrace.startEventId, 'start-event');
+  assert.equal(stored.custodyTrace.readbackEventId, 'readback-event');
+  const terminal = await ledger.commitCredentialCustodyTerminal(stored.custodyTrace, {
+    provenanceId: 'lifecycle-row',
+    mutationHash: Buffer.from('f'.repeat(64), 'hex'),
+  }, { client: { query: async () => ({ rows: [] }) } });
+  assert.equal(terminal.event_id, 'terminal-event');
+  const terminalCall = events.at(-1).args;
+  assert.equal(terminalCall[2], 'credential_custody_committed');
+  assert.equal(terminalCall[5], 'start-event');
+  assert.equal(terminalCall[4].lifecycle_mutation_hash, 'f'.repeat(64));
+  assert.equal(terminalCall[4].material_commitment_sha256, hash);
+  assert.equal(Object.hasOwn(terminalCall[4], 'value'), false);
+});
+
+test('credential custody readback uncertainty emits INDETERMINATE and never success', async () => {
+  const operations = [];
+  const ledger = createCredentialLedger({
+    appendAutonomousAuthorityFn: async (...args) => {
+      operations.push({ operation: args[2], metadata: args[4] });
+      return { event_id: `${args[2]}-event`, mutation_hash: 'a'.repeat(64) };
+    },
+    credentialStore: {
+      credentialSlotId: () => 'com.aimos.credentials.test-service',
+      computeCredentialHash: () => 'b'.repeat(64),
+      storeCredential: async () => ({
+        slot: 'com.aimos.credentials.test-service',
+        versionSlot: 'com.aimos.credentials.test-service.version',
+        hash: 'b'.repeat(64),
+      }),
+      readCredential: async () => null,
+      revokeCredential: async () => { throw new Error('not used'); },
+    },
+  });
+  await assert.rejects(ledger.beginCredentialCustodyMutation({
+    serviceName: 'test-service',
+    value: 'opaque-test-value',
+    eventType: 'STORE',
+  }), /credential_custody_readback_mismatch/);
+  assert.deepEqual(operations.map((entry) => entry.operation), [
+    'credential_custody_started',
+    'credential_custody_indeterminate',
+  ]);
+  assert.equal(operations[1].metadata.disposition, 'INDETERMINATE');
+  assert.equal(operations.some((entry) => entry.operation === 'credential_custody_committed'), false);
 });
 
 test('complete credential chain binds service, slot, event, signer epoch, hash, and signature', () => {
@@ -252,6 +385,43 @@ test('complete credential chain binds service, slot, event, signer epoch, hash, 
       { ...completed, body_json: { ...completed.body_json, reservation_mutation_hash: 'e'.repeat(64) } },
     ]),
     /hash_mismatch|terminal_without_reservation/,
+  );
+
+  const indeterminate = makeRow({
+    eventType: 'USE_FAILED',
+    hash: 'b'.repeat(64),
+    previous: reserved.mutation_hash,
+    ts: 1_800_000_004,
+    nonce: 'credential-chain-use-indeterminate',
+    id: '77777777-7777-4777-8777-777777777778',
+    bodyExtra: {
+      use_id: useId,
+      reservation_provenance_id: reserved.provenance_id,
+      reservation_mutation_hash: reserved.mutation_hash.toString('hex'),
+      outcome_hash: 'e'.repeat(64),
+      disposition: 'INDETERMINATE',
+    },
+  });
+  const uncertain = verifyCredentialLifecycleChain([first, second, reserved, indeterminate]);
+  assert.deepEqual(uncertain.openCredentialUses, []);
+  const malformedDisposition = makeRow({
+    eventType: 'USE_FAILED',
+    hash: 'b'.repeat(64),
+    previous: reserved.mutation_hash,
+    ts: 1_800_000_004,
+    nonce: 'credential-chain-use-invalid-disposition',
+    id: '77777777-7777-4777-8777-777777777779',
+    bodyExtra: {
+      use_id: useId,
+      reservation_provenance_id: reserved.provenance_id,
+      reservation_mutation_hash: reserved.mutation_hash.toString('hex'),
+      outcome_hash: 'e'.repeat(64),
+      disposition: 'SUCCEEDED',
+    },
+  });
+  assert.throws(
+    () => verifyCredentialLifecycleChain([first, second, reserved, malformedDisposition]),
+    /terminal_without_reservation/,
   );
 
   const retainedV1 = makeRow({

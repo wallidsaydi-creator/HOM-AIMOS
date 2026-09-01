@@ -11,7 +11,7 @@ const SCOPED_CALLS = new Map([
   ['services/core/scheming-monitor.js', ['agentId']],
   ['services/dream/delta-writer.js', ["'delta-writer'"]],
   ['services/dream/dream-feedback.js', ["'dream-feedback'"]],
-  ['services/learning/agent-learning.js', ['agentId', 'agentId', 'agentId']],
+  ['services/learning/agent-learning.js', ['agentId', 'agentId', 'agentId', 'group.agentId']],
   ['services/learning/batch-reflector.js', ["'batch-reflector'", "'batch-reflector'", "'batch-reflector'"]],
   ['services/learning/epistemic-vigilance.js', ["'epistemic'", "'epistemic'", "'epistemic'"]],
   ['services/learning/failure-replay.js', ["'failure-replay'"]],
@@ -24,17 +24,17 @@ function persistCalls(source) {
   let cursor = 0;
 
   while (true) {
-    const start = source.indexOf('persistMemory({', cursor);
+    const start = source.indexOf('executeHousekeeperCanonicalSave({', cursor);
     if (start === -1) return calls;
     const suffix = source.slice(start);
     const end = suffix.match(/^\s*\}\);/m);
-    assert.ok(end, 'persistMemory call must have a closing object boundary');
+    assert.ok(end, 'canonical SAVE call must have a closing object boundary');
     calls.push(suffix.slice(0, end.index + end[0].length));
     cursor = start + end.index + end[0].length;
   }
 }
 
-test('scoped autonomous persistence calls declare the native housekeeper authority', async () => {
+test('scoped autonomous persistence calls use the typed Housekeeper SAVE owner', async () => {
   let total = 0;
 
   for (const [relativePath, expectedSubjects] of SCOPED_CALLS) {
@@ -44,8 +44,7 @@ test('scoped autonomous persistence calls declare the native housekeeper authori
     total += calls.length;
 
     calls.forEach((call, index) => {
-      assert.match(call, /mutation_authority:\s*'housekeeper'/, relativePath);
-      assert.equal((call.match(/mutation_authority:/g) || []).length, 1, relativePath);
+      assert.doesNotMatch(call, /mutation_authority:/, relativePath);
       assert.match(
         call,
         new RegExp(`agent_id:\\s*${expectedSubjects[index]}`),
@@ -54,8 +53,9 @@ test('scoped autonomous persistence calls declare the native housekeeper authori
     });
 
     assert.doesNotMatch(source, /agent_id:\s*'housekeeper'/, `${relativePath} rewrote a subject as signer`);
+    assert.doesNotMatch(source, /mutation_authority:\s*'housekeeper'/);
     assert.doesNotMatch(source, /commitProvenance|signAsHousekeeper|memoryProvenanceLedger/);
   }
 
-  assert.equal(total, 20);
+  assert.equal(total, 21);
 });

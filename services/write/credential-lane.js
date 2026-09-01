@@ -12,7 +12,7 @@
 // the existing store-credential.js CLI.
 //
 // Flow:
-//   1. storeCredential(service, value) → versioned keychain write
+//   1. signed custody start → versioned Keychain write → exact readback
 //   2. return credential-reference/provider memory specifications (no plaintext)
 //   3. the native persistence owner inserts both specifications, their memory
 //      provenance, and the lifecycle STORE event on one PostgreSQL transaction
@@ -20,18 +20,19 @@
 //      service, slot_id, credential_hash, agent_id, memory_id, session_id,
 //      platform, account, ts_created, ts_saved — signed by housekeeper
 //
-// The unavoidable Keychain/DB boundary is reconciled by credential hash. A
-// retry reuses the same versioned Keychain slot and the persistence owner finds
-// any already-attested reference/lifecycle rows before appending missing state.
+// The unavoidable Keychain/DB boundary is owned by a signed start and a
+// lifecycle/event terminal that co-commit. A crash-open start is retained for
+// reconciliation; a retry reuses the content-addressed Keychain version.
 //
 // This module owns detection and Keychain specification only. It does not
 // recursively call persistence. The native owner remains persistMemory.
 
 import {
+  credentialSlotId,
   parseIdentityVaultCredentialService,
-  storeCredential,
 } from '../security/credential-store.js';
 import { CACHED_CREDENTIAL_SERVICES } from '../security/credential-cache.js';
+import { credentialLedger } from '../security/credential-ledger.js';
 
 const CREDENTIAL_REFERENCE_TYPE = 'credential_reference';
 const CREDENTIAL_PROVIDER_TYPE = 'credential_provider';
@@ -59,6 +60,7 @@ export async function prepareCredentialMemory({
   ts_created,
   valid_from,
   valid_until,
+  mutation_authority,
 }) {
   if (typeof value !== 'string' || value === '') {
     return {
@@ -69,10 +71,24 @@ export async function prepareCredentialMemory({
   }
 
   const tsNow = Math.floor(Date.now() / 1000);
-  const aid = agent_id || 'housekeeper';
+  const aid = String(agent_id || '').trim();
+  if (!aid) throw new Error('credential_lane_agent_required');
+  if (!mutation_authority || typeof mutation_authority !== 'object') {
+    throw new Error('credential_lane_authority_required');
+  }
 
-  // 1. Keychain write — plaintext to com.aimos.credentials.<service>
-  const stored = await storeCredential(key, value);
+  const existingChain = await credentialLedger.readVerifiedSlotChain(credentialSlotId(key));
+  const custodyEventType = existingChain.rowCount > 0 ? 'ROTATE' : 'STORE';
+  // 1. Housekeeper-signed start, content-addressed Keychain write and exact
+  // readback. The lifecycle row and terminal co-commit later in persistMemory.
+  const stored = await credentialLedger.beginCredentialCustodyMutation({
+    serviceName: key,
+    value,
+    eventType: custodyEventType,
+    subjectAgentId: aid,
+    authority: mutation_authority.kind === 'verified_request' ? mutation_authority : null,
+    reason: 'native_signed_save_credential_lane',
+  });
 
   // Produce exact DB memory specifications. The native persistence owner inserts
   // and attests these on one transaction; this lane never calls back into it.
@@ -81,6 +97,7 @@ export async function prepareCredentialMemory({
     service_name: key,
     stored_at: 'keychain',
     credential_hash: stored.hash,
+    custody_trace: stored.custodyTrace,
     credential_lane: true,
   });
   const referenceSpec = {
@@ -94,7 +111,7 @@ export async function prepareCredentialMemory({
     source: source || 'credential_lane',
     valid_from,
     valid_until,
-    mutation_authority: 'housekeeper',
+    mutation_authority,
   };
 
   // Optional provider classification specification — an extra memory underneath
@@ -120,7 +137,7 @@ export async function prepareCredentialMemory({
       source: source || 'credential_lane',
       valid_from,
       valid_until,
-      mutation_authority: 'housekeeper',
+      mutation_authority,
     } : null;
 
   return {
@@ -130,6 +147,7 @@ export async function prepareCredentialMemory({
     keychain_slot: stored.slot,
     keychain_version_slot: stored.versionSlot,
     credential_hash: stored.hash,
+    custody_trace: stored.custodyTrace,
     session_id: session_id || null,
     account: account || null,
     ts_created: ts_created || tsNow,
@@ -178,6 +196,12 @@ export function buildCredentialLifecycleBody(prepared, memoryId, {
     } : {}),
     ts_created: prepared.ts_created,
     ts_saved: prepared.ts_saved,
+    custody_action_id: prepared.custody_trace.actionId,
+    custody_start_event_id: prepared.custody_trace.startEventId,
+    custody_start_mutation_hash: prepared.custody_trace.startMutationHash,
+    custody_readback_event_id: prepared.custody_trace.readbackEventId,
+    custody_readback_mutation_hash: prepared.custody_trace.readbackMutationHash,
+    custody_version_slot_sha256: prepared.custody_trace.versionSlotSha256,
   };
 }
 

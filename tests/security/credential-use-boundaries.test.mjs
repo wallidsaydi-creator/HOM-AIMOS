@@ -48,7 +48,7 @@ test('unwired Telegram polling placeholder is retired', async () => {
 
 test('Golem findings use native signed persistence without a bearer-token loopback', async () => {
   const source = await readFile(new URL('../../jobs/golem-scanner.js', import.meta.url), 'utf8');
-  assert.match(source, /persistMemory\(\{/);
-  assert.match(source, /mutation_authority: 'housekeeper'/);
+  assert.match(source, /executeHousekeeperCanonicalSave\(\{/);
+  assert.doesNotMatch(source, /mutation_authority: 'housekeeper'/);
   assert.doesNotMatch(source, /getCachedCredential|aimos_api_token|\/aimos\/memories/);
 });

@@ -12,22 +12,28 @@ identity owns autonomous maintenance without borrowing an enrolled user agent.
 
 HOM-AIMOS is a complete persistent-memory backend, not a provenance layer
 attached to a vector store. Its source-derived architecture binds a
-300-service census and declares six critical pipelines containing 153 service
-connections. Save and recall each expose eight principal native execution
-boundaries.
+current 295-service census and declares six critical pipelines containing 116
+service connections. SAVE exposes one fixed 15-stage owner; RECALL exposes its
+eight principal native execution boundaries.
 
-### Save — 8 stages
+### SAVE — 15 fixed stages
 
-| # | Stage | Native owner |
-|---:|---|---|
-| 1 | Signed request and authorization | `routes/aimos.js` |
-| 2 | Write validation | `services/write/write-validator.js` |
-| 3 | Prediction-error routing gate | `services/write/rpe-gate.js` |
-| 4 | Mnemonic encoding | `services/context/mnemonic-encoder.js` |
-| 5 | Quality gate | `services/write/quality-gate.js` |
-| 6 | Embedding | `services/core/embeddings.js` |
-| 7 | Canonical persistence and provenance | `services/write/persist-memory.js` |
-| 8 | Signed retained-memory epistemic label | `services/security/memory-epistemic-classifier.js` |
+`services/write/canonical-save-owner.js` owns:
+
+```text
+AUTH → RECEIPT → CANARY → SE → ALADDIN → VALIDATOR → QUALITY
+→ SECRET_BOUNDARY → EMBEDDING → PERSISTENCE → PROVENANCE → LINEAGE
+→ GRAPH → EPISTEMIC → TERMINAL
+```
+
+The signed terminal is inserted in the same restricted transaction as a
+successful memory/provenance/lineage/graph/epistemic commit. Failed or rejected
+operations retain a non-success terminal and cannot return success.
+External transports preserve their verified request or tool authority.
+Autonomous services call a separate typed entrypoint that first appends a
+Housekeeper-signed action commitment over the exact SAVE projection. A bare
+`housekeeper` field is not authority, and public routes cannot mint autonomous
+Housekeeper actions.
 
 ### Recall — 8 stages
 
@@ -97,15 +103,15 @@ same baseline, provenance, signature, continuity, terminal-state, and corpus
 proof-root contracts. The normative byte layout and invariants are published
 in [`docs/security/cognitive-weight-chain-SPEC.md`](docs/security/cognitive-weight-chain-SPEC.md).
 
-The save manifest declares 13 critical service connections; recall declares
-75 spanning exact-identifier, semantic, temporal, graph, procedural, and
-lineage paths. The service census contains retrieval 68, orchestration 43,
-security 48, temporal 25, learning 23, observe 22, core 15, write 13, context
+The save manifest declares 15 critical service connections; recall declares
+34 spanning exact-identifier, semantic, temporal, graph, procedural, and
+lineage paths. The service census contains retrieval 63, orchestration 43,
+security 49, temporal 22, learning 23, observe 22, core 15, write 15, context
 9, integrations 9, governance 7, dream 5, ingestion 4, shared 4, answering 2,
 runtime 2, and caching 1.
 
 `services/pipeline-manifest.js` is the source of truth for the six critical
-connection maps. Its validator dynamically imports all 153 declarations and
+connection maps. Its validator dynamically imports all 116 declarations and
 checks their named exports; architecture tests and the release-source gate fail
 when the declared topology and public documentation diverge.
 
@@ -114,7 +120,7 @@ when the declared topology and public documentation diverge.
 The save and recall paths are a working memory system on their own. The
 cryptographic layer enters at explicit boundaries:
 
-- Save stage 8 assigns each retained memory a signed, reversible epistemic
+- SAVE stage 14 assigns each retained memory a signed, reversible epistemic
   label bound to its live content hash.
 - Recall stages 6–8 verify and consume the epistemic projection, apply a
   verified calibration snapshot, and return bounded evidence under an
@@ -200,7 +206,7 @@ epistemic ablation, blinded system-author agreement, and 39/39 verified signed
 scratch-brain purge evidence. Older batch-save runs are non-canonical and are
 not release claims.
 
-The architecture manifest mechanically binds the current 300-service census.
+The architecture manifest mechanically binds the current 295-service census.
 That number is an inventory fact, not a performance claim.
 
 ## Security and retention invariants
@@ -240,7 +246,7 @@ macOS 14 or later. A clean installation requires:
 
 - Apple Command Line Tools (`xcode-select --install`), including `git`, `curl`,
   a compiler, and `make`;
-- Node.js 20 or 24 with `npm`;
+- Node.js 20, 24, or 26 with `npm`; the clean installer prefers Node 26;
 - PostgreSQL 18;
 - pgvector built for the selected PostgreSQL 18 server;
 - libsodium and `pkg-config`/pkgconf; and
@@ -270,8 +276,12 @@ cd HOM-AIMOS
 
 The installer displays its plan and asks before Homebrew or Genesis changes
 machine state. It uses the repository `Brewfile`, installs the locked npm graph,
-and hands control to native Genesis. It does not download or execute the
-Homebrew installer itself.
+hands control to native Genesis, and then performs generic first-launch
+onboarding. Genesis creates the autonomous Housekeeper and Guide corpus first;
+onboarding then asks you to choose an ordinary agent identity and one operator
+passphrase. You may optionally select a provider/model or leave that policy
+unset for later. No benchmark identity or workload is installed. The installer
+does not download or execute the Homebrew installer itself.
 
 For an explicit manual dependency path:
 
@@ -282,12 +292,15 @@ brew bundle --file Brewfile
 brew services start postgresql@18
 npm ci
 npm run genesis:install -- --aimos-db aimos --aimos-port 9100
+node scripts/identity/onboard-agent.mjs --aimos-db aimos --aimos-port 9100
 ```
 
-After Genesis completes, start the server:
+The installer completes Genesis, generic agent onboarding, and persistent user
+service installation.
+Check it with:
 
 ```sh
-npm start -- --aimos-db aimos --aimos-port 9100
+npm run service:status
 ```
 
 Verify the live service:
@@ -316,12 +329,12 @@ through the real signed save path. This proves that the released source can
 construct the declared architecture without a pre-existing brain.
 
 The **operator-ceremony layer** proves live security behavior without sharing
-private keys. An operator may enroll a new master and audit agent, append a
+private keys. The installer has already created the operator root and first
+ordinary agent. An operator may enroll an additional audit agent, append its
 master-signed read/write grant, exercise signed save and recall, and run the
 disposable security ceremony:
 
 ```sh
-node scripts/identity/enroll-master.js
 node scripts/identity/enroll-agent.js <audit-agent-id> --validity-days=30
 node scripts/identity/authorize-recall.js <audit-agent-id> \
   --clearance=10 \

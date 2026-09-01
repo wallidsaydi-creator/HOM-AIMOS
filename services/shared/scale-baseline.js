@@ -57,25 +57,31 @@ const CACHE_TTL_MS = 60_000; // Refresh every 60 seconds
  * @param {string} [companyId] - Optional company filter
  * @returns {Promise<number>} Active memory count
  */
-export async function getMemoryCount(companyId) {
+export async function getMemoryCount(companyId, {
+  queryFn = query,
+  useCache = true,
+  failClosed = false,
+} = {}) {
   const now = Date.now();
-  if (now - _cachedAt < CACHE_TTL_MS) {
+  if (useCache && now - _cachedAt < CACHE_TTL_MS) {
     return _cachedMemoryCount;
   }
 
   try {
-    const result = await query(
+    const result = await queryFn(
       `SELECT COUNT(*) AS cnt FROM aimos_memories WHERE TRUE${
         companyId ? ' AND company_id = $1' : ''
       }`,
       companyId ? [companyId] : []
     );
     const count = parseInt(result.rows[0]?.cnt || 0, 10);
-    if (count > 0) {
+    if (useCache && count > 0) {
       _cachedMemoryCount = count;
       _cachedAt = now;
     }
+    if (!useCache) return count;
   } catch (err) {
+    if (failClosed) throw err;
     // DB unavailable — use cached or baseline
     console.warn('[scale-baseline] getMemoryCount DB error, using cached:', err.message);
   }

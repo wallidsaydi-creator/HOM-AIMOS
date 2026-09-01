@@ -29,8 +29,8 @@ import {
 import { VARIANTS } from '../services/answering/prompt-variants.js';
 import { query } from '../db/connection.js';
 import { AIMOS_COMPANY_ID } from '../services/core/runtime-config.js';
-import { resolveNativeRecallAuthority } from '../services/retrieval/native-recall.js';
-import { executeNativeRecall } from '../services/retrieval/native-recall-pipeline.js';
+import { executeCanonicalRecall } from '../services/retrieval/native-recall-pipeline.js';
+import { verifiedRequestAuthorityFromRequest } from '../services/security/auth-gate.js';
 
 const router = express.Router();
 
@@ -187,29 +187,14 @@ router.post('/recall', async (req, res, next) => {
   const ensembleMode = modeStr === 'fast' ? 'any-correct' : 'majority-vote';
 
   try {
-    const requestAuthority = {
-      kind: 'verified_request',
-      body: req.body,
-      agentId: req.executionContext?.actorAgentId,
-      validFromIso: req.executionContext?.actorValidFromIso,
-      certString: req.identityCertString,
-      signedTs: req.identitySignedTs,
-      nonce: req.identityNonce,
-      sigBytes: req.identitySigBytes,
-      identityTier: req.identityTier,
-      claimedPrev: req.prevChainHash || null,
-      requestSigForm: req.identityRequestSigForm,
-      signedMethod: req.identitySignedMethod,
-      signedPath: req.identitySignedPath,
-      signedClaims: req.identitySignedClaims,
-    };
-    const recallAuthority = await resolveNativeRecallAuthority({
+    const requestAuthority = verifiedRequestAuthorityFromRequest(req);
+    const nativeRecall = await executeCanonicalRecall({
+      req,
       rawCommand: req.body,
       executionContext: req.executionContext,
       requestAuthority,
       transportBinding: { transport: 'v1' },
     });
-    const nativeRecall = await executeNativeRecall(req, recallAuthority);
     if (nativeRecall.status !== 200) {
       return res.status(nativeRecall.status).json(nativeRecall.body);
     }

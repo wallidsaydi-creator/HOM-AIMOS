@@ -47,8 +47,11 @@ function sha256(value) {
 
 function sanitizeMetadata(value, key = '', depth = 0) {
   if (depth > 16) throw new Error('event_metadata_depth_exceeded');
+  // A null optional field carries no secret bytes and must remain null so
+  // exact signed schemas can distinguish "not supplied" from redaction.
+  if (value === null) return null;
   if (SECRET_KEY.test(key)) return '[REDACTED]';
-  if (value === null || typeof value === 'boolean' || typeof value === 'number') return value;
+  if (typeof value === 'boolean' || typeof value === 'number') return value;
   if (typeof value === 'string') {
     if (/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/.test(value)) return '[REDACTED]';
     return value;
@@ -466,6 +469,97 @@ export async function readVerifiedEventById(eventId, companyId, { client = null 
   } finally {
     if (ownsTransaction) conn.release();
   }
+}
+
+const VERIFIED_EVENT_BATCH_MAX_IDS = 4_000;
+const EVENT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * Read and independently verify a bounded set of exact retained events in one
+ * database round trip. This is the batch form of readVerifiedEventById() for a
+ * request-scoped owner that must verify many relational authority references
+ * without creating an N+1 query path.
+ */
+export async function readVerifiedEventsByIds(eventIds, companyId, {
+  client = null,
+  queryFn = null,
+} = {}) {
+  const company = String(companyId || '').trim();
+  const ids = [...new Set((Array.isArray(eventIds) ? eventIds : [])
+    .map((value) => String(value || '').trim().toLowerCase()))].sort();
+  if (!company || (!client && typeof queryFn !== 'function')) {
+    throw new Error('event_receipt_batch_scope_required');
+  }
+  if (!ids.length) return new Map();
+  if (ids.length > VERIFIED_EVENT_BATCH_MAX_IDS || ids.some((id) => !EVENT_ID_PATTERN.test(id))) {
+    throw new Error('event_receipt_batch_bound_invalid');
+  }
+  const idSet = new Set(ids);
+
+  const execute = typeof queryFn === 'function' ? queryFn : client.query.bind(client);
+  const result = await execute(
+    `SELECT event.*, identity.pubkey, identity.cert,
+            revocation.ts_signed AS revocation_ts_signed,
+            predecessor.mutation_hash AS stored_predecessor_hash,
+            master.master_pubkey
+       FROM aimos_events event
+       JOIN agent_identity identity
+         ON identity.agent_id = event.signer_agent_id
+        AND identity.valid_from = event.signer_valid_from
+       LEFT JOIN aimos_agent_revocation_events revocation
+         ON revocation.agent_id = identity.agent_id
+        AND revocation.agent_valid_from = identity.valid_from
+       LEFT JOIN aimos_events predecessor
+         ON predecessor.company_id = event.company_id
+        AND predecessor.signer_agent_id = event.signer_agent_id
+        AND predecessor.signer_valid_from = event.signer_valid_from
+        AND predecessor.ledger_version = event.ledger_version
+        AND predecessor.ledger_seq = event.ledger_seq - 1
+       CROSS JOIN aimos_master_identity master
+      WHERE event.id = ANY($1::uuid[])
+        AND event.company_id = $2
+        AND event.ledger_version = $3
+        AND master.id = 1
+      ORDER BY event.id`,
+    [ids, company, EVENT_LEDGER_VERSION],
+  );
+  if (result.rows.length !== ids.length) throw new Error('event_receipt_batch_incomplete');
+
+  const verified = new Map();
+  for (const row of result.rows) {
+    const id = String(row.id || '').toLowerCase();
+    if (!idSet.has(id) || verified.has(id)) throw new Error('event_receipt_batch_result_invalid');
+    const certBody = decodeCertificateBody(row.cert);
+    const certFingerprint = sha256(Buffer.from(String(row.cert), 'utf8')).toString('hex');
+    if (
+      !certBody
+      || certBody.agent_id !== row.signer_agent_id
+      || certBody.pubkey !== row.pubkey
+      || certFingerprint !== row.cert_fingerprint
+    ) throw new Error('event_ledger_identity_mismatch');
+    const certAuthority = certBody.issuer === row.signer_agent_id
+      ? row.pubkey
+      : row.master_pubkey;
+    if (!certAuthority) throw new Error('event_ledger_master_identity_missing');
+    const certProof = verifyCertChain(row.cert, certAuthority, {
+      nowFn: () => Number(row.ts_signed),
+    });
+    if (!certProof.valid) throw new Error(`event_ledger_certificate_invalid:${certProof.reason}`);
+    if (row.revocation_ts_signed != null && Number(row.revocation_ts_signed) <= Number(row.ts_signed)) {
+      throw new Error('event_ledger_signer_revoked_at_signature_time');
+    }
+    const expectedPredecessor = Number(row.ledger_seq) === 1
+      ? eventGenesisHash(row.company_id, row.signer_agent_id, row.signer_valid_from)
+      : Buffer.from(row.stored_predecessor_hash || []);
+    if (expectedPredecessor.length !== 32
+      || !Buffer.from(row.prev_mutation_hash).equals(expectedPredecessor)) {
+      throw new Error('event_ledger_chain_link_invalid');
+    }
+    const proof = verifyEventProof(row, row.pubkey);
+    if (!proof.valid) throw new Error(`event_ledger_proof_invalid:${proof.reason}`);
+    verified.set(id, row);
+  }
+  return verified;
 }
 
 /**

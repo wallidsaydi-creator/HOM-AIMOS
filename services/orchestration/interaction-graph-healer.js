@@ -35,7 +35,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
-import { query } from '../../db/connection.js';
 import { logEvent } from '../observe/event-ledger.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
@@ -1950,67 +1949,21 @@ function _countByField(items, field) {
 // ─── AIMOS PERSISTENCE ─────────────────────────────────────────────────────
 
 async function _persistGraphMeta(graphId, sessionId, createdAt) {
-  try {
-    await query(
-      `INSERT INTO interaction_graphs (company_id, graph_id, session_id, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $4)
-       ON CONFLICT (company_id, graph_id) DO UPDATE SET updated_at = $4`,
-      [COMPANY, graphId, sessionId, createdAt]
-    );
-  } catch (err) {
-    console.error('[interaction-graph-healer] Failed to persist graph meta:', err.message);
-  }
+  void graphId; void sessionId; void createdAt;
+  return false;
 }
 
 async function _persistNode(graphId, node) {
-  try {
-    await query(
-      `INSERT INTO interaction_graph_nodes (company_id, graph_id, node_id, node_type, agent_id, event_type, status, logical_ts, content, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       ON CONFLICT (company_id, graph_id, node_id) DO UPDATE
-       SET status = $7, logical_ts = $8, content = $9`,
-      [
-        COMPANY,
-        graphId,
-        node.id,
-        node.type,
-        node.agentId || null,
-        node.eventType || null,
-        node.status,
-        node.logicalTs,
-        node.content ? JSON.stringify(node.content) : null,
-        node.createdAt,
-      ]
-    );
-  } catch (err) {
-    console.error('[interaction-graph-healer] Failed to persist node:', err.message);
-  }
+  void graphId; void node;
+  return false;
 }
 
 async function _persistEdge(graphId, edge) {
-  try {
-    await query(
-      `INSERT INTO interaction_graph_edges (company_id, graph_id, edge_id, from_node, to_node, edge_type, logical_ts, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (company_id, graph_id, edge_id) DO NOTHING`,
-      [COMPANY, graphId, edge.id, edge.from, edge.to, edge.edgeType, edge.logicalTs, edge.createdAt]
-    );
-  } catch (err) {
-    console.error('[interaction-graph-healer] Failed to persist edge:', err.message);
-  }
+  void graphId; void edge;
+  return false;
 }
 
 async function _persistPrune(graphId, beforeTimestamp, prunedNodes, prunedEdges) {
-  try {
-    await query(
-      `UPDATE interaction_graphs SET updated_at = NOW(), metadata = jsonb_set(
-         COALESCE(metadata, '{}'::jsonb),
-         '{last_prune}',
-         $3::jsonb
-       ) WHERE company_id = $1 AND graph_id = $2`,
-      [COMPANY, graphId, JSON.stringify({ beforeTimestamp, prunedNodes, prunedEdges, at: new Date().toISOString() })]
-    );
-  } catch (err) {
-    console.error('[interaction-graph-healer] Failed to persist prune metadata:', err.message);
-  }
+  void graphId; void beforeTimestamp; void prunedNodes; void prunedEdges;
+  return false;
 }

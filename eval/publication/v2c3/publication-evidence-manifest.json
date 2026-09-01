@@ -1,0 +1,134 @@
+{
+  "schema": "hom.aimos.mutmem-v2-publication-evidence-manifest/v1",
+  "source_inputs": [
+    {
+      "id": "publication",
+      "path": "eval/publication/verified-benchmark-results.json",
+      "file_sha256": "02de7a4b41e15daeae6de50d43c1b7123f5782440ebd66e44cb43a95f0f21596",
+      "semantic_root_sha256": "06afd5ba25c96d12c020df891e3711e821578df21d76c86c6398bc3792377a3f"
+    },
+    {
+      "id": "mutation",
+      "path": "eval/publication/mutation-integrity-verification.json",
+      "file_sha256": "8b0bfdcb36c1454d3f77a1475e3c9d9c15d1c09dffc1420fd68b0e00e155713f",
+      "semantic_root_sha256": "9521798027be2893af745214a22747334be201d74178ddd9265ea97a32d34be8"
+    },
+    {
+      "id": "epistemic",
+      "path": "eval/publication/poisonedrag-epistemic-verification.json",
+      "file_sha256": "bd9a83452fd42413313bbbb2c0329c6bcb567b9b350aef2da044ee9df17cd180",
+      "semantic_root_sha256": "bf49888904fdc34db17e7f65d2f825ed1f18cfe5e66cc6e6d7bd77d5aee197c3"
+    },
+    {
+      "id": "ablation",
+      "path": "eval/publication/poisonedrag-epistemic-ablation.json",
+      "file_sha256": "93b3c5ba11e488441089b117a23b4ed420d3b8166cb43c232c474304df597c4e",
+      "semantic_root_sha256": "83a576895d26de63a7dde820b74effb93158299bf180289069af77569eb27105"
+    },
+    {
+      "id": "agreement",
+      "path": "eval/publication/poisonedrag-human-agreement.json",
+      "file_sha256": "8d707356de8e5fbd471124cbe80143e6f02a05447ae2bbe49bc52524b202dbe7",
+      "semantic_root_sha256": "fec88dfb1e58dc429c023e876ff289684f1ee97e3d2df9d37478e09c0c54d387"
+    },
+    {
+      "id": "canary",
+      "path": "eval/publication/canary-cross-transport-verification.json",
+      "file_sha256": "1cc4d507d409c4e268ccd3ea98b841627a6ee497219e989e6f6ab59238f4e377",
+      "semantic_root_sha256": "f35e4633679b4252ab489b31baf61b4a7666180b0ab504de95fe596abe8f6a74"
+    },
+    {
+      "id": "p1",
+      "path": "verifiers/mutmem-conformance/v2/protocol-manifest.json",
+      "file_sha256": "b68d71780774803705d7e475d6db8b4d3c3619cd93232a7c489a591e86861add",
+      "semantic_root_sha256": "663174ea3373d7f7eab816254a119a3da83b157709e190a93f3caef1094b6874"
+    },
+    {
+      "id": "p2",
+      "path": "verifiers/mutmem-conformance/v2/p2-closure-audit.json",
+      "file_sha256": "4fbe3876bd5c3dc20477c39a615ed06218f283b2c10a99bddaa3bdd9bc8f5a45",
+      "semantic_root_sha256": "49a555b94fa4ef99c9612b1037d538d2833d529bfa46a5764cb185d7a660927a"
+    },
+    {
+      "id": "s5",
+      "path": "verifiers/mutmem-conformance/v1/verification-report.json",
+      "file_sha256": "d4d301f8124a11c77f2ba63aac134026cc8be5dc8651662b4340851cad607805",
+      "semantic_root_sha256": "03c3679654447b8e2b361616ce1d5e0b5955150fbf84d47f8399fa1da1af6eca"
+    },
+    {
+      "id": "installer",
+      "path": "verifiers/mutmem-conformance/v2/p3-clean-installer-qualification.json",
+      "file_sha256": "51b12f7c793ad4dcf0edb99f48d79d06178c4f4a8df3ad4c142361adaee96199",
+      "semantic_root_sha256": "882e5fcdc403b0af3df555cbe24bc4f3f2ce9e9b02cd2cfa4b4a7de1358beea3"
+    },
+    {
+      "id": "reproducibility",
+      "path": "reproducibility/mutmem-v2-contract.json",
+      "file_sha256": "78f6ed9f9022ed6fdd9c11ae63bc29015e8101b18e489e0e23b980a406c98e70",
+      "semantic_root_sha256": "b5e2b3ca5facfe94fc93304acbb61d9d9330344f45442e94caa217ed5f3f5236"
+    },
+    {
+      "id": "environment",
+      "path": "reproducibility/mutmem-v2-environment-contract.json",
+      "file_sha256": "59d815f68ae22a1f1ca1ec0bbe724546ced6cb1a127c1a3e3aedcdb212e720bc",
+      "semantic_root_sha256": "5f5bca276c1af307510cc82a61b1a8976f277de4812ab85044d0648200149551"
+    },
+    {
+      "id": "canonicalCorpus",
+      "path": "eval/data/canonical/corpus-manifest.json",
+      "file_sha256": "fde6511fb265047f18a1d97aefde3138d178c3d94263422c5e7cd5cf70a4aa58",
+      "semantic_root_sha256": null
+    },
+    {
+      "id": "poisonSource",
+      "path": "eval/poisonedrag/source-lock.json",
+      "file_sha256": "d6f099aec5fecb8e4a7c63d5bf1f7d804a0b70b298b811c77c1c42c1a61c5c22",
+      "semantic_root_sha256": null
+    },
+    {
+      "id": "poisonTargets",
+      "path": "eval/poisonedrag/n100-public-target-lock.json",
+      "file_sha256": "e9cc22f3ca0c6663ec45d2be7d113574b99f5180e8123b7c5e5ee937e1970b34",
+      "semantic_root_sha256": null
+    }
+  ],
+  "generated_outputs": [
+    {
+      "path": "eval/publication/v2c3/metric-contract.json",
+      "file_sha256": "a16aeb358d02460ef2cd60969f16838bf9737402c82aa2101f679a4126c3f50e",
+      "semantic_root_sha256": "5a5e2eba2395abb3e88ebcad22bb591e0393b298e2bdd2eb4125f8b576667a41"
+    },
+    {
+      "path": "eval/publication/v2c3/publication-tables.json",
+      "file_sha256": "89905df81f7febdb008d7775266720447ad4958bdd25d0755fd91e4815fabd13",
+      "semantic_root_sha256": "3d454f986514f8de3abdfcabe1fd162ac3358c844aec433490b241df1eefcffd"
+    },
+    {
+      "path": "eval/publication/v2c3/scientific-attempt-ledger.json",
+      "file_sha256": "e011e759c7c62a19337eafe1100ca8211d09695605addd423d76fe34e10a265a",
+      "semantic_root_sha256": "7a0de711d4d9a12c71447ae78592a3026aeab6101daa29b0b3717872872a0ed1"
+    },
+    {
+      "path": "eval/publication/v2c3/claim-to-evidence-map.json",
+      "file_sha256": "76ffdc15a6b27225c992e836c98cecc1a32cded20f83a931305a6b92b5c45bff",
+      "semantic_root_sha256": "4d8d23442e9ed311e33ddd9ce9a79e878642eba93329c460e203128e54997527"
+    },
+    {
+      "path": "eval/publication/v2c3/public-private-boundary.json",
+      "file_sha256": "881e5b1d4418fd9f52dbe11a790fcda9f2787276b3c37fa181cdb503992c257b",
+      "semantic_root_sha256": "1237680332b6c3fb9c94097bd4338935a10cc1cc9bd9cf2c14bc50d7de7c079b"
+    },
+    {
+      "path": "eval/publication/v2c3/figure-registry.json",
+      "file_sha256": "53980d778a86ecd7c6b92bd4310b4dce0d8c223ca65138e3339b2ae1929cfa80",
+      "semantic_root_sha256": "9721d3e6aa03765daed83d4a6dc15b1c2d714e7af423f02619cdc6bbfa06be43"
+    }
+  ],
+  "output_file_count": 6,
+  "all_outputs_deterministic": true,
+  "benchmark_run": false,
+  "database_access": false,
+  "network_access": false,
+  "provider_call": false,
+  "publication_evidence_root_sha256": "99bed29dcf0cc5c2f597f17b69be8d6dc990bae4ae5dd30838a1d1f34d92a76b"
+}

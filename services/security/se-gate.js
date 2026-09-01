@@ -595,6 +595,15 @@ const LIVE_SECURITY_SIGNALS = Object.freeze([
     pattern: /\b(ceo|founder|admin|owner|root|security team|operator)\b.{0,50}\b(approved|authorized|ordered|said)\b.{0,80}\b(grant|enable|execute|run|reveal|share|provide|bypass)\b/i,
   },
   {
+    // NIST SP 800-207: urgency, locality and asserted ownership grant no
+    // implicit trust. OWASP Excessive Agency: an urgent prompt cannot create
+    // functionality, permission or autonomy. Descriptive/defensive discussion
+    // remains audit-allowed by the context decision above this signal set.
+    tag: 'urgency_execution_spoof',
+    severity: 'high',
+    pattern: /\b(urgent|emergency|critical|immediate|time[_\s-]?sensitive|no time to think|act now)\b.{0,90}\b(grant|allow|provide|give|share|access|override|skip|bypass|disable|execute|run)\b/i,
+  },
+  {
     tag: 'fabricated_prior_authorization',
     severity: 'high',
     pattern: /\b(previous (?:conversation|session)|earlier|last time)\b.{0,80}\b(agreed|approved|authorized|promised)\b.{0,80}\b(share|reveal|provide|continue|access)\b/i,

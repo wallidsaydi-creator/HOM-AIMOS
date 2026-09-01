@@ -22,6 +22,10 @@ import { canonicalJson } from '../../services/security/agent-identity.js';
 import { signAsHousekeeper } from '../../services/security/housekeeper-signer.js';
 import { resolveNativeRecallAuthority } from '../../services/retrieval/native-recall.js';
 import { executeNativeRecall } from '../../services/retrieval/native-recall-pipeline.js';
+import {
+  createMutationOutcomeEvidence,
+  successorOutcomeEvidence,
+} from './helpers/mutation-outcome-evidence.mjs';
 
 const databaseName = resolveAimosDatabaseName();
 if (!process.argv.includes('--live-fire') || !/^aimos_test_security_[a-z0-9_]+$/.test(databaseName)) {
@@ -192,8 +196,15 @@ try {
   );
   assert.equal(balanceMem.rowCount, 1, 'second retained memory available for neutral-crossing proof');
   const balanceMemoryId = balanceMem.rows[0].id;
-  const negativeDelta = await applyRewardSignal(balanceMemoryId, -1, { eta: 0.2 });
-  const neutralDelta = await applyRewardSignal(balanceMemoryId, 1, { eta: 0.2 });
+  const balanceEvidence = await createMutationOutcomeEvidence(balanceMemoryId);
+  const negativeDelta = await applyRewardSignal(balanceMemoryId, -1, {
+    eta: 0.2,
+    outcomeEvidence: balanceEvidence,
+  });
+  const neutralDelta = await applyRewardSignal(balanceMemoryId, 1, {
+    eta: 0.2,
+    outcomeEvidence: successorOutcomeEvidence(balanceEvidence),
+  });
   assert.ok(negativeDelta < 0, 'negative evidence attenuates');
   assert.equal(neutralDelta, 0, 'balancing evidence creates no fictitious transition');
   const neutralState = await query(
@@ -206,7 +217,10 @@ try {
   assert.equal(neutralState.rows[0].valence_rows, 2, 'both signed outcomes retained');
   assert.equal(neutralState.rows[0].projection_rows, 1, 'neutral evidence appends no REWEIGHT');
   assert.equal(neutralState.rows[0].neutral_events, 1, 'signed no-transition outcome retained');
-  const positiveDelta = await applyRewardSignal(balanceMemoryId, 1, { eta: 0.2 });
+  const positiveDelta = await applyRewardSignal(balanceMemoryId, 1, {
+    eta: 0.2,
+    outcomeEvidence: successorOutcomeEvidence(balanceEvidence),
+  });
   assert.ok(positiveDelta > 0, 'later positive evidence crosses neutral and elevates');
   const balanceChain = await verify(balanceMemoryId);
   assert.equal(balanceChain.ok, true, 'negative→neutral→positive evidence leaves a valid chain');

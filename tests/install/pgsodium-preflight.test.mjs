@@ -91,7 +91,7 @@ test('same-version artifacts require a matching locked-source attestation', asyn
     const first = await ensurePgsodium(options);
     assert.equal(first.source_install_performed, true, 'version label alone must not bypass locked build');
     assert.match(first.source_attestation_sha256, /^[0-9a-f]{64}$/);
-    assert.match(first.node_version, /^v(?:20|24)\./);
+    assert.match(first.node_version, /^v(?:20|24|26)\./);
     assert.equal(first.pgvector_available_version, '0.8.2');
     assert.equal(calls.some(([file]) => file === 'bash'), true);
 

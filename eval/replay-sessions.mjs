@@ -14,6 +14,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { signAsHousekeeper } from '../services/security/housekeeper-signer.js';
+import { buildEnvelopeHeaders } from '../services/security/envelope-headers.js';
 import { canonicalJson } from '../services/security/agent-identity.js';
 import { sessionKeyPrefix } from '../services/shared/session-scope.js';
 import { assessQuality } from '../services/write/quality-gate.js';
@@ -122,9 +123,14 @@ function parseArgs(argv) {
   const runId = String(cliValue(argv, '--run-id') || '').trim();
   if (!/^[a-z0-9][a-z0-9_-]{5,63}$/i.test(runId)) throw new Error('run_id_invalid');
   const databaseName = String(cliValue(argv, '--aimos-db') || '').trim();
-  if (databaseName !== `aimos_benchmark_${runId}`) {
+  const installedService = cliFlag(argv, '--installed-service');
+  if (!installedService && databaseName !== `aimos_benchmark_${runId}`) {
     throw new Error('benchmark_database_must_match_run_id');
   }
+  if (installedService && !databaseName) throw new Error('installed_service_database_required');
+  const agentId = String(cliValue(argv, '--agent-id') || 'housekeeper').trim();
+  if (!/^[a-z0-9][a-z0-9_-]{1,62}$/i.test(agentId)) throw new Error('benchmark_agent_id_invalid');
+  if (installedService && agentId === 'housekeeper') throw new Error('installed_service_ordinary_agent_required');
   const scopeIds = cliValues(argv, '--scope-id');
   const selectionFile = cliValue(argv, '--selection-file');
   const all = cliFlag(argv, '--all');
@@ -141,6 +147,8 @@ function parseArgs(argv) {
     runDir: path.resolve(runDirRaw),
     runId,
     databaseName,
+    installedService,
+    agentId,
     origin: validateReplayOrigin(cliValue(argv, '--aimos-base') || 'http://127.0.0.1:9200'),
     scopeIds,
     selectionFile: selectionFile ? path.resolve(selectionFile) : null,
@@ -384,7 +392,19 @@ async function signedPost(origin, route, body, options = {}) {
   const attempts = [];
   const retries = options.retries || 3;
   for (let attempt = 1; attempt <= retries; attempt += 1) {
-    const signed = await (options.signer || signAsHousekeeper)(body, { method: 'POST', path: route });
+    let signed;
+    if (options.signer) signed = await options.signer(body, { method: 'POST', path: route });
+    else if (options.installedService) {
+      const headers = await buildEnvelopeHeaders(options.agentId, 'POST', route, body);
+      signed = {
+        body,
+        certString: headers['Aimos-Agent-Cert'],
+        sigB64u: headers['Aimos-Agent-Signature'],
+        nonce: headers['Aimos-Agent-Nonce'],
+        signedTs: Number(headers['Aimos-Agent-Timestamp']),
+        sigForm: Number(headers['X-Aimos-Sig-Form']),
+      };
+    } else signed = await signAsHousekeeper(body, { method: 'POST', path: route });
     const started = performance.now();
     let status = 0;
     let responseBody = {};
@@ -477,7 +497,7 @@ async function replaySession(scope, session, context) {
     const normalizedImages = normalizeReplayImageContext(turn.image_context);
     const body = {
       company_id: 'hom',
-      agent_id: 'housekeeper',
+      agent_id: context.agentId,
       session_id: session.session_id,
       turn_id: turn.turn_id,
       role: turn.role,
@@ -524,7 +544,7 @@ async function replaySession(scope, session, context) {
 
   const finalBody = {
     company_id: 'hom',
-    agent_id: 'housekeeper',
+    agent_id: context.agentId,
     session_id: session.session_id,
     source: scope.source_filter,
     clearance_level: 10,
@@ -583,14 +603,14 @@ async function replaySession(scope, session, context) {
   return { proof, reused: false };
 }
 
-async function healthCheck(origin, timeoutMs, databaseName) {
+async function healthCheck(origin, timeoutMs, databaseName, installedService = false) {
   const response = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(timeoutMs) });
   const body = await response.json().catch(() => ({}));
-  if (!response.ok || body.ready !== true) throw new Error(`scratch_server_not_ready:${response.status}`);
+  if (!response.ok || body.ready !== true) throw new Error(`benchmark_server_not_ready:${response.status}`);
   if (body.runtime?.database_name !== databaseName
-    || body.runtime?.benchmark_scratch !== true
+    || body.runtime?.benchmark_scratch !== !installedService
     || Number(body.runtime?.server_port) !== Number(new URL(origin).port)) {
-    throw new Error('scratch_server_runtime_identity_mismatch');
+    throw new Error('benchmark_server_runtime_identity_mismatch');
   }
   return body;
 }
@@ -628,7 +648,7 @@ async function main() {
     throw new Error('run_dir_symlink_forbidden');
   }
   fs.mkdirSync(path.join(args.runDir, 'replay-progress'), { recursive: true, mode: 0o700 });
-  const health = await healthCheck(args.origin, args.requestTimeoutMs, args.databaseName);
+  const health = await healthCheck(args.origin, args.requestTimeoutMs, args.databaseName, args.installedService);
   const context = {
     ...args,
     corpusSha256: loaded.digest,
@@ -659,7 +679,9 @@ async function main() {
     corpus_file: path.basename(args.sessionsFile),
     corpus_sha256: loaded.digest,
     database_name: args.databaseName,
-    scratch_origin: args.origin,
+    benchmark_origin: args.origin,
+    execution_mode: args.installedService ? 'installed-service' : 'scratch',
+    agent_id: args.agentId,
     health: {
       service: health.service || null,
       version: health.version || null,

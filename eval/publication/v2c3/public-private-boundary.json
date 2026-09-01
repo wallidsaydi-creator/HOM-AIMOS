@@ -1,0 +1,89 @@
+{
+  "schema": "hom.aimos.mutmem-v2-public-private-boundary/v1",
+  "public_source_artifacts": [
+    {
+      "path": "eval/publication/verified-benchmark-results.json",
+      "scope": "sanitized_historical_v1_aggregate"
+    },
+    {
+      "path": "eval/publication/mutation-integrity-verification.json",
+      "scope": "sanitized_historical_mutation_aggregate"
+    },
+    {
+      "path": "eval/publication/poisonedrag-epistemic-verification.json",
+      "scope": "sanitized_historical_epistemic_aggregate"
+    },
+    {
+      "path": "eval/publication/poisonedrag-epistemic-ablation.json",
+      "scope": "sanitized_historical_ablation_aggregate"
+    },
+    {
+      "path": "eval/publication/poisonedrag-human-agreement.json",
+      "scope": "sanitized_historical_agreement_aggregate"
+    },
+    {
+      "path": "eval/publication/canary-cross-transport-verification.json",
+      "scope": "non_reconstructive_explicit_marker_aggregate"
+    },
+    {
+      "path": "verifiers/mutmem-conformance/v2/protocol-manifest.json",
+      "scope": "portable_protocol_manifest"
+    },
+    {
+      "path": "verifiers/mutmem-conformance/v2/p2-closure-audit.json",
+      "scope": "independent_verifier_closure"
+    },
+    {
+      "path": "verifiers/mutmem-conformance/v1/verification-report.json",
+      "scope": "public_conformance_report"
+    }
+  ],
+  "verification_only_not_republished": [
+    {
+      "path": "verifiers/mutmem-conformance/v2/p3-clean-installer-qualification.json",
+      "reason": "contains_ephemeral_certificate_and_instance_identity_metadata",
+      "public_substitute": "v2-clean-installer table row without identity material"
+    }
+  ],
+  "withheld_families": [
+    {
+      "family": "v1_private_row_directories",
+      "reason": "unavailable_on_current_machine_and_historically_identity_bearing",
+      "public_substitute": "06afd5ba25c96d12c020df891e3711e821578df21d76c86c6398bc3792377a3f"
+    },
+    {
+      "family": "provider_requests_and_responses",
+      "reason": "provider_confidentiality_and_possible_user_content",
+      "public_substitute": "model_identity_protocol_and_aggregate_outcomes_only"
+    },
+    {
+      "family": "restricted_dataset_text",
+      "reason": "dataset_rights_and_redistribution_boundary",
+      "public_substitute": "downloaders_source_locks_and_content_hashes"
+    },
+    {
+      "family": "credentials_certificates_and_secret_material",
+      "reason": "credential_and_identity_safety",
+      "public_substitute": "non_identity_semantic_roots_and_boolean_verdicts"
+    },
+    {
+      "family": "live_aimos_memories",
+      "reason": "user_memory_privacy_and_noninterference",
+      "public_substitute": "sanitized_public_aggregate_only"
+    },
+    {
+      "family": "saber_private_campaign_artifact",
+      "reason": "exact_artifact_not_in_verified_custody",
+      "public_substitute": "no_numerical_claim"
+    }
+  ],
+  "prohibited_public_payloads": [
+    "absolute_machine_paths",
+    "secret_or_private_key_material",
+    "identity_bearing_certificates_or_receipts",
+    "live_memory_content_or_identifiers",
+    "unauthorized_provider_payloads",
+    "restricted_dataset_text"
+  ],
+  "boundary_sha256": "1237680332b6c3fb9c94097bd4338935a10cc1cc9bd9cf2c14bc50d7de7c079b"
+}

@@ -90,9 +90,9 @@ test('confidence parsing ignores object wrappers and cache namespaces bind ACL',
 test('R5E multi-stage rescue admits before scoring and binds every SQL proposal to request scope', async () => {
   const order = [];
   const rows = [
-    { id: 'blocked', key: 'blocked', value: 'blocked evidence', scope: 'global', memory_type: 'fact', clearance_level: 5, data_class: 'confidential', source: 'fixture', retrieval_weight: 1, similarity: 0.99, bm25_score: 1 },
-    { id: 'allowed-a', key: 'allowed-a', value: 'alpha evidence', scope: 'global', memory_type: 'fact', clearance_level: 5, data_class: 'confidential', source: 'fixture', retrieval_weight: 1, similarity: 0.98, bm25_score: 0.9 },
-    { id: 'allowed-b', key: 'allowed-b', value: 'beta evidence', scope: 'global', memory_type: 'fact', clearance_level: 5, data_class: 'confidential', source: 'fixture', retrieval_weight: 1, similarity: 0.97, bm25_score: 0.8 },
+    { id: 'blocked', key: 'blocked', value: 'blocked evidence', scope: 'global', memory_type: 'fact', clearance_level: 5, data_class: 'confidential', source: 'fixture', retrieval_weight: 1, similarity: 0.99, bm25_score: 1, embedding: '[0,1]' },
+    { id: 'allowed-a', key: 'allowed-a', value: 'alpha evidence', scope: 'global', memory_type: 'fact', clearance_level: 5, data_class: 'confidential', source: 'fixture', retrieval_weight: 1, similarity: 0.98, bm25_score: 0.9, embedding: '[0,1]' },
+    { id: 'allowed-b', key: 'allowed-b', value: 'beta evidence', scope: 'global', memory_type: 'fact', clearance_level: 5, data_class: 'confidential', source: 'fixture', retrieval_weight: 1, similarity: 0.97, bm25_score: 0.8, embedding: '[0,1]' },
   ];
   const sqlCalls = [];
   const queryFn = async (sql, params) => {
@@ -143,6 +143,9 @@ test('R5E multi-stage rescue admits before scoring and binds every SQL proposal 
   assert.equal(MULTI_STAGE_RETRIEVAL_CONTRACT.full_hyde_paper_implementation, false);
   assert.equal(result.every((row) => row.hyde_adaptation === MULTI_STAGE_RETRIEVAL_CONTRACT.hyde_implementation), true);
   assert.equal(result.every((row) => row.hypothetical_expansion_used === true), true);
+  assert.equal(result.every((row) => row.embedding === '[0,1]'), true);
+  assert.equal(sqlCalls.filter(({ sql }) => sql.includes('FROM aimos_memories') && !sql.includes('SELECT DISTINCT value'))
+    .every(({ sql }) => sql.includes('embedding::text AS embedding')), true);
   for (const call of sqlCalls.filter((entry) => !entry.sql.includes('SELECT DISTINCT value'))) {
     assert.match(call.sql, /agent_id = \$4/);
     assert.match(call.sql, /data_class, 'public'\) = ANY\(\$5::text\[\]\)/);

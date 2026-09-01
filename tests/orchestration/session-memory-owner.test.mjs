@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 
 import {
   createSessionMemoryOwner,
@@ -39,6 +40,8 @@ function makeHarness({ quarantinePredicate = () => false } = {}) {
     rows: [],
     persistCalls: 0,
     events: [],
+    requestAuthorities: [],
+    housekeeperCalls: 0,
   };
   const client = {
     async query(sql, params = []) {
@@ -71,12 +74,6 @@ function makeHarness({ quarantinePredicate = () => false } = {}) {
   };
   const withTransaction = async (fn) => fn(client);
   const persistMemory = async (spec) => {
-    assert.equal(spec.client, client);
-    if (['session_exchange', 'session_manifest'].includes(spec.memory_type)) {
-      assert.equal(spec.mutation_authority, 'housekeeper');
-    } else {
-      assert.ok(spec.mutation_authority, 'raw turn persistence requires explicit mutation authority');
-    }
     assert.equal(state.rows.some((row) => row.company_id === spec.company_id && row.key === spec.key), false, 'duplicate memory key');
     state.persistCalls += 1;
     const id = `00000000-0000-4000-8000-${String(state.persistCalls).padStart(12, '0')}`;
@@ -96,7 +93,7 @@ function makeHarness({ quarantinePredicate = () => false } = {}) {
       value: spec.value,
       memory_type: effectiveType,
       scope: effectiveScope,
-      retrieval_weight: effectiveScope === 'quarantine' ? 0.1 : 1,
+      retrieval_weight: 1,
       source: spec.source,
       content_hash: liveContentHash,
       created_at: new Date('2026-07-13T00:00:00.000Z').toISOString(),
@@ -140,12 +137,81 @@ function makeHarness({ quarantinePredicate = () => false } = {}) {
   };
   const createOwner = () => createSessionMemoryOwner({
     withTransaction,
-    persistMemory,
+    executeCanonicalSave: async (spec) => {
+      assert.ok(spec.mutation_authority, 'verified request/tool path requires exact authority');
+      state.requestAuthorities.push(spec.mutation_authority);
+      return persistMemory(spec);
+    },
+    executeHousekeeperCanonicalSave: async (spec) => {
+      assert.equal(Object.hasOwn(spec, 'mutation_authority'), false);
+      state.housekeeperCalls += 1;
+      return persistMemory(spec);
+    },
     verifyEvidence,
     logEvent,
   });
   return { state, createOwner };
 }
+
+test('signed session authority is preserved through turns, exchange, and final manifest', async () => {
+  const harness = makeHarness();
+  const owner = harness.createOwner();
+  const authority = Object.freeze({ kind: 'verified_request', fixture: 'exact-session-request' });
+  const context = {
+    companyId: 'hom',
+    agentId: 'fixture-agent',
+    requestAuthority: authority,
+  };
+  await owner.appendTurn({
+    session_id: 'signed_authority_session',
+    turn_id: 'signed:user',
+    role: 'user',
+    content: 'The signed user turn remains bound to its exact external request authority.',
+    observed_at: '2026-08-27T10:00:00.000Z',
+    source: 'signed-session-test',
+  }, context);
+  await owner.appendTurn({
+    session_id: 'signed_authority_session',
+    turn_id: 'signed:assistant',
+    role: 'assistant',
+    content: 'The signed assistant turn preserves the same request without borrowing Housekeeper authority.',
+    observed_at: '2026-08-27T10:01:00.000Z',
+    source: 'signed-session-test',
+  }, context);
+  await owner.finalizeSession({
+    session_id: 'signed_authority_session',
+    source: 'signed-session-test',
+  }, context);
+  assert.equal(harness.state.requestAuthorities.length, 4);
+  assert.ok(harness.state.requestAuthorities.every((candidate) => candidate === authority));
+  assert.equal(harness.state.housekeeperCalls, 0);
+});
+
+test('session SAVE rejects missing or ambiguous authority before persistence', async () => {
+  const harness = makeHarness();
+  const owner = harness.createOwner();
+  const input = {
+    session_id: 'missing_authority_session',
+    turn_id: 'missing:user',
+    role: 'user',
+    content: 'This turn must not persist without one exact authority source.',
+    observed_at: '2026-08-27T11:00:00.000Z',
+  };
+  await assert.rejects(
+    owner.appendTurn(input, { companyId: 'hom', agentId: 'fixture-agent' }),
+    /session_save_authority_required/,
+  );
+  await assert.rejects(
+    owner.appendTurn(input, {
+      companyId: 'hom',
+      agentId: 'fixture-agent',
+      requestAuthority: { kind: 'verified_request' },
+      autonomousHousekeeper: true,
+    }),
+    /session_authority_ambiguous/,
+  );
+  assert.equal(harness.state.persistCalls, 0);
+});
 
 test('session LIKE patterns treat underscores and percent signs literally', () => {
   const pattern = sessionKeyLikePattern('sample_session_%1');
@@ -173,6 +239,42 @@ test('RFC6962-style session root is deterministic and order-sensitive', () => {
   assert.equal(a.length, 64);
 });
 
+test('session Merkle root preserves legacy bytes with O(n) range traversal', () => {
+  const reference = (entries) => {
+    const leaves = entries.map((entry) => createHash('sha256').update(Buffer.concat([
+      Buffer.from([0x00]),
+      Buffer.from(JSON.stringify(entry), 'utf8'),
+    ])).digest());
+    if (!leaves.length) return createHash('sha256').update(Buffer.alloc(0)).digest();
+    const powerBelow = (value) => {
+      let power = 1;
+      while ((power << 1) < value) power <<= 1;
+      return power;
+    };
+    const tree = (nodes) => {
+      if (nodes.length === 1) return nodes[0];
+      const split = powerBelow(nodes.length);
+      return createHash('sha256').update(Buffer.concat([
+        Buffer.from([0x01]),
+        tree(nodes.slice(0, split)),
+        tree(nodes.slice(split)),
+      ])).digest();
+    };
+    return tree(leaves);
+  };
+  for (let size = 0; size <= 65; size += 1) {
+    const entries = Array.from({ length: size }, (_, index) => ({ index, value: `turn-${index}` }));
+    assert.equal(sessionMerkleRoot(entries).toString('hex'), reference(entries).toString('hex'));
+  }
+  const large = Array.from({ length: 10_000 }, (_, index) => ({ index }));
+  assert.match(sessionMerkleRoot(large).toString('hex'), /^[0-9a-f]{64}$/);
+  const source = readFileSync(new URL('../../services/orchestration/session-memory-owner.js', import.meta.url), 'utf8');
+  const block = source.slice(source.indexOf('export function sessionMerkleRoot'), source.indexOf('function ledgerHash'));
+  assert.doesNotMatch(block, /\.slice\(/);
+  assert.match(block, /tree\(start, start \+ split\)/);
+  assert.match(block, /tree\(start \+ split, end\)/);
+});
+
 test('three sessions survive owner restart, finalize once, and reject post-finalization append', async () => {
   const harness = makeHarness();
   let owner = harness.createOwner();
@@ -187,7 +289,7 @@ test('three sessions survive owner restart, finalize once, and reject post-final
       content: `User preference ${index + 1}: use color ${['blue', 'green', 'orange'][index]}.`,
       observed_at: `2026-07-13T0${index}:00:00.000Z`,
       source: 'deterministic-fixture',
-    }, { companyId: 'hom', agentId: 'fixture-agent', mutationAuthority: 'housekeeper' });
+    }, { companyId: 'hom', agentId: 'fixture-agent', autonomousHousekeeper: true });
     await owner.appendTurn({
       session_id: sessionId,
       turn_id: `${sessionId}:assistant`,
@@ -195,7 +297,7 @@ test('three sessions survive owner restart, finalize once, and reject post-final
       content: `Acknowledged preference ${index + 1} with a concrete retained response.`,
       observed_at: `2026-07-13T0${index}:01:00.000Z`,
       source: 'deterministic-fixture',
-    }, { companyId: 'hom', agentId: 'fixture-agent', mutationAuthority: 'housekeeper' });
+    }, { companyId: 'hom', agentId: 'fixture-agent', autonomousHousekeeper: true });
   }
 
   assert.equal(harness.state.rows.filter((row) => row.memory_type === 'conversation_feed').length, 6);
@@ -208,7 +310,7 @@ test('three sessions survive owner restart, finalize once, and reject post-final
     content: 'User preference 1: use color blue.',
     observed_at: '2026-07-13T09:00:00.000Z',
     source: 'deterministic-fixture',
-  }, { companyId: 'hom', agentId: 'fixture-agent', mutationAuthority: 'housekeeper' });
+  }, { companyId: 'hom', agentId: 'fixture-agent', autonomousHousekeeper: true });
   assert.equal(replay.idempotent, true);
   assert.match(replay.live_content_hash, /^[0-9a-f]{64}$/);
   assert.match(replay.save_mutation_hash, /^[0-9a-f]{64}$/);
@@ -220,7 +322,7 @@ test('three sessions survive owner restart, finalize once, and reject post-final
     finalized.push(await owner.finalizeSession({
       session_id: sessionId,
       source: 'deterministic-fixture',
-    }, { companyId: 'hom', agentId: 'fixture-agent' }));
+    }, { companyId: 'hom', agentId: 'fixture-agent', autonomousHousekeeper: true }));
   }
   assert.deepEqual(finalized.map((result) => result.turn_count), [2, 2, 2]);
   assert.deepEqual(finalized.map((result) => result.exchange_count), [1, 1, 1]);
@@ -232,7 +334,7 @@ test('three sessions survive owner restart, finalize once, and reject post-final
   const finalizedReplay = await owner.finalizeSession({
     session_id: sessions[0],
     source: 'deterministic-fixture',
-  }, { companyId: 'hom', agentId: 'fixture-agent' });
+  }, { companyId: 'hom', agentId: 'fixture-agent', autonomousHousekeeper: true });
   assert.equal(finalizedReplay.idempotent, true);
   assert.equal(harness.state.rows.length, 12);
 
@@ -250,7 +352,7 @@ test('three sessions survive owner restart, finalize once, and reject post-final
       role: 'user',
       content: 'This late turn must not reopen a finalized session.',
       observed_at: '2026-07-13T10:00:00.000Z',
-    }, { companyId: 'hom', agentId: 'fixture-agent', mutationAuthority: 'housekeeper' }),
+    }, { companyId: 'hom', agentId: 'fixture-agent', autonomousHousekeeper: true }),
     /session_already_finalized/,
   );
   await assert.rejects(
@@ -260,7 +362,7 @@ test('three sessions survive owner restart, finalize once, and reject post-final
       role: 'user',
       content: 'Changed content under an already retained idempotency key.',
       observed_at: '2026-07-13T00:00:00.000Z',
-    }, { companyId: 'hom', agentId: 'fixture-agent', mutationAuthority: 'housekeeper' }),
+    }, { companyId: 'hom', agentId: 'fixture-agent', autonomousHousekeeper: true }),
     /session_turn_idempotency_conflict/,
   );
 });
@@ -279,7 +381,7 @@ test('exact timeout retry copies remain retained, verified, and canonically orde
       session_id: sessionId,
       observed_at: `2026-08-08T00:00:0${index}.000Z`,
       ...turns[index],
-    }, { companyId: 'hom', agentId: 'housekeeper', mutationAuthority: 'housekeeper' });
+    }, { companyId: 'hom', agentId: 'housekeeper', autonomousHousekeeper: true });
   }
 
   const [first, second] = harness.state.rows.map((row) => ({ ...row }));
@@ -304,7 +406,7 @@ test('exact timeout retry copies remain retained, verified, and canonically orde
     session_id: sessionId,
     observed_at: '2026-08-08T00:00:01.000Z',
     ...turns[1],
-  }, { companyId: 'hom', agentId: 'housekeeper', mutationAuthority: 'housekeeper' });
+  }, { companyId: 'hom', agentId: 'housekeeper', autonomousHousekeeper: true });
   assert.equal(replayedSecond.idempotent, true);
   assert.equal(replayedSecond.sequence, 2);
   assert.equal(replayedSecond.memory_id, second.id);
@@ -313,12 +415,12 @@ test('exact timeout retry copies remain retained, verified, and canonically orde
     session_id: sessionId,
     observed_at: '2026-08-08T00:00:02.000Z',
     ...turns[2],
-  }, { companyId: 'hom', agentId: 'housekeeper', mutationAuthority: 'housekeeper' });
+  }, { companyId: 'hom', agentId: 'housekeeper', autonomousHousekeeper: true });
   assert.equal(appendedThird.sequence, 3);
 
   const finalized = await owner.finalizeSession(
     { session_id: sessionId },
-    { companyId: 'hom', agentId: 'housekeeper' },
+    { companyId: 'hom', agentId: 'housekeeper', autonomousHousekeeper: true },
   );
   assert.equal(finalized.turn_count, 3);
   const manifestRow = harness.state.rows.find((row) => row.memory_type === 'session_manifest');
@@ -331,7 +433,7 @@ test('exact timeout retry copies remain retained, verified, and canonically orde
 
   const loaded = await owner.loadVerifiedTurns(
     { session_id: sessionId },
-    { companyId: 'hom', agentId: 'housekeeper' },
+    { companyId: 'hom', agentId: 'housekeeper', autonomousHousekeeper: true },
   );
   assert.deepEqual(loaded.map((turn) => turn.sequence), [1, 2, 3]);
   assert.deepEqual(loaded.map((turn) => turn.content), turns.map((turn) => turn.content));
@@ -376,20 +478,20 @@ test('ordered exchange v2 retains reversed speakers, image context, and a traili
       observed_at: `2026-07-13T12:00:0${index}.000Z`,
       source: 'benchmark:locomo:conversation_1',
       ...turns[index],
-    }, { companyId: 'hom', agentId: 'housekeeper', mutationAuthority: 'housekeeper' });
+    }, { companyId: 'hom', agentId: 'housekeeper', autonomousHousekeeper: true });
   }
 
   owner = harness.createOwner();
   const restored = await owner.loadVerifiedTurns(
     { session_id: sessionId },
-    { companyId: 'hom', agentId: 'housekeeper' },
+    { companyId: 'hom', agentId: 'housekeeper', autonomousHousekeeper: true },
   );
   assert.equal(restored[0].speaker, 'Melanie');
   assert.equal(restored[0].image_context[0].query, 'painting sunrise');
 
   const finalized = await owner.finalizeSession(
     { session_id: sessionId, source: 'benchmark:locomo:conversation_1' },
-    { companyId: 'hom', agentId: 'housekeeper' },
+    { companyId: 'hom', agentId: 'housekeeper', autonomousHousekeeper: true },
   );
   assert.equal(finalized.turn_count, 3);
   assert.equal(finalized.exchange_count, 2);
@@ -438,14 +540,14 @@ test('retained quarantine remains ordered, idempotent, and included in finalizat
       observed_at: `2026-07-15T00:00:0${index}.000Z`,
       source: 'deterministic-quarantine-fixture',
       ...inputs[index],
-    }, { companyId: 'hom', agentId: 'housekeeper', mutationAuthority: 'housekeeper' }));
+    }, { companyId: 'hom', agentId: 'housekeeper', autonomousHousekeeper: true }));
   }
   assert.deepEqual(appended.map((result) => result.sequence), [1, 2, 3]);
   assert.deepEqual(appended.map((result) => result.quarantined), [true, false, false]);
   assert.deepEqual(
     harness.state.rows.filter((row) => ['conversation_feed', 'quarantine'].includes(row.memory_type))
       .map((row) => [JSON.parse(row.value).sequence, row.memory_type, row.retrieval_weight]),
-    [[1, 'quarantine', 0.1], [2, 'conversation_feed', 1], [3, 'conversation_feed', 1]],
+    [[1, 'quarantine', 1], [2, 'conversation_feed', 1], [3, 'conversation_feed', 1]],
   );
 
   const replay = await owner.appendTurn({
@@ -453,7 +555,7 @@ test('retained quarantine remains ordered, idempotent, and included in finalizat
     observed_at: '2026-07-15T00:00:00.000Z',
     source: 'deterministic-quarantine-fixture',
     ...inputs[0],
-  }, { companyId: 'hom', agentId: 'housekeeper', mutationAuthority: 'housekeeper' });
+  }, { companyId: 'hom', agentId: 'housekeeper', autonomousHousekeeper: true });
   assert.equal(replay.idempotent, true);
   assert.equal(replay.sequence, 1);
   assert.equal(replay.quarantined, true);
@@ -466,13 +568,13 @@ test('retained quarantine remains ordered, idempotent, and included in finalizat
     source: 'deterministic-quarantine-fixture',
     expected_turn_count: 3,
     expected_turn_id_hashes_sha256: turnIdHashesSha256,
-  }, { companyId: 'hom', agentId: 'housekeeper' });
+  }, { companyId: 'hom', agentId: 'housekeeper', autonomousHousekeeper: true });
   assert.equal(finalized.turn_count, 3);
   assert.equal(finalized.exchange_count, 2);
   assert.equal(finalized.turn_id_hashes_sha256, turnIdHashesSha256);
   const quarantinedExchange = harness.state.rows.find((row) => row.memory_type === 'session_exchange');
   assert.equal(quarantinedExchange.scope, 'quarantine');
-  assert.equal(quarantinedExchange.retrieval_weight, 0.1);
+  assert.equal(quarantinedExchange.retrieval_weight, 1);
 
   const restored = await owner.loadVerifiedTurns(
     { session_id: sessionId },
@@ -512,7 +614,7 @@ test('the 32-turn publication regression retains all classifier-quarantined sour
       session_id: sourceSession.session_id,
       source: sourceSession.source_filter,
       ...turn,
-    }, { companyId: 'hom', agentId: 'housekeeper', mutationAuthority: 'housekeeper' }));
+    }, { companyId: 'hom', agentId: 'housekeeper', autonomousHousekeeper: true }));
   }
   assert.deepEqual(appended.map((result) => result.sequence), Array.from({ length: 32 }, (_, index) => index + 1));
   assert.equal(appended.filter((result) => result.quarantined).length, 5);
@@ -525,7 +627,7 @@ test('the 32-turn publication regression retains all classifier-quarantined sour
     source: sourceSession.source_filter,
     expected_turn_count: sourceSession.turns.length,
     expected_turn_id_hashes_sha256: turnIdHashesSha256,
-  }, { companyId: 'hom', agentId: 'housekeeper' });
+  }, { companyId: 'hom', agentId: 'housekeeper', autonomousHousekeeper: true });
   assert.equal(finalized.turn_count, 32);
   assert.equal(finalized.exchange_count, 16);
   assert.equal(finalized.turn_id_hashes_sha256, turnIdHashesSha256);
@@ -540,7 +642,7 @@ test('the 32-turn publication regression retains all classifier-quarantined sour
     (row) => row.memory_type === 'session_exchange' && row.scope === 'quarantine',
   );
   assert.equal(quarantinedExchanges.length, 5);
-  assert.ok(quarantinedExchanges.every((row) => row.retrieval_weight === 0.1));
+  assert.ok(quarantinedExchanges.every((row) => row.retrieval_weight === 1));
 });
 
 test('turn idempotency binds speaker and image evidence', async () => {
@@ -559,12 +661,12 @@ test('turn idempotency binds speaker and image evidence', async () => {
   await owner.appendTurn(base, {
     companyId: 'hom',
     agentId: 'housekeeper',
-    mutationAuthority: 'housekeeper',
+    autonomousHousekeeper: true,
   });
   const replay = await owner.appendTurn(base, {
     companyId: 'hom',
     agentId: 'housekeeper',
-    mutationAuthority: 'housekeeper',
+    autonomousHousekeeper: true,
   });
   assert.equal(replay.idempotent, true);
   assert.match(replay.live_content_hash, /^[0-9a-f]{64}$/);
@@ -578,7 +680,7 @@ test('turn idempotency binds speaker and image evidence', async () => {
     }, {
       companyId: 'hom',
       agentId: 'housekeeper',
-      mutationAuthority: 'housekeeper',
+      autonomousHousekeeper: true,
     }),
     /session_turn_idempotency_conflict/,
   );
@@ -590,7 +692,7 @@ test('turn idempotency binds speaker and image evidence', async () => {
     }, {
       companyId: 'hom',
       agentId: 'housekeeper',
-      mutationAuthority: 'housekeeper',
+      autonomousHousekeeper: true,
     }),
     /session_turn_image_context_invalid/,
   );

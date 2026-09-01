@@ -163,89 +163,101 @@ async function lockActiveActor(client, executionContext) {
   return identity.rows[0];
 }
 
-export async function resolveNativeRecallAuthority({
+async function resolveNativeRecallAuthorityInClient({
   rawCommand,
   executionContext,
   requestAuthority,
   transportBinding = { transport: 'rest' },
+  client,
 } = {}) {
   if (!executionContext?.actorAgentId || !executionContext?.actorValidFromIso || !executionContext?.companyId) {
     throw new Error('verified_recall_execution_context_required');
   }
+  if (!client || typeof client.query !== 'function') {
+    throw new Error('verified_recall_session_client_required');
+  }
   const command = normalizeNativeRecallCommand(rawCommand);
   if (command.company_id !== executionContext.companyId) throw new Error('recall_company_scope_mismatch');
   if (command.agent_id && command.agent_id !== executionContext.actorAgentId) throw new Error('recall_actor_mismatch');
+  const boundRequestAuthority = await assertSignedCommandBinding(
+    rawCommand,
+    requestAuthority,
+    transportBinding,
+    { client, executionContext },
+  );
+  if (boundRequestAuthority.kind === 'verified_request') {
+    if (boundRequestAuthority.agentId !== executionContext.actorAgentId
+      || new Date(boundRequestAuthority.validFromIso).toISOString() !== new Date(executionContext.actorValidFromIso).toISOString()) {
+      throw new Error('recall_request_actor_epoch_mismatch');
+    }
+  } else if (
+    boundRequestAuthority.actorAgentId !== executionContext.actorAgentId
+    || new Date(boundRequestAuthority.actorValidFromIso).toISOString() !== new Date(executionContext.actorValidFromIso).toISOString()
+  ) {
+    throw new Error('recall_request_actor_epoch_mismatch');
+  }
+  await lockActiveActor(client, executionContext);
+  const isHousekeeper = executionContext.actorAgentId === 'housekeeper'
+    && ['T1_SYSTEM_SELF', 'T1'].includes(executionContext.identityTier);
+  let ceiling;
+  let dataClassCeiling;
+  let authorityMutationHash;
+  let authorizationEventId = null;
+  if (isHousekeeper) {
+    ceiling = 12;
+    dataClassCeiling = 'restricted';
+    authorityMutationHash = sha256(Buffer.from(canonicalJson({
+      kind: 'housekeeper_system_principal',
+      company_id: executionContext.companyId,
+      agent_id: executionContext.actorAgentId,
+      valid_from: new Date(executionContext.actorValidFromIso).toISOString(),
+    }), 'utf8'));
+  } else {
+    const grant = await recallAuthorizationService.getEffective({
+      companyId: executionContext.companyId,
+      subjectAgentId: executionContext.actorAgentId,
+      subjectValidFrom: executionContext.actorValidFromIso,
+      client,
+    });
+    if (!grant?.allowed) throw new Error('master_signed_memory_read_grant_required');
+    ceiling = grant.clearanceCeiling;
+    dataClassCeiling = grant.dataClassCeiling;
+    authorityMutationHash = grant.mutationHash;
+    authorizationEventId = grant.eventId;
+  }
+  const requested = command.clearance_level == null ? ceiling : command.clearance_level;
+  if (requested > ceiling) throw new Error('recall_clearance_exceeds_master_grant');
+  return Object.freeze({
+    actorAgentId: executionContext.actorAgentId,
+    actorValidFromIso: new Date(executionContext.actorValidFromIso).toISOString(),
+    companyId: executionContext.companyId,
+    identityTier: executionContext.identityTier,
+    clearanceCeiling: requested,
+    dataClassCeiling,
+    authorityMutationHash: Buffer.from(authorityMutationHash),
+    authorizationEventId,
+    isHousekeeper,
+    requestReceiptId: executionContext.requestReceiptId || null,
+    requestReceiptMutationHash: executionContext.requestReceiptMutationHash || null,
+    command,
+    requestAuthority: boundRequestAuthority,
+    transportBinding: Object.freeze({ ...transportBinding }),
+  });
+}
 
+export async function resolveNativeRecallAuthority(args = {}) {
+  const executionContext = args.executionContext;
+  if (!executionContext?.actorAgentId || !executionContext?.companyId) {
+    throw new Error('verified_recall_execution_context_required');
+  }
   const client = await agentPool.connect();
   try {
     await client.query('BEGIN');
     await client.query('SELECT set_config($1,$2,true)', ['app.current_client_id', executionContext.companyId]);
     await client.query('SELECT set_config($1,$2,true)', ['app.current_agent_id', executionContext.actorAgentId]);
-    const boundRequestAuthority = await assertSignedCommandBinding(
-      rawCommand,
-      requestAuthority,
-      transportBinding,
-      { client, executionContext },
-    );
-    if (boundRequestAuthority.kind === 'verified_request') {
-      if (boundRequestAuthority.agentId !== executionContext.actorAgentId
-        || new Date(boundRequestAuthority.validFromIso).toISOString() !== new Date(executionContext.actorValidFromIso).toISOString()) {
-        throw new Error('recall_request_actor_epoch_mismatch');
-      }
-    } else if (
-      boundRequestAuthority.actorAgentId !== executionContext.actorAgentId
-      || new Date(boundRequestAuthority.actorValidFromIso).toISOString() !== new Date(executionContext.actorValidFromIso).toISOString()
-    ) {
-      throw new Error('recall_request_actor_epoch_mismatch');
-    }
-    const identity = await lockActiveActor(client, executionContext);
-    const isHousekeeper = executionContext.actorAgentId === 'housekeeper'
-      && ['T1_SYSTEM_SELF', 'T1'].includes(executionContext.identityTier);
-    let ceiling;
-    let dataClassCeiling;
-    let authorityMutationHash;
-    let authorizationEventId = null;
-    if (isHousekeeper) {
-      ceiling = 12;
-      dataClassCeiling = 'restricted';
-      authorityMutationHash = sha256(Buffer.from(canonicalJson({
-        kind: 'housekeeper_system_principal',
-        company_id: executionContext.companyId,
-        agent_id: executionContext.actorAgentId,
-        valid_from: new Date(executionContext.actorValidFromIso).toISOString(),
-      }), 'utf8'));
-    } else {
-      const grant = await recallAuthorizationService.getEffective({
-        companyId: executionContext.companyId,
-        subjectAgentId: executionContext.actorAgentId,
-        subjectValidFrom: executionContext.actorValidFromIso,
-        client,
-      });
-      if (!grant?.allowed) throw new Error('master_signed_memory_read_grant_required');
-      ceiling = grant.clearanceCeiling;
-      dataClassCeiling = grant.dataClassCeiling;
-      authorityMutationHash = grant.mutationHash;
-      authorizationEventId = grant.eventId;
-    }
-    const requested = command.clearance_level == null ? ceiling : command.clearance_level;
-    if (requested > ceiling) throw new Error('recall_clearance_exceeds_master_grant');
+    const authority = await resolveNativeRecallAuthorityInClient({ ...args, client });
     await client.query('COMMIT');
-    return Object.freeze({
-      actorAgentId: executionContext.actorAgentId,
-      actorValidFromIso: new Date(executionContext.actorValidFromIso).toISOString(),
-      companyId: executionContext.companyId,
-      identityTier: executionContext.identityTier,
-      clearanceCeiling: requested,
-      dataClassCeiling,
-      authorityMutationHash: Buffer.from(authorityMutationHash),
-      authorizationEventId,
-      isHousekeeper,
-      requestReceiptId: executionContext.requestReceiptId || null,
-      requestReceiptMutationHash: executionContext.requestReceiptMutationHash || null,
-      command,
-      requestAuthority: boundRequestAuthority,
-      transportBinding: Object.freeze({ ...transportBinding }),
-    });
+    return authority;
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch { /* connection may be gone */ }
     throw error;
@@ -270,6 +282,36 @@ export function isNativeRecallProofAllowed(proof, authority) {
   if (Number(proof.clearance_level) <= 2 && proof.subject_agent_id && proof.subject_agent_id !== authority.actorAgentId) return false;
   if (!isNativeRecallCandidateWithinCommand(proof, authority.command)) return false;
   return true;
+}
+
+/**
+ * Remove candidates whose visible row metadata is already outside the signed
+ * recall authority before a retrieval gear submits its complete proposal set.
+ * This is not an admission decision: retained candidates still pass through
+ * the database-local provenance verifier, which rejects any metadata/proof
+ * substitution atomically.
+ */
+export function isNativeRecallCandidateMetadataEligible(candidate, authority) {
+  const companyId = String(candidate?.company_id || '').trim();
+  if (companyId && companyId !== authority.companyId) return false;
+
+  const clearance = Number(candidate?.clearance_level);
+  if (!Number.isFinite(clearance) || clearance > authority.clearanceCeiling) return false;
+
+  const classIndex = DATA_CLASS_ORDER.indexOf(String(candidate?.data_class || 'public'));
+  const maxClassIndex = DATA_CLASS_ORDER.indexOf(String(authority.dataClassCeiling || ''));
+  if (classIndex < 0 || maxClassIndex < 0 || classIndex > maxClassIndex) return false;
+
+  const subjectAgentId = String(candidate?.subject_agent_id ?? candidate?.agent_id ?? '');
+  if (candidate?.cube_scope === 'private' && subjectAgentId !== authority.actorAgentId) return false;
+  const sharedScopes = new Set(['global', 'executive', 'system']);
+  const ownedQuarantine = (candidate?.scope === 'quarantine' || candidate?.memory_type === 'quarantine')
+    && (subjectAgentId === authority.actorAgentId || authority.isHousekeeper === true);
+  const ownedScope = ['agent', 'private', authority.actorAgentId].includes(candidate?.scope)
+    && subjectAgentId === authority.actorAgentId;
+  if (!sharedScopes.has(candidate?.scope) && !ownedScope && !ownedQuarantine) return false;
+  if (clearance <= 2 && subjectAgentId && subjectAgentId !== authority.actorAgentId) return false;
+  return isNativeRecallCandidateWithinCommand(candidate, authority.command);
 }
 
 export function isNativeRecallCandidateWithinCommand(candidate, command = {}) {
@@ -311,8 +353,16 @@ export async function admitNativeRecallCandidatesInVerifiedSession(
   if (!authority?.companyId || !authority?.actorAgentId || !authority?.actorValidFromIso) {
     throw new Error('verified_recall_authority_required');
   }
-  const candidateRows = (Array.isArray(memories) ? memories : [])
+  const proposedRows = Array.isArray(memories) ? memories : [];
+  const candidateRows = proposedRows
     .filter((memory) => isNativeRecallCandidateWithinCommand(memory, authority.command));
+  if (candidateRows.length !== proposedRows.length) {
+    const error = new Error('recall_candidate_command_scope_violation');
+    error.rejected = proposedRows
+      .filter((memory) => !isNativeRecallCandidateWithinCommand(memory, authority.command))
+      .map((memory) => ({ memory_id: String(memory?.id || ''), reason: 'command_scope_mismatch' }));
+    throw error;
+  }
   const ids = [...new Set(candidateRows.map((memory) => String(memory?.id || '')).filter(Boolean))];
   if (!ids.length) return { memories: [], rejected: [] };
   const evidence = await verifyEvidenceFn({ memoryIds: ids, client });
@@ -322,9 +372,13 @@ export async function admitNativeRecallCandidatesInVerifiedSession(
     throw error;
   }
   const admitted = [];
+  const unauthorized = [];
   for (const memory of candidateRows) {
     const proof = evidence.proofs.get(String(memory.id));
-    if (!proof || !isNativeRecallProofAllowed(proof, authority)) continue;
+    if (!proof || !isNativeRecallProofAllowed(proof, authority)) {
+      unauthorized.push({ memory_id: String(memory.id), reason: 'recall_proof_not_allowed' });
+      continue;
+    }
     const quarantineEvidence = proof.scope === 'quarantine' || proof.memory_type === 'quarantine';
     admitted.push({
       ...memory,
@@ -333,6 +387,11 @@ export async function admitNativeRecallCandidatesInVerifiedSession(
       retention_frequency_class: quarantineEvidence ? 'quiet' : 'normal',
       evidence_handling: quarantineEvidence ? 'untrusted_reference_only' : 'ordinary_reference',
     });
+  }
+  if (unauthorized.length) {
+    const error = new Error('recall_candidate_authorization_failed');
+    error.rejected = unauthorized;
+    throw error;
   }
   return { memories: admitted, rejected: [] };
 }
@@ -409,6 +468,71 @@ export function createRequestLocalRecallEvidenceCache(verifyEvidenceFn) {
   });
 }
 
+function createNativeRecallSessionHandle({ client, authority, evidenceCache }) {
+  let closed = false;
+  let optionalReadSequence = 0;
+  let optionalReadTail = Promise.resolve();
+  const validateReadStatement = (text) => {
+    const statement = String(text || '').trim();
+    if (!/^(?:SELECT|WITH)\b/i.test(statement)
+      || /\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|ALTER|CREATE|DROP|GRANT|REVOKE|CALL|COPY)\b/i.test(statement)) {
+      throw new Error('recall_admission_read_only_statement_required');
+    }
+    return statement;
+  };
+  return Object.freeze({
+    authority,
+    read: async (text, params = []) => {
+      if (closed) throw new Error('recall_admission_session_closed');
+      const statement = validateReadStatement(text);
+      return client.query(statement, Array.isArray(params) ? params : []);
+    },
+    optionalRead: async (text, params = []) => {
+      if (closed) throw new Error('recall_admission_session_closed');
+      const statement = validateReadStatement(text);
+      const sequence = optionalReadSequence += 1;
+      const savepoint = `recall_optional_read_${sequence}`;
+      const operation = async () => {
+        if (closed) throw new Error('recall_admission_session_closed');
+        await client.query(`SAVEPOINT ${savepoint}`);
+        try {
+          const result = await client.query(statement, Array.isArray(params) ? params : []);
+          await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+          return result;
+        } catch (error) {
+          await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+          await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+          throw error;
+        }
+      };
+      const result = optionalReadTail.then(operation, operation);
+      optionalReadTail = result.catch(() => {});
+      return result;
+    },
+    admit: async (memories) => {
+      if (closed) throw new Error('recall_admission_session_closed');
+      const admitted = await admitNativeRecallCandidatesInVerifiedSession(
+        memories,
+        authority,
+        client,
+        evidenceCache.verify,
+      );
+      return { ...admitted, evidence_cache: evidenceCache.stats() };
+    },
+    evidenceCacheStats: () => evidenceCache.stats(),
+    close: async ({ commit = false } = {}) => {
+      if (closed) return;
+      await optionalReadTail;
+      closed = true;
+      try {
+        await client.query(commit ? 'COMMIT' : 'ROLLBACK');
+      } finally {
+        client.release();
+      }
+    },
+  });
+}
+
 /**
  * Bind one native recall principal and actor epoch for a bounded request, then
  * reuse that transaction for every newly discovered graph layer. A proof may
@@ -425,7 +549,6 @@ export async function openNativeRecallAdmissionSession({
   }
   const client = await connectFn();
   const evidenceCache = createRequestLocalRecallEvidenceCache(verifyEvidenceFn);
-  let closed = false;
   try {
     await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
     await client.query(
@@ -456,37 +579,53 @@ export async function openNativeRecallAdmissionSession({
     throw error;
   }
 
-  return Object.freeze({
-    read: async (text, params = []) => {
-      if (closed) throw new Error('recall_admission_session_closed');
-      const statement = String(text || '').trim();
-      if (!/^(?:SELECT|WITH)\b/i.test(statement)
-        || /\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|ALTER|CREATE|DROP|GRANT|REVOKE|CALL|COPY)\b/i.test(statement)) {
-        throw new Error('recall_admission_read_only_statement_required');
-      }
-      return client.query(statement, Array.isArray(params) ? params : []);
-    },
-    admit: async (memories) => {
-      if (closed) throw new Error('recall_admission_session_closed');
-      const admitted = await admitNativeRecallCandidatesInVerifiedSession(
-        memories,
-        authority,
-        client,
-        evidenceCache.verify,
-      );
-      return { ...admitted, evidence_cache: evidenceCache.stats() };
-    },
-    evidenceCacheStats: () => evidenceCache.stats(),
-    close: async ({ commit = false } = {}) => {
-      if (closed) return;
-      closed = true;
-      try {
-        await client.query(commit ? 'COMMIT' : 'ROLLBACK');
-      } finally {
-        client.release();
-      }
-    },
-  });
+  return createNativeRecallSessionHandle({ client, authority, evidenceCache });
+}
+
+/**
+ * Production owner: resolve the signed command, lock the exact actor/grant,
+ * and open the request-local evidence cache inside one REPEATABLE READ
+ * transaction. No production caller resolves authority in a predecessor
+ * transaction.
+ */
+export async function openNativeRecallRequestSession({
+  rawCommand,
+  executionContext,
+  requestAuthority,
+  transportBinding = { transport: 'rest' },
+  connectFn = () => agentPool.connect(),
+  verifyEvidenceFn = (options) => memoryProvenanceLedger.verifyRecallEvidence(options),
+} = {}) {
+  if (!executionContext?.actorAgentId || !executionContext?.actorValidFromIso || !executionContext?.companyId) {
+    throw new Error('verified_recall_execution_context_required');
+  }
+  const client = await connectFn();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ');
+    await client.query(
+      `SELECT set_config($1,$2,true),
+              set_config($3,$4,true),
+              set_config($5,$6,true)`,
+      [
+        'app.current_client_id', executionContext.companyId,
+        'app.current_agent_id', executionContext.actorAgentId,
+        'plan_cache_mode', 'force_generic_plan',
+      ],
+    );
+    const authority = await resolveNativeRecallAuthorityInClient({
+      rawCommand,
+      executionContext,
+      requestAuthority,
+      transportBinding,
+      client,
+    });
+    const evidenceCache = createRequestLocalRecallEvidenceCache(verifyEvidenceFn);
+    return createNativeRecallSessionHandle({ client, authority, evidenceCache });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch { /* connection may be gone */ }
+    client.release();
+    throw error;
+  }
 }
 
 export async function admitNativeRecallCandidates(memories, authority) {
@@ -507,6 +646,9 @@ export async function finalizeNativeRecall({
   epistemicDecisionHash = null,
   securityClosureDecisionHash = null,
   returnProjectionDecision = null,
+  graphEvidenceDecision = null,
+  structuralEvidenceDecision = null,
+  embeddingContinuityDecision = null,
 }) {
   const finiteScoreOrNull = (value) => {
     const score = Number(value);
@@ -555,6 +697,64 @@ export async function finalizeNativeRecall({
         || normalizedReturnProjection.final_security_closure_sha256 !== normalizedSecurityClosureHash)) {
     throw new TypeError('recall_return_projection_decision_invalid');
   }
+  const normalizedGraphEvidence = graphEvidenceDecision == null
+    ? null
+    : Object.freeze({ ...graphEvidenceDecision });
+  if (normalizedGraphEvidence != null) {
+    const decisionHash = String(normalizedGraphEvidence.decision_sha256 || '').toLowerCase();
+    const decisionBody = { ...normalizedGraphEvidence };
+    delete decisionBody.decision_sha256;
+    const recomputed = sha256(Buffer.from(canonicalJson(decisionBody), 'utf8')).toString('hex');
+    if (normalizedGraphEvidence.schema !== 'hom-aimos/recall-graph-link-batch/v2'
+      || decisionHash !== recomputed
+      || !/^[0-9a-f]{64}$/.test(String(normalizedGraphEvidence.edge_set_sha256 || ''))
+      || Number(normalizedGraphEvidence.unsigned_edge_admission_count) !== 0) {
+      throw new TypeError('recall_graph_evidence_decision_invalid');
+    }
+  }
+  const normalizedStructuralEvidence = structuralEvidenceDecision == null
+    ? null
+    : Object.freeze({ ...structuralEvidenceDecision });
+  if (normalizedStructuralEvidence != null) {
+    const decisionHash = String(normalizedStructuralEvidence.decision_sha256 || '').toLowerCase();
+    const decisionBody = { ...normalizedStructuralEvidence };
+    delete decisionBody.decision_sha256;
+    const recomputed = sha256(Buffer.from(canonicalJson(decisionBody), 'utf8')).toString('hex');
+    if (normalizedStructuralEvidence.schema !== 'hom-aimos/native-structural-recall-projection/v1'
+      || decisionHash !== recomputed
+      || Number(normalizedStructuralEvidence.rank_influence) !== 0
+      || Number(normalizedStructuralEvidence.independent_vote_count) !== 0
+      || normalizedStructuralEvidence.candidate_order_changed !== false
+      || normalizedStructuralEvidence.candidate_membership_changed !== false
+      || normalizedStructuralEvidence.canonical_memory_mutated !== false
+      || normalizedStructuralEvidence.retention_changed !== false) {
+      throw new TypeError('recall_structural_evidence_decision_invalid');
+    }
+  }
+  const normalizedEmbeddingContinuity = embeddingContinuityDecision == null
+    ? null
+    : Object.freeze({ ...embeddingContinuityDecision });
+  if (normalizedEmbeddingContinuity != null) {
+    const decisionHash = String(normalizedEmbeddingContinuity.decision_sha256 || '').toLowerCase();
+    const decisionBody = { ...normalizedEmbeddingContinuity };
+    delete decisionBody.decision_sha256;
+    const recomputed = sha256(Buffer.from(canonicalJson(decisionBody), 'utf8')).toString('hex');
+    if (normalizedEmbeddingContinuity.schema !== 'hom.aimos.native-recall-embedding-continuity/v1'
+      || decisionHash !== recomputed
+      || normalizedEmbeddingContinuity.return_path !== normalizedReturnProjection?.return_path
+      || Number(normalizedEmbeddingContinuity.selected_memory_count)
+        !== Number(normalizedReturnProjection?.selected_clean_count)
+      || Number(normalizedEmbeddingContinuity.embedding_count)
+        !== Number(normalizedEmbeddingContinuity.selected_memory_count)
+      || Number(normalizedEmbeddingContinuity.embedding_dimension) !== 768
+      || normalizedEmbeddingContinuity.all_selected_memories_carry_embedding !== true
+      || normalizedEmbeddingContinuity.rank_authority !== false
+      || normalizedEmbeddingContinuity.candidate_membership_authority !== false
+      || normalizedEmbeddingContinuity.disclosure_authority !== false
+      || normalizedEmbeddingContinuity.canonical_memory_mutated !== false) {
+      throw new TypeError('recall_embedding_continuity_decision_invalid');
+    }
+  }
   const decisionEntries = [
     ...(normalizedDecisionHash ? [{
         entry_type: 'epistemic_decision',
@@ -575,6 +775,9 @@ export async function finalizeNativeRecall({
     authority_mutation_hash: authority.authorityMutationHash.toString('hex'),
     request_receipt_id: authority.requestReceiptId,
     request_receipt_mutation_hash: authority.requestReceiptMutationHash,
+    request_admission_event_id: authority.requestAuthority.requestAdmissionEventId,
+    request_admission_mutation_hash: authority.requestAuthority.requestAdmissionMutationHash,
+    request_admission_authority_kind: authority.requestAuthority.requestAdmissionAuthorityKind,
     authorization_event_id: authority.authorizationEventId,
     transport: authority.transportBinding.transport,
     derived_tool_action_event_id: authority.requestAuthority.kind === 'verified_tool_action'
@@ -597,9 +800,21 @@ export async function finalizeNativeRecall({
       return_projection: normalizedReturnProjection,
       return_projection_event_body_bound: true,
     } : {}),
+    ...(normalizedGraphEvidence ? {
+      verified_graph_decision: normalizedGraphEvidence,
+      verified_graph_event_body_bound: true,
+    } : {}),
+    ...(normalizedStructuralEvidence ? {
+      native_structural_projection: normalizedStructuralEvidence,
+      native_structural_projection_event_body_bound: true,
+    } : {}),
+    ...(normalizedEmbeddingContinuity ? {
+      native_embedding_continuity: normalizedEmbeddingContinuity,
+      native_embedding_continuity_event_body_bound: true,
+    } : {}),
     reasoning: `Housekeeper observed ${entries.length} fail-closed provenance-verified recall result(s).`,
     source_knowledge: 'RFC 6962 domain-separated Merkle receipt; native-recall.js',
-  }, null, {
+  }, authority.requestAuthority.requestAdmissionEventId, {
     returnReceipt: true,
     authority: {
       actorAgentId: authority.requestAuthority.agentId,
@@ -619,6 +834,9 @@ export async function finalizeNativeRecall({
     authority_mutation_hash: authority.authorityMutationHash.toString('hex'),
     request_receipt_id: authority.requestReceiptId,
     request_receipt_mutation_hash: authority.requestReceiptMutationHash,
+    request_admission_event_id: authority.requestAuthority.requestAdmissionEventId,
+    request_admission_mutation_hash: authority.requestAuthority.requestAdmissionMutationHash,
+    request_admission_authority_kind: authority.requestAuthority.requestAdmissionAuthorityKind,
     merkle_root: root,
     evidence: entries,
     ...(decisionEntries.length ? {
@@ -632,6 +850,18 @@ export async function finalizeNativeRecall({
     ...(normalizedReturnProjection ? {
       return_projection: normalizedReturnProjection,
       return_projection_event_body_bound: true,
+    } : {}),
+    ...(normalizedGraphEvidence ? {
+      verified_graph_decision: normalizedGraphEvidence,
+      verified_graph_event_body_bound: true,
+    } : {}),
+    ...(normalizedStructuralEvidence ? {
+      native_structural_projection: normalizedStructuralEvidence,
+      native_structural_projection_event_body_bound: true,
+    } : {}),
+    ...(normalizedEmbeddingContinuity ? {
+      native_embedding_continuity: normalizedEmbeddingContinuity,
+      native_embedding_continuity_event_body_bound: true,
     } : {}),
     event_receipt: receipt,
   };

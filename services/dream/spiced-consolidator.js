@@ -24,7 +24,8 @@
  * ALADDIN: Consolidation is promotion-only. Never delete, suppress, deactivate,
  *          or reduce canonical retrieval_weight as a function of age.
  * Dream curator runs in up to 20 micro-cycles (ThaCo protocol).
- * Each cycle: select top-K=15 by importance -> gate -> consolidate -> edge formation -> convergence check.
+ * Each cycle: select top-K=15 from verified recall co-activation -> gate ->
+ * consolidate -> edge formation -> convergence check.
  */
 
 // ─── PIPELINE CONNECTIONS ────────────────────────────────────────────────────
@@ -34,6 +35,7 @@
 // Position: neuromorphic consolidation
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { createHash } from 'node:crypto';
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { query, withTransaction } from '../../db/connection.js';
 import { logEvent } from '../observe/event-ledger.js';
@@ -42,6 +44,11 @@ import { enforceEnergyBound } from '../governance/cohen-grossberg-energy-governo
 import { governorConfigLedger } from '../governance/governor-config-ledger.js';
 import { commitGovernorMutation } from '../governance/governor-provenance.js';
 import { resolvePrincipalStateMutationTargets } from '../learning/mutation-composition/target-resolver.js';
+import { controlCertifiedMutationProposal } from '../learning/neuroplasticity-stability-control.js';
+import {
+  buildVerifiedHebbianAssociationSnapshot,
+  HEBBIAN_CONSTANTS,
+} from './hebbian-consensus.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -58,9 +65,6 @@ const CONVERGENCE_THRESHOLD = 0.001; // Early termination if delta_w < this
 // --- Edge Formation xi thresholds (SPICED graph wiring) ---
 const XI_STRONG = 0.4;               // Strong edge threshold
 const XI_WEAK = 0.1;                 // Weak edge threshold
-
-// --- SpWR replay priority (Neural Manifolds paper) ---
-const REPLAY_GAMMA = 2.0;            // Quadratic amplification for replay selection
 
 function clamp01(value, fallback = 0) {
   const numeric = Number(value);
@@ -347,8 +351,7 @@ async function commitSpicedEdgeProjection(ids, { sourceMemoryId = null } = {}) {
     const res = await client.query(
       `SELECT id, embedding, retrieval_weight
          FROM aimos_memories
-        WHERE company_id = $1 AND id = ANY($2::uuid[])
-        FOR SHARE`,
+        WHERE company_id = $1 AND id = ANY($2::uuid[])`,
       [COMPANY, uniqueIds]
     );
     const rows = res.rows
@@ -376,7 +379,10 @@ async function commitSpicedEdgeProjection(ids, { sourceMemoryId = null } = {}) {
           source: source.id,
           target: target.id,
           similarity: importance,
-          edge_strength: importance,
+          // memory_cross_refs.edge_strength is PostgreSQL real/float4. Sign
+          // the exact database-representable value before the atomic write so
+          // the event body and retained relation remain byte-semantically equal.
+          edge_strength: Math.fround(importance),
           edge_type: importance > XI_STRONG ? 'strong' : 'weak',
         });
       }
@@ -464,7 +470,7 @@ async function commitSpicedEdgeProjection(ids, { sourceMemoryId = null } = {}) {
  *   importance > 0.4 -> strong edge
  *   importance > 0.1 -> weak edge
  */
-export async function formEdges(memoryId, neighbors) {
+async function formEdges(memoryId, neighbors) {
   if (!neighbors || !neighbors.length) return 0;
   return commitSpicedEdgeProjection(
     [memoryId, ...neighbors.map((neighbor) => neighbor.id || neighbor)],
@@ -477,39 +483,89 @@ export async function formEdges(memoryId, neighbors) {
  * computes pairwise importance in memory, issues a single multi-row UPSERT.
  * Replaces 15 per-candidate formEdges calls (30+ queries) with 2 queries total.
  */
-export async function formEdgesBatch(candidates) {
+async function formEdgesBatch(candidates) {
   if (!candidates || candidates.length < 2) return 0;
   return commitSpicedEdgeProjection(candidates.map((candidate) => candidate.id || candidate));
 }
 
 /**
- * Select top-K candidates for consolidation using SpWR replay priority
- * P(k|sleep) = P(k|wake)^gamma where gamma=2.0 (quadratic amplification)
+ * Select top-K candidates from cryptographically verified native recall
+ * co-activation. This is the Aimos-native realization of SPICED's top-K
+ * activated-node premise; ambient access counters and UUID order have no
+ * authority.
  *
  * FIX #3: SLEEP_RATIO limits candidates to 15% of retained write volume
  */
 export async function selectConsolidationCandidates(limit = TOP_K) {
-  // Count the retained corpus to apply SLEEP_RATIO without an age cutoff.
-  const countRes = await query(`
-    SELECT COUNT(*) as write_volume
-    FROM aimos_memories
-    WHERE company_id = $1
-  `, [COMPANY]);
-
-  const writeVolume = parseInt(countRes.rows[0]?.write_volume || '0', 10);
-  const ratioLimit = Math.max(1, Math.floor(SLEEP_RATIO * writeVolume));
-  const effectiveLimit = Math.min(limit, ratioLimit);
-
-  const res = await query(`
-    SELECT id, key, value, retrieval_weight, access_count, last_accessed_at,
-           POWER(COALESCE(retrieval_weight, 1.0)::double precision, ${REPLAY_GAMMA}::double precision) as replay_priority
-    FROM aimos_memories
-    WHERE company_id = $1
-    ORDER BY replay_priority DESC
-    LIMIT $2
-  `, [COMPANY, effectiveLimit]);
-
-  return res.rows;
+  return withTransaction(async (client) => {
+    const countRes = await client.query(
+      'SELECT COUNT(*) AS write_volume FROM aimos_memories WHERE company_id=$1',
+      [COMPANY],
+    );
+    const writeVolume = Number(countRes.rows[0]?.write_volume || 0);
+    const ratioLimit = Math.max(1, Math.floor(SLEEP_RATIO * writeVolume));
+    const effectiveLimit = Math.min(limit, ratioLimit);
+    const observed = await client.query(
+      `WITH recent AS (
+         SELECT metadata
+           FROM aimos_events
+          WHERE company_id=$1 AND operation='recall_receipt' AND ledger_version=1
+          ORDER BY ts DESC,id DESC
+          LIMIT $2
+       )
+       SELECT DISTINCT item->>'memory_id' AS memory_id
+         FROM recent
+         CROSS JOIN LATERAL jsonb_array_elements(
+           CASE WHEN jsonb_typeof(metadata->'evidence')='array'
+                THEN metadata->'evidence' ELSE '[]'::jsonb END
+         ) item
+        WHERE item->>'memory_id' IS NOT NULL
+        ORDER BY memory_id`,
+      [COMPANY, HEBBIAN_CONSTANTS.receipt_window],
+    );
+    const observedIds = observed.rows.map((row) => row.memory_id);
+    if (!observedIds.length) return [];
+    const targets = await resolvePrincipalStateMutationTargets({
+      memoryIds: observedIds,
+      companyId: COMPANY,
+      client,
+      maximumIds: HEBBIAN_CONSTANTS.maximum_batch_size,
+    });
+    const activation = await buildVerifiedHebbianAssociationSnapshot({
+      client,
+      companyId: COMPANY,
+      targets: targets.targets,
+    });
+    const selected = activation.targetRows
+      .filter((row) => row.receipt_count >= HEBBIAN_CONSTANTS.minimum_supported_receipts
+        && row.neighbor_count >= HEBBIAN_CONSTANTS.minimum_distinct_neighbors
+        && row.association_strength > 0)
+      .sort((left, right) => right.association_strength - left.association_strength
+        || right.coactivation_count - left.coactivation_count
+        || left.representative_memory_id.localeCompare(right.representative_memory_id))
+      .slice(0, effectiveLimit);
+    if (!selected.length) return [];
+    const memories = await client.query(
+      `SELECT id,key,value,retrieval_weight,access_count,last_accessed_at
+         FROM aimos_memories
+        WHERE company_id=$1 AND id=ANY($2::uuid[])
+          AND retrieval_weight >= $3 AND retrieval_weight < $4`,
+      [COMPANY, selected.map((row) => row.representative_memory_id), CONFIDENCE_GATE, CONSOLIDATION_CAP],
+    );
+    const byId = new Map(memories.rows.map((row) => [String(row.id), row]));
+    return selected.map((row) => ({
+      ...byId.get(row.representative_memory_id),
+      spiced_activation: {
+        schema: HEBBIAN_CONSTANTS.schema,
+        receipt_count: row.receipt_count,
+        coactivation_count: row.coactivation_count,
+        neighbor_count: row.neighbor_count,
+        association_strength: row.association_strength,
+        association_snapshot_sha256: activation.snapshotSha256,
+        verified_receipt_root_sha256: activation.verifiedReceiptRootSha256,
+      },
+    })).filter((row) => row.id);
+  }, { restricted: true, client_id: COMPANY, agent_id: 'housekeeper' });
 }
 
 /**
@@ -534,8 +590,19 @@ export function computeConsolidationAmplificationFactor(gammaDampen = 1.0) {
   return 1.0 + boundedDampen * (CONSOLIDATION_GAMMA - 1.0);
 }
 
-export async function amplifyConsolidated(memoryIds, gammaDampen = 1.0) {
+async function amplifyConsolidated(memoryIds, gammaDampen = 1.0) {
   if (!memoryIds.length) return { amplified: 0, gatedOut: 0 };
+  const activationById = new Map(memoryIds.map((entry) => [
+    String(entry?.id || entry),
+    entry?.spiced_activation || null,
+  ]));
+  if ([...activationById.values()].some((activation) => !activation
+      || activation.schema !== HEBBIAN_CONSTANTS.schema
+      || !activation.association_snapshot_sha256
+      || !activation.verified_receipt_root_sha256)) {
+    throw new Error('spiced_verified_recall_activation_required');
+  }
+  const requestedMemoryIds = [...activationById.keys()];
 
   const effectiveGamma = computeConsolidationAmplificationFactor(gammaDampen);
 
@@ -545,7 +612,7 @@ export async function amplifyConsolidated(memoryIds, gammaDampen = 1.0) {
   // restricted transaction, and prior/new weights reproduce every update.
   const res = await withTransaction(async (client) => {
     const resolvedTargets = await resolvePrincipalStateMutationTargets({
-      memoryIds,
+      memoryIds: requestedMemoryIds,
       companyId: COMPANY,
       client,
       maximumIds: 500,
@@ -576,7 +643,17 @@ export async function amplifyConsolidated(memoryIds, gammaDampen = 1.0) {
       const oldWeight = Number(row.old_weight);
       // HOM mapping of SPICED Eq. 5: monotone retrieval-frequency promotion,
       // capped at CONSOLIDATION_CAP; canonical memory content never changes.
-      const newWeight = Math.max(oldWeight, Math.min(CONSOLIDATION_CAP, oldWeight * effectiveGamma));
+      const proposedWeight = Math.max(oldWeight, Math.min(CONSOLIDATION_CAP, oldWeight * effectiveGamma));
+      const neuroplasticityControl = await controlCertifiedMutationProposal({
+        client,
+        companyId: COMPANY,
+        memoryId: row.id,
+        currentWeight: oldWeight,
+        proposedWeight,
+        mutationOwner: 'SPICED_CONSOLIDATION',
+      });
+      const newWeight = neuroplasticityControl.controlled_weight;
+      if (Math.round(newWeight * 1000) === Math.round(oldWeight * 1000)) continue;
 
       const attestation = await commitGovernorMutation({
         memoryId: row.id,
@@ -591,16 +668,21 @@ export async function amplifyConsolidated(memoryIds, gammaDampen = 1.0) {
           confidence_gate: CONFIDENCE_GATE,
           canonical_content_changed: false,
           monotone_promotion: true,
-          principal_state_key: resolvedTargets.targets.find(
-            (target) => target.representative_memory_id === String(row.id),
-          )?.principal_state_key || null,
+          principal_state_key_sha256: createHash('sha256').update(
+            resolvedTargets.targets.find(
+              (target) => target.representative_memory_id === String(row.id),
+            )?.principal_state_key || '',
+          ).digest('hex'),
           duplicate_occurrence_targets_collapsed:
-            memoryIds.length - resolvedTargets.targets.length,
+            requestedMemoryIds.length - resolvedTargets.targets.length,
+          verified_recall_activation: activationById.get(String(row.id)),
+          neuroplasticity_control: neuroplasticityControl.decision,
+          neuroplasticity_control_sha256: neuroplasticityControl.decision_sha256,
         },
         client,
       });
       if (!attestation.ok) {
-        throw new Error(`mutation_ledger_failed:${attestation.reason}`);
+        throw new Error(`mutation_ledger_failed:${attestation.reason}:${attestation.detail || 'no_detail'}`);
       }
 
       // Apply the weight ONLY through the signed stored function: it verifies the
@@ -611,7 +693,12 @@ export async function amplifyConsolidated(memoryIds, gammaDampen = 1.0) {
         [row.id, oldWeight, newWeight, attestation.mutationHash, attestation.transitionSig]
       );
 
-      mutations.push({ memory_id: row.id, old_weight: oldWeight, new_weight: newWeight });
+      mutations.push({
+        memory_id: row.id,
+        old_weight: oldWeight,
+        new_weight: newWeight,
+        neuroplasticity_control_sha256: neuroplasticityControl.decision_sha256,
+      });
     }
 
     if (mutations.length) {
@@ -629,7 +716,7 @@ export async function amplifyConsolidated(memoryIds, gammaDampen = 1.0) {
     return mutations.length;
   }, { restricted: true, client_id: COMPANY, agent_id: 'housekeeper' });
 
-  const gatedOut = memoryIds.length - res;
+  const gatedOut = requestedMemoryIds.length - res;
   return { amplified: res, gatedOut };
 }
 
@@ -668,81 +755,84 @@ export async function runDreamConsolidation() {
     edgesFormed: 0,
     convergedEarly: false
   };
+  const start = await logEvent(COMPANY, 'housekeeper', 'spiced_consolidation_started', 'dream:spiced', {
+    top_k: TOP_K,
+    maximum_cycles: DREAM_CYCLES,
+    confidence_gate: CONFIDENCE_GATE,
+    consolidation_gamma: CONSOLIDATION_GAMMA,
+    canonical_content: 'immutable',
+    memory_existence: 'immutable',
+    controlled_state: 'retrieval_weight_only',
+    reasoning: 'Housekeeper began the bounded promotion-only SPICED pass over cryptographically verified recall co-activation candidates.',
+  }, null, { returnReceipt: true });
 
-  // Per-cycle dampening multiplier from the CG governor. Starts at 1.0
-  // (no dampening). Each cycle's enforceEnergyBound sets cycleGamma based
-  // on ΔV; the NEXT cycle's amplifyConsolidated multiplies LTP_AMPLIFY by it.
-  let cycleGamma = 1.0;
+  try {
+    // Per-cycle dampening multiplier from the CG governor. Starts at 1.0.
+    let cycleGamma = 1.0;
 
-  for (let cycle = 0; cycle < DREAM_CYCLES; cycle++) {
-    // 1. Select top-K candidates by replay priority (FIX #3: SLEEP_RATIO applied inside)
-    const candidates = await selectConsolidationCandidates(TOP_K);
-    if (!candidates.length) break;
+    for (let cycle = 0; cycle < DREAM_CYCLES; cycle++) {
+      const candidates = await selectConsolidationCandidates(TOP_K);
+      if (!candidates.length) break;
+      const candidateIds = candidates.map((candidate) => candidate.id);
+      const cycleDelta = await computeCycleDelta(candidateIds, cycleGamma);
 
-    const candidateIds = candidates.map(c => c.id);
-
-    // 2. FIX #5: Compute expected delta_w before amplification for convergence check
-    const cycleDelta = await computeCycleDelta(candidateIds, cycleGamma);
-
-    // 2.5. Capture pre-amplification weights for the CG governor's ΔV computation.
-    //      The governor needs V_before (pre-amp) and V_after (post-amp) to
-    //      decide whether to dampen the NEXT cycle. Only fetched when the
-    //      governor flag is ON (the governor no-ops otherwise).
-    let previousWeights = null;
-    if (await governorConfigLedger.readFlag('COHEN_GROSSBERG_GOVERNOR')) {
-      const preRows = await query(
-        `SELECT id, retrieval_weight FROM aimos_memories WHERE company_id = $1 AND id = ANY($2::uuid[])`,
-        [COMPANY, candidateIds]
-      );
-      previousWeights = new Map((preRows?.rows || []).map(r => [r.id, Number(r.retrieval_weight)]));
-    }
-
-    // 3. Amplify selected candidates (SPICED LTP) -- FIX #2: CONFIDENCE_GATE applied.
-    //    Pass the PREVIOUS cycle's cycleGamma so the CG governor's dampening
-    //    decision bites on THIS cycle's amplification. cycleGamma = 1.0 on the
-    //    first cycle (no prior ΔV to dampen) — bit-exact existing behavior.
-    const { amplified: ampCount, gatedOut } = await amplifyConsolidated(candidateIds, cycleGamma);
-    results.amplified += ampCount;
-    results.gatedOut += gatedOut;
-
-    // 3.5. Aimos-2 / Paper 2 Governor #1 — Cohen-Grossberg bounded energy.
-    //      Flag-gated OFF internally by the signed governor ledger. When
-    //      OFF, returns γ_dampen = 1.0 — bit-exact existing behavior. When ON,
-    //      computes V over the top-K window and returns γ_dampen that the
-    //      caller applies to the NEXT cycle's amplification surplus. The
-    //      effective factor stays >= 1, so dampening never lowers stored
-    //      retrieval weight. The signed governor decision is committed before
-    //      gamma becomes eligible for the next cycle; the later SPICED weight
-    //      mutation and its exact old/new evidence commit atomically.
-    try {
-      const cg = await enforceEnergyBound(candidateIds, { previousWeights });
-      cycleGamma = cg.gamma_dampen;
-      if (cg.gate_logic_unchanged === false) {
-        results.cg_governor = results.cg_governor || { cycles: 0, dampens: 0 };
-        results.cg_governor.cycles++;
-        if (cycleGamma < 1.0) results.cg_governor.dampens++;
+      let previousWeights = null;
+      if (await governorConfigLedger.readFlag('COHEN_GROSSBERG_GOVERNOR')) {
+        const preRows = await query(
+          `SELECT id,retrieval_weight FROM aimos_memories WHERE company_id=$1 AND id=ANY($2::uuid[])`,
+          [COMPANY, candidateIds],
+        );
+        previousWeights = new Map((preRows?.rows || [])
+          .map((row) => [row.id, Number(row.retrieval_weight)]));
       }
-    } catch (err) {
-      // Fail-open: governor error does not crash the dream cycle. Reset
-      // cycleGamma to 1.0 so the next cycle is not dampened by a stale value.
-      cycleGamma = 1.0;
-      results.cg_governor_error = String(err?.message || err);
+
+      const { amplified: ampCount, gatedOut } = await amplifyConsolidated(candidates, cycleGamma);
+      results.amplified += ampCount;
+      results.gatedOut += gatedOut;
+
+      try {
+        const cg = await enforceEnergyBound(candidateIds, { previousWeights });
+        cycleGamma = cg.gamma_dampen;
+        if (cg.gate_logic_unchanged === false) {
+          results.cg_governor = results.cg_governor || { cycles: 0, dampens: 0 };
+          results.cg_governor.cycles += 1;
+          if (cycleGamma < 1.0) results.cg_governor.dampens += 1;
+        }
+      } catch (error) {
+        cycleGamma = 1.0;
+        results.cg_governor_error = String(error?.message || error);
+      }
+
+      results.edgesFormed += await formEdgesBatch(candidates);
+      results.cycles += 1;
+      if (cycleDelta < CONVERGENCE_THRESHOLD) {
+        results.convergedEarly = true;
+        break;
+      }
     }
 
-    // 4. FIX #4: Batch edge formation — single query for embeddings + one upsert.
-    results.edgesFormed += await formEdgesBatch(candidates);
-
-    // 5. Record the completed promotion cycle.
-    results.cycles++;
-
-    // 6. FIX #5: Convergence check -- stop early if weight change is negligible
-    if (cycleDelta < CONVERGENCE_THRESHOLD) {
-      results.convergedEarly = true;
-      break;
+    const terminal = await logEvent(COMPANY, 'housekeeper', 'spiced_consolidation_terminal', 'dream:spiced', {
+      status: 'SUCCEEDED',
+      ...results,
+      canonical_content: 'immutable',
+      memory_existence: 'immutable',
+      controlled_state: 'retrieval_weight_only',
+      reasoning: 'Housekeeper completed the bounded promotion-only SPICED pass; every durable weight and graph transition retained signed pre/post evidence.',
+    }, start.event_id, { returnReceipt: true });
+    return Object.freeze({ ...results, terminal_event_id: terminal.event_id });
+  } catch (error) {
+    try {
+      await logEvent(COMPANY, 'housekeeper', 'spiced_consolidation_terminal', 'dream:spiced', {
+        status: 'FAILED',
+        error: String(error?.message || error),
+        ...results,
+        reasoning: 'Housekeeper retained the failed terminal of the bounded SPICED pass; failure did not become success or an unsigned partial result.',
+      }, start.event_id);
+    } catch (terminalError) {
+      throw new AggregateError([error, terminalError], 'spiced_failure_terminal_unavailable');
     }
+    throw error;
   }
-
-  return results;
 }
 
 export const FORGETTING_BOUND_SOURCE = 'Data-Dependent & Aimos Bounds on Forgetting';
@@ -1211,7 +1301,7 @@ export function buildContinualLearningSurveyDiagnostic({
 export {
   CONSOLIDATION_GAMMA, CONSOLIDATION_CAP,
   TOP_K, IMPORTANCE_ALPHA, CONFIDENCE_GATE, DREAM_CYCLES,
-  SLEEP_RATIO, REPLAY_GAMMA,
+  SLEEP_RATIO,
   CONVERGENCE_THRESHOLD, XI_STRONG, XI_WEAK,
 };
 

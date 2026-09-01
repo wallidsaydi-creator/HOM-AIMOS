@@ -69,7 +69,7 @@ export const SALIENCE_FREQUENCY_ALADDIN_CONTRACT = Object.freeze({
   metric_sources: Object.freeze({
     access_frequency: 'aimos_events(operation=recall)',
     access_recency: 'aimos_events(operation=recall).max(ts)',
-    cross_refs: 'memory_cross_refs grouped count',
+    cross_refs: 'request-scoped cryptographically verified recall graph links',
     permanent_value_prior: 'aimos_memories.credit_score read_only',
     cold_start_recency_fallback: 'aimos_memories.created_at read_only',
   }),
@@ -146,6 +146,11 @@ export async function evaluateSalienceFrequency(memoryId, companyId, options = {
 export async function evaluateSalienceFrequencyBatch(memoryIds, companyId, options = {}) {
   const cid = companyId || COMPANY;
   const mc = options.memoryCount || undefined;
+  const queryFn = typeof options.queryFn === 'function' ? options.queryFn : query;
+ const nowMs = Number.isFinite(Number(options.nowMs)) ? Number(options.nowMs) : Date.now();
+  const verifiedCrossRefCounts = options.verifiedCrossRefCounts instanceof Map
+    ? options.verifiedCrossRefCounts
+    : new Map();
   const threshold = mc ? getDormancyThreshold(mc) : SALIENCE_FREQUENCY_THRESHOLD;
   const maxAccess = mc ? getMaxAccessNormalization(mc) : 100;
   const maxCrossRefs = mc ? getMaxCrossRefNormalization(mc) : 10;
@@ -156,7 +161,7 @@ export async function evaluateSalienceFrequencyBatch(memoryIds, companyId, optio
   if (uniqueMemoryIds.length === 0) return results;
 
   try {
-    const dbResult = await query(
+    const dbResult = await queryFn(
       `WITH candidate_ids AS (
          SELECT DISTINCT unnest($1::uuid[]) AS id
        ),
@@ -174,30 +179,12 @@ export async function evaluateSalienceFrequencyBatch(memoryIds, companyId, optio
           AND e.key = cm.key
           AND e.operation = 'recall'
          GROUP BY cm.id
-       ),
-       cross_ref_edges AS (
-         SELECT cr.source_memory_id AS memory_id
-         FROM memory_cross_refs cr
-         JOIN candidate_ids ci ON ci.id = cr.source_memory_id
-         WHERE cr.company_id = $2
-         UNION ALL
-         SELECT cr.target_memory_id AS memory_id
-         FROM memory_cross_refs cr
-         JOIN candidate_ids ci ON ci.id = cr.target_memory_id
-         WHERE cr.company_id = $2
-       ),
-       cross_ref_counts AS (
-         SELECT memory_id, COUNT(*)::int AS cnt
-         FROM cross_ref_edges
-         GROUP BY memory_id
        )
        SELECT cm.id, cm.key, cm.credit_score, cm.supersedes_id, cm.created_at,
               COALESCE(rc.cnt, 0) AS recall_count,
-              rc.last_recall_at,
-              COALESCE(xr.cnt, 0) AS cross_ref_count
+              rc.last_recall_at
        FROM candidate_memories cm
-       LEFT JOIN recall_counts rc ON rc.memory_id = cm.id
-       LEFT JOIN cross_ref_counts xr ON xr.memory_id = cm.id`,
+       LEFT JOIN recall_counts rc ON rc.memory_id = cm.id`,
       [uniqueMemoryIds, cid]
     );
 
@@ -206,12 +193,12 @@ export async function evaluateSalienceFrequencyBatch(memoryIds, companyId, optio
       const recallCount = parseInt(row.recall_count, 10) || 0;
       const access_freq = Math.min(1.0, recallCount / maxAccess);
 
-      const crossRefCount = parseInt(row.cross_ref_count, 10) || 0;
+      const crossRefCount = Math.max(0, Math.floor(Number(verifiedCrossRefCounts.get(String(row.id))) || 0));
       const cross_refs = Math.min(1.0, crossRefCount / maxCrossRefs);
 
       // Recency comes from access telemetry. Creation time is a cold-start fallback.
       const recencyAnchor = row.last_recall_at ? new Date(row.last_recall_at) : new Date(row.created_at);
-      const ageDays = (Date.now() - recencyAnchor.getTime()) / 86400000;
+      const ageDays = (nowMs - recencyAnchor.getTime()) / 86400000;
       const recency = Math.max(0, 1.0 - ageDays / 180);
       const recency_source = row.last_recall_at
         ? 'aimos_events(operation=recall).max(ts)'
@@ -248,6 +235,7 @@ export async function evaluateSalienceFrequencyBatch(memoryIds, companyId, optio
         metricSources: {
           ...SALIENCE_FREQUENCY_ALADDIN_CONTRACT.metric_sources,
           active_recency_source: recency_source,
+          active_cross_ref_source: 'verified_request_graph_link_count',
         },
         canonical_memory_mutated: false,
         permanent_value_lowered: false,

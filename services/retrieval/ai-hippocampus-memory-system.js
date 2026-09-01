@@ -1,6 +1,8 @@
 /**
  * Native AI Hippocampus memory-system recall operator from:
  * - The AI Hippocampus- How Far are We From Human Memory?.pdf
+ * Status: Native structural diagnostic in canonical /aimos/recall with zero
+ * rank influence; the survey taxonomy is not a learned retrieval authority.
  *
  * Implemented formulas / techniques:
  * - implicit, explicit, and agentic memory taxonomy

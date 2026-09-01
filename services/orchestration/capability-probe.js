@@ -32,7 +32,7 @@
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { callNativeLlm } from '../shared/native-llm.js';
 import { logEvent } from '../observe/event-ledger.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -173,7 +173,7 @@ export async function getAgentCapabilityProfile(agentId, options = {}) {
 
   // Persist profile in aimos_memories
   try {
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: COMPANY,
       agent_id: 'capability-probe',
       key: `capability_profile:${agentId}`,
@@ -182,7 +182,7 @@ export async function getAgentCapabilityProfile(agentId, options = {}) {
       memory_type: 'agent_capability',
       memory_tier: 'long-term',
       clearance_level: 5,
-      mutation_authority: 'housekeeper',
+      source: 'capability-probe',
     });
   } catch (err) {
     console.warn('[capability-probe] getAgentCapabilityProfile persist error:', err.message);

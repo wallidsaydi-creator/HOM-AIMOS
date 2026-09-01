@@ -38,30 +38,16 @@ import {
   logEvent,
   readVerifiedEventById,
 } from '../services/observe/event-ledger.js';
-import { persistMemory } from '../services/write/persist-memory.js';
+import { executeCanonicalSave } from '../services/write/canonical-save-owner.js';
 import { recallAuthorizationService } from '../services/security/recall-authorization.js';
 import { appendSecurityDecision, evaluateSecurityContent } from '../services/security/se-gate.js';
 import { evaluateCanaryWrite } from '../services/security/canary-write-gate.js';
+import { verifiedRequestAuthorityFromRequest } from '../services/security/auth-gate.js';
 
 const router = express.Router();
 
 function verifiedRequestAuthority(req) {
-  return {
-    kind: 'verified_request',
-    body: req.body,
-    agentId: req.identityCert?.agent_id,
-    validFromIso: req.identityValidFromIso,
-    certString: req.identityCertString,
-    signedTs: req.identitySignedTs,
-    nonce: req.identityNonce,
-    sigBytes: req.identitySigBytes,
-    identityTier: req.identityTier,
-    claimedPrev: req.prevChainHash || null,
-    requestSigForm: req.identityRequestSigForm,
-    signedMethod: req.identitySignedMethod,
-    signedPath: req.identitySignedPath,
-    signedClaims: req.identitySignedClaims,
-  };
+  return verifiedRequestAuthorityFromRequest(req);
 }
 
 function parseEventMetadata(row) {
@@ -406,38 +392,7 @@ router.post('/report', async (req, res, next) => {
     const value = JSON.stringify(report);
     const key = `security:red-team-report:${report.timestamp}`;
     const requestAuthority = verifiedRequestAuthority(req);
-    const canaryDecision = await evaluateCanaryWrite({
-      key,
-      value,
-      companyId,
-      agentId: actorAgentId,
-      authority: requestAuthority,
-    });
-    let securityDecision = evaluateSecurityContent({
-      text: value,
-      operation: 'memory_save',
-      contentType: 'security_finding',
-      key,
-      source: 'red-team-toolkit',
-      transport: 'rest',
-    });
-    if (canaryDecision.quarantine && !securityDecision.quarantine) {
-      securityDecision = {
-        ...securityDecision,
-        action: 'retain_quarantine',
-        reason: canaryDecision.reason,
-        severity: 'critical',
-        quarantine: true,
-        liveSignals: [...securityDecision.liveSignals, { tag: 'canary_persistence_boundary', severity: 'critical' }],
-      };
-    }
-    const securityReceipt = await appendSecurityDecision(securityDecision, {
-      companyId,
-      subjectAgentId: actorAgentId,
-      authority: requestAuthority,
-      parentEventId: canaryDecision.event_receipt?.event_id || null,
-    });
-    const saved = await persistMemory({
+    const saved = await executeCanonicalSave({
       company_id: companyId,
       agent_id: actorAgentId,
       key,
@@ -447,8 +402,7 @@ router.post('/report', async (req, res, next) => {
       memory_type: 'security_finding',
       source: 'red-team-toolkit',
       session_id: sessionId || null,
-      security_disposition: { decision: securityDecision, receipt: securityReceipt },
-      mutation_authority: 'housekeeper',
+      mutation_authority: requestAuthority,
     });
     if (saved?.rejected) {
       return res.status(422).json({ success: false, error: saved.reason, report });

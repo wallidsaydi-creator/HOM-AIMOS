@@ -5,7 +5,7 @@ retention contracts.
 
 ## Development setup
 
-The supported release environment is macOS 14 or later with Node.js 20 or 24,
+The supported release environment is macOS 14 or later with Node.js 20, 24, or 26,
 PostgreSQL 18, pgvector, libsodium, and Apple Command Line Tools. Verify the
 machine without changing it, then install the locked JavaScript dependencies:
 

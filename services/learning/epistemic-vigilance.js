@@ -20,7 +20,7 @@
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { query } from '../../db/connection.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 const EPISTEMIC_BLINDING_SOURCE = 'Epistemic Blinding: An Inference-Time Protocol for Auditing Prior Contamination in LLM-Assisted Analysis';
@@ -222,16 +222,16 @@ export async function recordDeposit(sourceId, skillId, companyId = COMPANY) {
     trust.lastDeposit = new Date().toISOString();
 
     // Persist via canonical write gate
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: companyId,
       agent_id: 'epistemic',
-      mutation_authority: 'housekeeper',
       key: `skill_source:${sourceId}`,
       value: JSON.stringify(trust),
       scope: 'system',
       memory_type: 'skill_source_trust',
       memory_tier: 'long-term',
       clearance_level: 8,
+      source: 'epistemic-vigilance',
     });
 
     return { recorded: true };
@@ -269,10 +269,9 @@ export async function recordValidation(sourceId, skillId, success, companyId = C
 
     trust.lastValidation = new Date().toISOString();
 
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: companyId,
       agent_id: 'epistemic',
-      mutation_authority: 'housekeeper',
       key: `skill_source:${sourceId}`,
       value: JSON.stringify(trust),
       scope: 'system',
@@ -494,10 +493,9 @@ export async function flagSourceForReview(sourceId, threshold = 0.3, companyId =
 
   if (trust.trust < threshold) {
     // Record flag in audit via canonical write gate
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: companyId,
       agent_id: 'epistemic',
-      mutation_authority: 'housekeeper',
       key: `source_flag:${sourceId}`,
       value: JSON.stringify({
         sourceId,
@@ -509,6 +507,7 @@ export async function flagSourceForReview(sourceId, threshold = 0.3, companyId =
       memory_type: 'source_review_flag',
       memory_tier: 'long-term',
       clearance_level: 8,
+      source: 'epistemic-vigilance',
     });
 
     return { flagged: true, reason: `Trust ${trust.trust.toFixed(2)} below threshold ${threshold}` };

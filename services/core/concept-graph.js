@@ -44,8 +44,7 @@
 import { AIMOS_COMPANY_ID } from './runtime-config.js';
 import { query } from '../../db/connection.js';
 import { getEmbedding } from './embeddings.js';
-import { persistMemory } from '../write/persist-memory.js';
-import { appendSignedConceptEdge } from '../security/concept-edge-provenance.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 const HUB_DEGREE_THRESHOLD = 50;
@@ -125,51 +124,18 @@ export async function ensureConceptNode(conceptLabel, companyId = COMPANY) {
   );
   if (existing.rows.length > 0) return existing.rows[0].id;
 
-  const result = await persistMemory({
+  const result = await executeHousekeeperCanonicalSave({
     company_id: companyId,
     agent_id: 'concept-graph',
-    mutation_authority: 'housekeeper',
     key,
     value: conceptLabel,
     scope: 'system',
     memory_type: 'concept',
     memory_tier: 'long-term',
     clearance_level: 5,
+    source: 'concept-graph',
   });
   return result.id;
-}
-
-/**
- * Link a memory to its concept nodes.
- *
- * @param {string} memoryId
- * @param {string[]} conceptLabels
- * @param {string} companyId
- */
-export async function linkToConcepts(memoryId, conceptLabels, companyId = COMPANY) {
-  for (const label of conceptLabels) {
-    const conceptId = await ensureConceptNode(label, companyId);
-    await appendSignedConceptEdge({
-      company_id: companyId,
-      source_id: memoryId,
-      target_id: conceptId,
-      edge_type: 'HAS_CONCEPT',
-      weight: 1,
-    });
-  }
-}
-
-/**
- * Create a derived-from edge (fact from episode, reflection from facts).
- */
-export async function linkDerived(sourceId, targetId, edgeType, companyId = COMPANY) {
-  return appendSignedConceptEdge({
-    company_id: companyId,
-    source_id: sourceId,
-    target_id: targetId,
-    edge_type: edgeType,
-    weight: 1,
-  });
 }
 
 /**

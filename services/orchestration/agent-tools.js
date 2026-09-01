@@ -342,7 +342,7 @@ async function streamGeminiPrompt(model, messages, onToken, toolExecutionOptions
   } catch (error) {
     await credentialLedger.finalizeCredentialUse({
       reservation,
-      outcome: 'failed',
+      outcome: 'indeterminate',
       outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'transport_error' }),
       outcomeClass: 'transport_error',
       errorClass: error?.name || 'transport_error',
@@ -354,7 +354,7 @@ async function streamGeminiPrompt(model, messages, onToken, toolExecutionOptions
       const errorText = await res.text();
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'completed',
+        outcome: 'failed',
         outcomeHash: credentialUseEvidenceHash({ status: res.status, response_hash: credentialUseEvidenceHash(errorText) }),
         outcomeClass: `http_${res.status}`,
       });
@@ -413,7 +413,7 @@ async function streamGeminiPrompt(model, messages, onToken, toolExecutionOptions
     if (!res.ok) throw error;
     await credentialLedger.finalizeCredentialUse({
       reservation,
-      outcome: 'failed',
+      outcome: 'indeterminate',
       outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'stream_processing_error' }),
       outcomeClass: 'stream_processing_error',
       errorClass: error?.name || 'stream_processing_error',
@@ -476,7 +476,7 @@ async function runGeminiWithTools(agent, messages, toolDefs, toolExecutionOption
     } catch (error) {
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'failed',
+        outcome: 'indeterminate',
         outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'transport_error' }),
         outcomeClass: 'transport_error',
         errorClass: error?.name || 'transport_error',
@@ -488,7 +488,7 @@ async function runGeminiWithTools(agent, messages, toolDefs, toolExecutionOption
       const responseText = await res.text();
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'completed',
+        outcome: res.ok ? 'completed' : 'failed',
         outcomeHash: credentialUseEvidenceHash({ status: res.status, response_hash: credentialUseEvidenceHash(responseText) }),
         outcomeClass: `http_${res.status}`,
       });

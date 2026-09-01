@@ -1,12 +1,12 @@
 /**
  * interval-algebra-rag.js - interval-aware RAG and grounded tiered retrieval operators
  *
- * Status: Live in /aimos/recall via native_paper_recall_operators; exported by
- * retrieval/index.js.
+ * Status: Native structural projection in canonical /aimos/recall; exported by
+ * retrieval/index.js. Rank influence is exactly zero pending calibration.
  * Runtime note: pure deterministic math/state transformations. This file does
  * not call providers, mutate memory, prune evidence, apply canonical decay, or
  * delete records. In recall it contributes interval-aware evidence signals to
- * bounded native scoring.
+ * the signed native receipt.
  *
  * Paper authority:
  * - IA-RAG.pdf

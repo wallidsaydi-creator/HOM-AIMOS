@@ -34,13 +34,13 @@ const _statsCache = new Map();
  * @param {string} companyId
  * @returns {{ mu: number, sigma: number, sampleCount: number }}
  */
-async function getStats(companyId) {
+async function getStats(companyId, { queryFn = query, useCache = true } = {}) {
   const cached = _statsCache.get(companyId);
-  if (cached && Date.now() - cached.at < CACHE_TTL_MS) {
+  if (useCache && cached && Date.now() - cached.at < CACHE_TTL_MS) {
     return cached.stats;
   }
 
-  const result = await query(
+  const result = await queryFn(
     `SELECT window_mean, window_std, sample_count FROM similarity_statistics WHERE company_id = $1`,
     [companyId]
   );
@@ -53,7 +53,7 @@ async function getStats(companyId) {
       }
     : { mu: DEFAULT_MU, sigma: DEFAULT_SIGMA, sampleCount: 0 };
 
-  _statsCache.set(companyId, { stats, at: Date.now() });
+  if (useCache) _statsCache.set(companyId, { stats, at: Date.now() });
   return stats;
 }
 
@@ -64,46 +64,8 @@ async function getStats(companyId) {
  * @param {number} rawSimilarity - cosine similarity value (0-1 typical range)
  */
 export async function recordSimilarityObservation(companyId, rawSimilarity) {
-  if (!Number.isFinite(rawSimilarity)) return;
-  try {
-    await query(
-      `INSERT INTO similarity_statistics (company_id, window_mean, window_std, sample_count, running_sum, running_sum_sq, updated_at)
-       VALUES ($1, $2, $3, 1, $2, $2::float * $2::float, NOW())
-       ON CONFLICT (company_id) DO UPDATE SET
-         sample_count = LEAST(similarity_statistics.sample_count + 1, ${WINDOW_SIZE}),
-         running_sum = CASE
-           WHEN similarity_statistics.sample_count >= ${WINDOW_SIZE}
-           THEN similarity_statistics.running_sum - similarity_statistics.window_mean + $2
-           ELSE similarity_statistics.running_sum + $2
-         END,
-         running_sum_sq = CASE
-           WHEN similarity_statistics.sample_count >= ${WINDOW_SIZE}
-           THEN similarity_statistics.running_sum_sq - similarity_statistics.window_mean * similarity_statistics.window_mean + $2::float * $2::float
-           ELSE similarity_statistics.running_sum_sq + $2::float * $2::float
-         END,
-         window_mean = CASE
-           WHEN similarity_statistics.sample_count >= ${WINDOW_SIZE}
-           THEN (similarity_statistics.running_sum - similarity_statistics.window_mean + $2) / ${WINDOW_SIZE}
-           ELSE (similarity_statistics.running_sum + $2) / (similarity_statistics.sample_count + 1)
-         END,
-         window_std = GREATEST(0.01, SQRT(GREATEST(0,
-           CASE
-             WHEN similarity_statistics.sample_count >= ${WINDOW_SIZE}
-             THEN (similarity_statistics.running_sum_sq - similarity_statistics.window_mean * similarity_statistics.window_mean + $2::float * $2::float) / ${WINDOW_SIZE}
-                  - POWER((similarity_statistics.running_sum - similarity_statistics.window_mean + $2) / ${WINDOW_SIZE}, 2)
-             ELSE (similarity_statistics.running_sum_sq + $2::float * $2::float) / (similarity_statistics.sample_count + 1)
-                  - POWER((similarity_statistics.running_sum + $2) / (similarity_statistics.sample_count + 1), 2)
-           END
-         ))),
-         updated_at = NOW()`,
-      [companyId, rawSimilarity, DEFAULT_SIGMA]
-    );
-
-    // Invalidate cache so next read picks up updated stats
-    _statsCache.delete(companyId);
-  } catch (err) {
-    console.warn('[similarity-stats] observation recording failed:', err.message);
-  }
+  void companyId; void rawSimilarity;
+  return { recorded: false, reason: 'online_similarity_mutation_retired' };
 }
 
 /**
@@ -144,7 +106,6 @@ export async function normalizeDistance(rawDistance, companyId) {
   const { surprise } = await computeSurprise(rawSimilarity, companyId);
 
   // Record this observation for future normalization
-  recordSimilarityObservation(companyId, rawSimilarity).catch(() => {});
 
   // Return adjusted distance: surprise-weighted
   // High surprise = far from population = keep high distance
@@ -172,7 +133,6 @@ export async function batchNormalize(results, companyId) {
     normalized.set(row.id, surprise);
 
     // Fire-and-forget observation recording (batched for efficiency)
-    recordSimilarityObservation(companyId, rawSim).catch(() => {});
   }
 
   return normalized;
@@ -185,8 +145,8 @@ export async function batchNormalize(results, companyId) {
  * @param {string} companyId
  * @returns {Promise<{ mu: number, sigma: number, sampleCount: number, isCalibrated: boolean }>}
  */
-export async function getAnisotropyStats(companyId) {
-  const stats = await getStats(companyId);
+export async function getAnisotropyStats(companyId, options = {}) {
+  const stats = await getStats(companyId, options);
   return {
     ...stats,
     isCalibrated: stats.sampleCount >= 100 // need at least 100 observations for reliable stats

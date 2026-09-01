@@ -16,13 +16,14 @@ import {
 import { getOperatorAgentId, systemConfigStore } from '../services/security/system-config-store.js';
 import { peekCachedCredential } from '../services/security/credential-cache.js';
 import { requireCapability } from '../services/security/require-capability.js';
+import { verifiedRequestAuthorityFromRequest } from '../services/security/auth-gate.js';
 import { AIMOS_COMPANY_ID } from '../services/core/runtime-config.js';
 
 const router = express.Router();
 
 // ─── R1 Step 5: enroll brute-force defense ────────────────────────────────────
-// POST /aimos/identity/enroll accepts master_passphrase and is otherwise open
-// (first-run bootstrap). Add per-source exponential backoff and an absolute
+// POST /aimos/identity/enroll requires an admin certificate envelope plus the
+// master passphrase. Add per-source exponential backoff and an absolute
 // attempt cap that requires operator intervention (process restart / manual
 // reset) to clear. Constant-time passphrase comparison itself lives in
 // enrollAgentWithDeps (scripts/identity/lib.js).
@@ -243,10 +244,15 @@ async function buildPinnedEnrollment(agentId, req, options = {}) {
   assertIdentityFile(privateKeyPath);
   loadAgentPrivkey(privateKeyPath);
 
-  mkdirSync(AGENTS_DIR, { recursive: true, mode: 0o700 });
-  const cert = await getAgentCert(id, { forceRefresh: true, cachePath: agentPaths(id).certCachePath });
-  const certCachePath = writeCertCache(id, cert, row.valid_until);
+  const cert = await getAgentCert(id, { forceRefresh: true });
+  const certCachePath = agentPaths(id).certCachePath;
   assertIdentityFile(certCachePath);
+  const cached = JSON.parse(readFileSync(certCachePath, 'utf8'));
+  if (cached?.cert !== cert) {
+    const error = new Error(`Aimos cert cache does not match active enrollment for agent ${id}`);
+    error.status = 409;
+    throw error;
+  }
 
   const certBody = readCertBody(cert, certCachePath);
   if (String(certBody.agent_id || '') !== id) {
@@ -336,12 +342,14 @@ router.get('/aimos/identity/agents', requireCapability('admin_override'), async 
   }
 });
 
-router.post('/aimos/identity/enroll', async (req, res) => {
+router.post('/aimos/identity/enroll', requireCapability('admin_override'), async (req, res) => {
   // R1 Step 5: per-source exponential backoff + absolute attempt cap.
   const backoff = enrollBackoffCheck(req);
   if (!backoff.ok) {
     return res.status(backoff.status).json({ success: false, error: backoff.error });
   }
+  let enrollmentStart = null;
+  let enrollmentCommitted = false;
   try {
     const agentId = assertAgentId(req.body?.agent_id);
     const passphrase = String(req.body?.master_passphrase || '');
@@ -376,7 +384,7 @@ router.post('/aimos/identity/enroll', async (req, res) => {
       kcService: KC_SERVICE,
       kcAccount: keychainAccount,
       brainRoot: BRAIN_ROOT
-    }, { validityDays });
+    }, { validityDays, deferCommit: true });
 
     if (!result.ok) {
       // R1 Step 5: a bad passphrase / rejected enrollment counts against the
@@ -389,13 +397,21 @@ router.post('/aimos/identity/enroll', async (req, res) => {
       });
     }
 
+    enrollmentStart = await identityDb.beginAgentEnrollment(result.agentRow, {
+      authority: verifiedRequestAuthorityFromRequest(req),
+    });
     mkdirSync(AGENTS_DIR, { recursive: true, mode: 0o700 });
     writeFileSync(privateKeyPath, result.agentPrivkey, { mode: 0o600 });
     chmodSync(privateKeyPath, 0o600);
-    writeCertCache(agentId, result.cert, new Date(result.validUntil * 1000).toISOString());
+    const certCachePath = writeCertCache(agentId, result.cert, new Date(result.validUntil * 1000).toISOString());
+    await identityDb.commitAgentEnrollment(result.agentRow, enrollmentStart, {
+      signing_material_sha256: sha256Hex(readFileSync(privateKeyPath)),
+      cert_cache_sha256: sha256Hex(readFileSync(certCachePath)),
+    });
+    enrollmentCommitted = true;
 
     enrollRecordSuccess(req);
-    const pinned = await buildPinnedEnrollment(agentId, req);
+    const pinned = await buildPinnedEnrollment(agentId, req, { reuseExistingCertCache: true });
     res.json({
       success: true,
       enrolled: true,
@@ -403,53 +419,37 @@ router.post('/aimos/identity/enroll', async (req, res) => {
     });
   } catch (error) {
     enrollRecordFailure(req);
+    if (enrollmentStart && !enrollmentCommitted) {
+      try { await identityDb.markAgentEnrollmentIndeterminate(enrollmentStart, error); }
+      catch (traceError) { error.identity_enrollment_terminal_error = traceError?.message || String(traceError); }
+    }
     identityError(res, error);
   }
 });
 
-router.post('/aimos/identity/connect', async (req, res) => {
+router.post('/aimos/identity/connect', requireCapability('admin_override'), async (req, res) => {
   try {
     const agentId = assertAgentId(req.body?.agent_id);
     const row = await loadActiveIdentityRow(agentId);
-    const persistKey = req.body?.persist_key !== false;
     const defaultPrivateKeyPath = agentPaths(agentId).privateKeyPath;
-    const hasExplicitKey = Boolean(req.body?.private_key || req.body?.private_key_path);
+    if (req.body?.private_key) {
+      return res.status(400).json({
+        success: false,
+        error: 'Raw private_key transport is forbidden; use an owner-only existing private_key_path.',
+      });
+    }
 
     let privateKeyPath = defaultPrivateKeyPath;
-    if (hasExplicitKey) {
+    if (req.body?.private_key_path) {
       const { material, sourcePath } = readPrivateKeyMaterial({
-        privateKey: req.body?.private_key,
+        privateKey: null,
         privateKeyPath: req.body?.private_key_path
       });
       verifyPrivateKeyForCert(agentId, material, row.cert, row.pubkey);
-
-      if (persistKey) {
-        mkdirSync(AGENTS_DIR, { recursive: true, mode: 0o700 });
-        if (existsSync(defaultPrivateKeyPath)) {
-          const existingHash = sha256Hex(readFileSync(defaultPrivateKeyPath));
-          const incomingHash = sha256Hex(material);
-          if (existingHash !== incomingHash) {
-            return res.status(409).json({
-              success: false,
-              error: `Aimos private key already exists for agent ${agentId} with a different fingerprint`
-            });
-          }
-        } else {
-          writeFileSync(defaultPrivateKeyPath, material, { mode: 0o600 });
-        }
-        chmodSync(defaultPrivateKeyPath, 0o600);
-        privateKeyPath = defaultPrivateKeyPath;
-      } else if (sourcePath) {
-        privateKeyPath = sourcePath;
-      } else {
-        return res.status(400).json({
-          success: false,
-          error: 'Raw private_key connection requires persist_key=true so the runtime has a stable signing key path'
-        });
-      }
+      privateKeyPath = sourcePath;
     }
 
-    const pinned = await buildPinnedEnrollment(agentId, req, { row, privateKeyPath });
+    const pinned = await buildPinnedEnrollment(agentId, req, { row, privateKeyPath, reuseExistingCertCache: true });
     res.json({
       success: true,
       connected: true,
@@ -460,9 +460,9 @@ router.post('/aimos/identity/connect', async (req, res) => {
   }
 });
 
-router.post('/aimos/identity/select', async (req, res) => {
+router.post('/aimos/identity/select', requireCapability('admin_override'), async (req, res) => {
   try {
-    const pinned = await buildPinnedEnrollment(req.body?.agent_id, req);
+    const pinned = await buildPinnedEnrollment(req.body?.agent_id, req, { reuseExistingCertCache: true });
     res.json({
       success: true,
       selected: true,

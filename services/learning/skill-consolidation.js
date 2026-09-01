@@ -29,7 +29,7 @@ import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { query } from '../../db/connection.js';
 import { runProvider } from '../core/providers.js';
 import { logEvent } from '../observe/event-ledger.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -190,10 +190,9 @@ Output:
   });
 
   try {
-    const saveResult = await persistMemory({
+    const saveResult = await executeHousekeeperCanonicalSave({
       company_id: cid,
       agent_id: 'skill-consolidation',
-      mutation_authority: 'housekeeper',
       key: abstractionKey,
       value: abstractionValue,
       scope: 'global',
@@ -352,10 +351,9 @@ export async function promoteProvisionalSkill(skillId, companyId) {
   valueObj.promoted_at = new Date().toISOString();
 
   try {
-    const saved = await persistMemory({
+    const saved = await executeHousekeeperCanonicalSave({
       company_id: cid,
       agent_id: 'skill-consolidation',
-      mutation_authority: 'housekeeper',
       key: row.key,
       value: JSON.stringify(valueObj),
       scope: row.scope || 'system',

@@ -16,7 +16,7 @@ import { createHash } from 'node:crypto';
 import { query, withTransaction } from '../db/connection.js';
 import { getEmbedding } from '../services/core/embeddings.js';
 import { logEvent } from '../services/observe/event-ledger.js';
-import { persistMemory } from '../services/write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../services/write/canonical-save-owner.js';
 import { runDreamConsolidation } from '../services/dream/spiced-consolidator.js';
 import { scoreDueRecommendations, curateSkillsFromSuccesses, computeForwardTransfer, computeBackwardTransfer, computePerformanceMaintenance } from '../services/learning/agent-learning.js';
 import {
@@ -623,7 +623,7 @@ async function runHierarchicalSummarization(companyId, events, dreamDate) {
       // Aladdin law: append a new retained version; the prior version remains
       // addressable through the explicit supersession topology.
       const patternKey = `dream_pattern:${dreamDate}`;
-      await persistMemory({
+      await executeHousekeeperCanonicalSave({
         company_id: companyId,
         agent_id: 'housekeeper',
         key: patternKey,
@@ -632,7 +632,6 @@ async function runHierarchicalSummarization(companyId, events, dreamDate) {
         memory_type: 'dream_pattern',
         clearance_level: 5,
         source: 'nightly-dream',
-        mutation_authority: 'housekeeper',
       });
     }
 
@@ -1072,17 +1071,12 @@ export async function runNightlyDream(companyId = AIMOS_COMPANY_ID) {
 
   // SPICED promotion-only neuromorphic consolidation — Batch 5
   const consolidationResult = await runDreamConsolidation();
-  await logEvent(companyId, 'housekeeper', 'dream_spiced_consolidation', 'dream:spiced', {
-    ...consolidationResult,
-    reasoning: 'The housekeeper completed the promotion-only SPICED consolidation cycle and retained its complete outcome as signed operational evidence.',
-    source_knowledge: 'SPICED Eq. 5 promotion-only Aimos mapping; nightly-dream.js',
-  });
 
   const key = `dream:${now.toISOString().slice(0, 10)}`;
   const embedding = await getEmbedding(value);
   // Aladdin-compliant: persistMemory appends a same-key retained version and
   // records the explicit predecessor/successor relation atomically.
-  await persistMemory({
+  await executeHousekeeperCanonicalSave({
     company_id: companyId,
     agent_id: 'housekeeper',
     key,
@@ -1091,7 +1085,6 @@ export async function runNightlyDream(companyId = AIMOS_COMPANY_ID) {
     clearance_level: 5,
     memory_type: 'dream_summary',
     source: 'nightly-dream',
-    mutation_authority: 'housekeeper',
   });
 
   let topConsolidatedMemories = [];
@@ -1146,7 +1139,7 @@ export async function runNightlyDream(companyId = AIMOS_COMPANY_ID) {
 
   const artifactKey = `dream_artifact:${dreamDate}`;
   const artifactValue = JSON.stringify(dreamArtifact);
-  await persistMemory({
+  await executeHousekeeperCanonicalSave({
     company_id: companyId,
     agent_id: 'housekeeper',
     key: artifactKey,
@@ -1155,7 +1148,6 @@ export async function runNightlyDream(companyId = AIMOS_COMPANY_ID) {
     clearance_level: 5,
     memory_type: 'dream_artifact',
     source: 'nightly-dream',
-    mutation_authority: 'housekeeper',
   });
 
   await logEvent(companyId, 'housekeeper', 'dream', key, {
@@ -1184,22 +1176,20 @@ export async function runNightlyDream(companyId = AIMOS_COMPANY_ID) {
     }
   );
 
-  // --- Stage 20: Hebbian Consensus Consolidation (shadow-first, additive) ---
-  // Relational sleep pass (HeLa-Mem association→consolidation): supported hubs
-  // are elevated, divergent members attenuated, ALL via the signed cognitive-
-  // weight chain. Existence untouched (weight = frequency, floor 0.1). No-op
-  // unless the HEBBIAN_CONSENSUS governor flag is enabled. The whole corpus is
-  // swept over DEFAULT_BATCHES nights — one deterministic rotating batch/night.
+  // --- Stage 20: Hebbian Consensus Consolidation (signed, additive) ----------
+  // Relational sleep pass (HeLa-Mem association→consolidation): only supported
+  // co-activation hubs may be promoted through the signed cognitive-weight
+  // chain. Every other retained state remains unchanged. Content and existence
+  // are immutable. No-op unless the HEBBIAN_CONSENSUS governor flag is enabled.
+  // The corpus is swept over the configured bounded batch count.
   let hebbianConsensusResult = { enabled: false };
-  try {
-    const batchCount = HEBBIAN_CONSTANTS.DEFAULT_BATCHES;
-    const batchIndex = Math.floor(now.getTime() / 86_400_000) % batchCount;
-    hebbianConsensusResult = await runHebbianConsensusBatch(batchIndex, batchCount, {
-      companyId,
-      readFlag: governorConfigLedger.readFlag,
-    });
-    console.log('[dream] Stage 20 (hebbian-consensus) result:', hebbianConsensusResult);
-  } catch (err) { console.error('[dream] Stage 20 (hebbian-consensus) failed (non-fatal):', err.message); }
+  const batchCount = HEBBIAN_CONSTANTS.default_batches;
+  const batchIndex = Math.floor(now.getTime() / 86_400_000) % batchCount;
+  hebbianConsensusResult = await runHebbianConsensusBatch(batchIndex, batchCount, {
+    companyId,
+    readFlag: governorConfigLedger.readFlag,
+  });
+  console.log('[dream] Stage 20 (hebbian-consensus) result:', hebbianConsensusResult);
 
   return {
     events_captured: events.length,

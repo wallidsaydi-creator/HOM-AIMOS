@@ -1,12 +1,12 @@
 /**
  * multi-view-timeline.js - MTGER and NARRATIVETIME temporal cognition operators
  *
- * Status: Live in /aimos/recall via native_paper_recall_operators; exported by
- * temporal/index.js.
+ * Status: Native structural projection in canonical /aimos/recall; exported by
+ * temporal/index.js. Learned fusion and rank influence remain inactive.
  * Runtime note: pure deterministic math/state transformations. It does not
  * mutate memory, prune evidence, apply decay, delete records, or call providers.
  * In recall it contributes timeline consistency signals to bounded native
- * scoring.
+ * receipt evidence.
  *
  * Paper authority:
  * - MTGER- Multi-view.pdf

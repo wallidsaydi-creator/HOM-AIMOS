@@ -1,6 +1,6 @@
 # Aimos Guide — Tier 3: Save Deep-Dive
 
-> Load this BEFORE your first save. Every save passes through 10 stages and 3 quality walls.
+> Load this BEFORE your first save. Every save passes through 15 fixed stages and 3 quality walls.
 
 ## Save Request (Full)
 
@@ -21,30 +21,38 @@ POST /aimos/save
 
 **Required:** `key` + `value`. Everything else has defaults.
 
-## The 10-Stage Save Pipeline
+## The 15-Stage Canonical Save Pipeline
 
 ```
- 1. Envelope Authority ─ verifies signed identity, company, request receipt, and grants
- 2. Sudo Guard ─────── clearance 12+ memories need 12+ to supersede
- 3. Write Validator ── structural validation (exempt: event_log, dream_summary, etc.)
- 4. RPE Gate ────────── Reward Prediction Error — routes processing depth
- 5. Sensible Screen ── monitors RPE quality over time
- 6. Transform Cache ── checks if schema transform was seen before
- 7. Mnemonic Encoder ─ tags encoding style
- 8. persistMemory():
-    ├─ Quality Gate (3 walls)
-    ├─ Secret Redaction (API keys auto-stripped)
-    ├─ Quarantine Check (prompt injection → scope=quarantine)
-    ├─ Embedding (768d ONNX)
-    ├─ Cross-Reference (A-MEM Zettelkasten)
-    ├─ Entity Extraction (HippoRAG)
-    ├─ Aladdin Compliance
-    ├─ Data Classification
-    ├─ Medallion Layer
-    └─ DB INSERT + trigger evaluation
- 9. Cache Invalidate ─ semantic cache cleared
-10. Response
+ 1. AUTH ───────────── verified agent epoch/grant or signed internal Housekeeper action
+ 2. RECEIPT ────────── exact request receipt or internal action-start receipt
+ 3. CANARY ─────────── native traversal-marker decision
+ 4. SE ─────────────── contextual social-engineering/security decision
+ 5. ALADDIN ────────── permanent-retention and supersession policy
+ 6. VALIDATOR ──────── structural, permission, injection and schema checks
+ 7. QUALITY ────────── all three quality walls
+ 8. SECRET_BOUNDARY ─ reject signed secret drift or isolate credentials
+ 9. EMBEDDING ──────── pinned 768d inference or explicit degraded evidence
+10. PERSISTENCE ────── immutable memory insert or signed exact-state reassertion
+11. PROVENANCE ─────── request/action evidence plus Housekeeper BIND
+12. LINEAGE ────────── signed supersession edge or explicit no-op
+13. GRAPH ──────────── signed cross-reference/entity projection or explicit no-op
+14. EPISTEMIC ──────── signed retained-memory classification
+15. TERMINAL ───────── atomic signed success, rejection or failure receipt
 ```
+
+RPE, sensible-screening, transformation-cache and mnemonic outputs remain
+explicit diagnostics. They are not authorization gates and cannot relax a
+mandatory-stage rejection.
+
+External SAVE, session and tool operations preserve the exact verified request
+or tool authority through the terminal. Autonomous services cannot assert
+Housekeeper authority with a body field or string: the typed autonomous owner
+first appends a Housekeeper-signed action commitment over the exact SAVE
+projection, and the restricted transaction independently verifies that event.
+Session turns, exchanges and final manifests use one selected authority. The
+public heartbeat route accepts only the verified Housekeeper identity and calls
+the same internal heartbeat owner used by the scheduler.
 
 ## Quality Gate — The 3 Walls
 

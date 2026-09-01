@@ -83,6 +83,6 @@ test('positive model learns from signed native tool receipts, not a phantom tabl
   );
   assert.doesNotMatch(source, /agent_run_logs/);
   assert.match(source, /FROM aimos_events/);
-  assert.match(source, /operation = 'tool_execution_succeeded'/);
+  assert.match(source, /operation IN \('tool_execution_succeeded','tool_execution_terminal'\)/);
   assert.match(source, /toolActionArgumentsHash\(params/);
 });

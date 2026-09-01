@@ -38,7 +38,7 @@
  */
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 import { buildWebArenaBenchmarkScenarios } from '../observe/benchmark-scenarios.js';
 import { logEvent } from '../observe/event-ledger.js';
 
@@ -720,7 +720,7 @@ export async function observeHVRDiagnostic({
 }
 
 async function persistResult(taskId, hypothesis, evidence, status, attempt) {
-  await persistMemory({
+  await executeHousekeeperCanonicalSave({
     company_id: COMPANY,
     agent_id: 'system',
     key: `hvr:${taskId}:attempt_${attempt}:${status}`,
@@ -729,7 +729,7 @@ async function persistResult(taskId, hypothesis, evidence, status, attempt) {
     scope: 'task',
     clearance_level: 5,
     memory_tier: 'long-term',
-    mutation_authority: 'housekeeper',
+    source: 'hypothesis-verifier',
   });
 }
 

@@ -14,7 +14,8 @@
  */
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
-import { query } from '../../db/connection.js';
+import { withTransaction } from '../../db/connection.js';
+import { logEvent, readVerifiedEventById } from '../observe/event-ledger.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -37,8 +38,7 @@ const COMPANY = AIMOS_COMPANY_ID;
  * @param {number} confidence - Confidence score (0-1)
  * @param {Object} bdi - BDI state {beliefs, desires, intentions}
  */
-export async function updateAgentState(agentId, phase, currentTask, lastAction, nextAction, confidence, bdi = {}) {
-  try {
+export async function updateAgentState(agentId, phase, currentTask, lastAction, nextAction, confidence, bdi = {}, options = {}) {
     const beliefsRaw = bdi.beliefs;
     const desiresRaw = bdi.desires;
     const intentionsRaw = bdi.intentions;
@@ -56,19 +56,26 @@ export async function updateAgentState(agentId, phase, currentTask, lastAction, 
     const desires = (desiresRaw && Object.keys(desiresRaw).length > 0) ? JSON.stringify(desiresRaw) : null;
     const intentions = (intentionsRaw && (Array.isArray(intentionsRaw) ? intentionsRaw.length > 0 : Object.keys(intentionsRaw).length > 0)) ? JSON.stringify(intentionsRaw) : null;
 
-    await query(
-      `INSERT INTO agent_state (company_id, agent_id, phase, current_task, last_action, next_action, confidence,
-                                beliefs, desires, intentions, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::jsonb, $10::jsonb, NOW())
-       ON CONFLICT (company_id, agent_id)
-       DO UPDATE SET phase = $3, current_task = $4, last_action = $5, next_action = $6, confidence = $7,
-                     beliefs = COALESCE(NULLIF($8::jsonb, '{}'::jsonb), agent_state.beliefs),
-                     desires = COALESCE(NULLIF($9::jsonb, '{}'::jsonb), agent_state.desires),
-                     intentions = COALESCE(NULLIF($10::jsonb, '[]'::jsonb), agent_state.intentions),
-                     updated_at = NOW()`,
-      [COMPANY, agentId, phase, currentTask, lastAction, nextAction, confidence, beliefs, desires, intentions]
-    );
-  } catch { /* best effort */ }
+    return logEvent(COMPANY, agentId, 'agent_bdi_state_committed', `agent-bdi:${agentId}:${options.runId || Date.now()}`, {
+      schema: 'hom.aimos.agent-bdi-state/v1',
+      company_id: COMPANY,
+      agent_id: agentId,
+      phase: phase || null,
+      current_task: currentTask || null,
+      last_action: lastAction || null,
+      next_action: nextAction || null,
+      confidence: Number.isFinite(Number(confidence)) ? Number(confidence) : null,
+      beliefs: beliefs ? JSON.parse(beliefs) : null,
+      desires: desires ? JSON.parse(desires) : null,
+      intentions: intentions ? JSON.parse(intentions) : null,
+      waiting_for: options.waitingFor || null,
+      blockers: Array.isArray(options.blockers) ? options.blockers : [],
+      run_id: options.runId || null,
+      reasoning: 'The Housekeeper retained the complete non-empty BDI projection as an append-only run consequence.',
+    }, options.parentEventId || options.authority?.requestAdmissionEventId || null, {
+      authority: options.authority || null,
+      returnReceipt: true,
+    });
 }
 
 /**
@@ -80,19 +87,34 @@ export async function updateAgentState(agentId, phase, currentTask, lastAction, 
  */
 export async function readAgentBDIState(agentId) {
   try {
-    const res = await query(
-      `SELECT beliefs, desires, intentions, confidence, phase
-       FROM agent_state WHERE company_id = $1 AND agent_id = $2 LIMIT 1`,
-      [COMPANY, agentId]
-    );
-    if (!res.rows.length) return null;
-    const row = res.rows[0];
+    const row = await withTransaction(async (client) => {
+      const result = await client.query(
+        `SELECT id FROM aimos_events
+          WHERE company_id = $1 AND agent_id = $2
+            AND operation = 'agent_bdi_state_committed' AND ledger_version = 1
+          ORDER BY ts DESC, signer_valid_from DESC, ledger_seq DESC LIMIT 1`,
+        [COMPANY, agentId],
+      );
+      return result.rows[0]
+        ? readVerifiedEventById(result.rows[0].id, COMPANY, { client })
+        : null;
+    }, { restricted: true, client_id: COMPANY, agent_id: agentId });
+    if (!row) return null;
+    const metadata = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata;
+    if (metadata?.schema !== 'hom.aimos.agent-bdi-state/v1' || metadata?.agent_id !== agentId) {
+      throw new Error('agent_bdi_state_event_invalid');
+    }
     return {
-      beliefs: typeof row.beliefs === 'string' ? JSON.parse(row.beliefs) : row.beliefs,
-      desires: typeof row.desires === 'string' ? JSON.parse(row.desires) : row.desires,
-      intentions: typeof row.intentions === 'string' ? JSON.parse(row.intentions) : row.intentions,
-      confidence: parseFloat(row.confidence) || 0,
-      phase: row.phase || 'unknown'
+      beliefs: metadata.beliefs || {},
+      desires: metadata.desires || {},
+      intentions: metadata.intentions || [],
+      waiting_for: metadata.waiting_for || null,
+      blockers: Array.isArray(metadata.blockers) ? metadata.blockers : [],
+      current_task: metadata.current_task || null,
+      last_action: metadata.last_action || null,
+      next_action: metadata.next_action || null,
+      confidence: Number(metadata.confidence || 0),
+      phase: metadata.phase || 'unknown'
     };
   } catch { return null; }
 }

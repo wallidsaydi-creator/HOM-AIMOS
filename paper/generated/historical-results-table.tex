@@ -1,0 +1,20 @@
+\begin{table*}[t]
+\centering
+\caption{Historical MutMem V1 results, reproduced from the self-hashed V1 aggregate. These are not current-source V2 reruns.}
+\label{tab:v1-historical}
+\small
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.26\textwidth}>{\raggedright\arraybackslash}p{0.30\textwidth}>{\raggedright\arraybackslash}p{0.32\textwidth}@{}}
+\toprule
+Protocol and metric & Historical V1 result & Boundary \\
+\midrule
+LongMemEval, LLM-judged accuracy & \MutMemLongMemCorrect/\MutMemLongMemTotal\ (\MutMemLongMemPercent\%; Wilson 95\% CI \MutMemLongMemWilsonLower--\MutMemLongMemWilsonUpper\%) & GPT-5.4 generator; GPT-5.6 Terra judge \\
+LoCoMo, LLM-judged accuracy & \MutMemLocomoCorrect/\MutMemLocomoTotal\ (\MutMemLocomoPercent\%; Wilson 95\% CI \MutMemLocomoWilsonLower--\MutMemLocomoWilsonUpper\%) & Distinct from token F1 \\
+LoCoMo, category-aware token F1 & \MutMemLocomoFOne & Bootstrap interval omitted in V2: private rows unavailable \\
+PoisonedRAG adaptation, attacked ASR & \MutMemPoisonAttackCount/\MutMemPoisonAttackTotal\ (\MutMemPoisonAttackPercent\%) & Fixed post-calibration N=100 adaptation \\
+PoisonedRAG adaptation, poison retrieval@5 & \MutMemPoisonRetrievalCount/\MutMemPoisonRetrievalTotal\ (Wilson upper \MutMemPoisonRetrievalWilsonUpper\%) & Retention plus retrieval isolation, not deletion \\
+Mutation integrity & \MutMemMutationAuthorizationPassed/\MutMemMutationAuthorizationTotal\ authorization; \MutMemMutationTamperPassed/\MutMemMutationTamperTotal\ tamper cases & \MutMemMutationTransitionCount\ measured native transitions \\
+Mutation transaction cost & median \MutMemMutationMedianMs\ ms; p95 \MutMemMutationPNinetyFiveMs\ ms; \MutMemMutationMeanBytes\ logical bytes/transition & Single historical machine and full transaction \\
+Blinded system-author agreement & \MutMemHumanAgreementCount/\MutMemHumanAgreementTotal\ (\MutMemHumanAgreementPercent\%; $\kappa=\MutMemHumanKappa$) & Not independent human validation \\
+\bottomrule
+\end{tabular}
+\end{table*}

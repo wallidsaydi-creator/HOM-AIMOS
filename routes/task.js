@@ -3,9 +3,10 @@ import { ensureAgent, tasks } from '../services/orchestration/agent-store.js';
 import { runProvider, providerStatus } from '../services/core/providers.js';
 import { searchWeb } from '../services/integrations/web-search.js';
 import { getPermissions } from '../services/core/permissions.js';
-import { persistMemory } from '../services/write/persist-memory.js';
+import { executeCanonicalSave } from '../services/write/canonical-save-owner.js';
 import { logEvent } from '../services/observe/event-ledger.js';
 import { AIMOS_COMPANY_ID } from '../services/core/runtime-config.js';
+import { verifiedRequestAuthorityFromRequest } from '../services/security/auth-gate.js';
 
 const router = express.Router();
 
@@ -146,9 +147,11 @@ router.post('/', async (req, res) => {
     await writeTaskSummary({
       taskId,
       companyId: AIMOS_COMPANY_ID,
-      agentId,
+      agentId: actorAgentId,
+      targetAgentId: agentId,
       task,
-      result: response
+      result: response,
+      requestAuthority: verifiedRequestAuthorityFromRequest(req),
     });
 
     return res.json({ success: true, taskId, status: record.status, result: response });
@@ -169,19 +172,20 @@ router.get('/:id', (req, res) => {
 
 export default router;
 
-async function writeTaskSummary({ taskId, companyId, agentId, task, result }) {
+async function writeTaskSummary({ taskId, companyId, agentId, targetAgentId, task, result, requestAuthority }) {
   const key = `task:${taskId}:summary`;
   const trimmed = (result || '').toString().trim();
   const summary = trimmed.length > 1200 ? `${trimmed.slice(0, 1200)}…` : trimmed;
   const value = [
     `Task: ${task}`,
+    `Target agent: ${targetAgentId}`,
     `Outcome: ${summary || 'No response captured.'}`,
     'Key learnings: (auto-summary)',
     'Decisions: (auto-summary)'
   ].join('\n');
 
   try {
-    await persistMemory({
+    await executeCanonicalSave({
       company_id: companyId,
       agent_id: agentId,
       key,
@@ -190,12 +194,12 @@ async function writeTaskSummary({ taskId, companyId, agentId, task, result }) {
       clearance_level: 5,
       memory_type: 'task_summary',
       source: 'task.js',
-      mutation_authority: 'housekeeper'
+      mutation_authority: requestAuthority,
     });
     await logEvent(companyId, agentId, 'save', key, {
       reasoning: `Task auto-summary saved to Aimos as '${key}'. Completed tasks become searchable knowledge — what was done, by whom, and the outcome. This feeds the retained dream-consolidation loop.`,
       source_knowledge: 'task.js auto-summary — task completion → memory pipeline'
-    });
+    }, null, { authority: requestAuthority });
   } catch (err) {
     // Don't fail the task if memory write fails
     console.warn('Auto-summary memory write failed:', err.message);

@@ -31,8 +31,8 @@ import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { query } from '../../db/connection.js';
 import { getSourceTrust, getDepositMode, recordDeposit } from './epistemic-vigilance.js';
 import { getDomainPlasticity, modulateLearningStrength } from './plasticity-controller.js';
-import { persistMemory } from '../write/persist-memory.js';
-import { logEvent } from '../observe/event-ledger.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
+import { logEvent, readVerifiedEventById } from '../observe/event-ledger.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -291,10 +291,9 @@ export async function updateBehavioralBaseline(agentId, promptData) {
 
     // Save updated baseline
     const baselineValue = JSON.stringify(baseline);
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: COMPANY,
       agent_id: agentId,
-      mutation_authority: 'housekeeper',
       key: baselineKey,
       value: baselineValue,
       scope: 'system',
@@ -518,10 +517,9 @@ export async function selfReflect(agentId) {
     };
 
     // Save reflection as a learning memory — agents can query this to self-correct
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: COMPANY,
       agent_id: agentId,
-      mutation_authority: 'housekeeper',
       key: `reflection:${agentId}:${Date.now()}`,
       value: JSON.stringify(reflection),
       scope: 'agent',
@@ -573,19 +571,20 @@ export async function getSharedFailures(taskType, excludeAgentId, limit = 5) {
 // Every significant agent response is logged as a recommendation.
 // A nightly or periodic scorer can later fill in actual_outcome and outcome_score.
 export async function recordRecommendation(agentId, recommendation, confidence, taskType, context = {}) {
-  try {
-    const windowHours = taskType === 'trading' ? 4 : (taskType === 'analysis' ? 48 : 24);
-    await query(
-      `INSERT INTO recommendation_log (company_id, agent_id, recommendation, confidence_at_time, outcome_window_hours, outcome_due_at, context, created_at)
-       VALUES ($1, $2, $3, $4, $5, NOW() + make_interval(hours => $6), $7, NOW())`,
-      [COMPANY, agentId, String(recommendation).slice(0, 2000), confidence, windowHours, windowHours, JSON.stringify({
-        task_type: taskType,
-        ...context
-      })]
-    );
-  } catch {
-    // best-effort
-  }
+  const windowHours = taskType === 'trading' ? 4 : (taskType === 'analysis' ? 48 : 24);
+  const recommendationId = `recommendation:${agentId}:${Date.now()}`;
+  const receipt = await logEvent(COMPANY, agentId, 'recommendation_committed', recommendationId, {
+    schema: 'hom.aimos.recommendation/v1',
+    recommendation_id: recommendationId,
+    agent_id: agentId,
+    recommendation: String(recommendation).slice(0, 2000),
+    confidence_at_time: Number(confidence),
+    outcome_window_hours: windowHours,
+    outcome_due_at: new Date(Date.now() + windowHours * 3_600_000).toISOString(),
+    context: { task_type: taskType, ...context },
+    reasoning: 'The Housekeeper retained one recommendation consequence from the completed agent run.',
+  }, context.parent_event_id || null, { returnReceipt: true });
+  return { recommendationId, eventId: receipt.event_id };
 }
 
 // ─── CALIBRATION FACTOR: compute confidence calibration for an agent+taskType ──
@@ -629,16 +628,26 @@ export async function getCalibrationFactor(agentId, taskType) {
 export async function scoreDueRecommendations() {
   try {
     const due = await query(
-      `SELECT id, agent_id, confidence_at_time, context, created_at
-       FROM recommendation_log
-       WHERE company_id = $1 AND outcome_due_at <= NOW() AND actual_outcome IS NULL
-       ORDER BY created_at ASC LIMIT 20`,
+      `SELECT event.id, event.agent_id, event.metadata, event.ts AS created_at
+         FROM aimos_events event
+        WHERE event.company_id = $1 AND event.operation = 'recommendation_committed'
+          AND event.ledger_version = 1
+          AND (event.metadata->>'outcome_due_at')::timestamptz <= NOW()
+          AND NOT EXISTS (
+            SELECT 1 FROM aimos_events scored
+             WHERE scored.company_id = event.company_id
+               AND scored.operation = 'recommendation_scored'
+               AND scored.key = event.key AND scored.ledger_version = 1
+          )
+        ORDER BY event.ts ASC LIMIT 20`,
       [COMPANY]
     );
 
     const scored = [];
     for (const rec of due.rows) {
-      const ctx = typeof rec.context === 'string' ? JSON.parse(rec.context) : (rec.context || {});
+      const verified = await readVerifiedEventById(rec.id, COMPANY);
+      const source = typeof verified.metadata === 'string' ? JSON.parse(verified.metadata) : verified.metadata;
+      const ctx = source?.context || {};
       const taskType = ctx.task_type || 'unknown';
 
       // Check agent's performance on this taskType AFTER the recommendation was made
@@ -647,7 +656,7 @@ export async function scoreDueRecommendations() {
          WHERE company_id = $1 AND agent_id = $2 AND operation = 'agent_run_metric'
            AND ts > $3
          ORDER BY ts ASC LIMIT 10`,
-        [COMPANY, rec.agent_id, rec.created_at]
+        [COMPANY, source.agent_id, rec.created_at]
       );
 
       let successCount = 0;
@@ -674,13 +683,16 @@ export async function scoreDueRecommendations() {
         actualOutcome = successRate >= 0.7 ? 'positive' : successRate >= 0.4 ? 'neutral' : 'negative';
       }
 
-      await query(
-        `UPDATE recommendation_log SET actual_outcome = $1, outcome_score = $2, scored_at = NOW()
-         WHERE id = $3`,
-        [actualOutcome, outcomeScore, rec.id]
-      );
+      const terminal = await logEvent(COMPANY, source.agent_id, 'recommendation_scored', String(source.recommendation_id), {
+        schema: 'hom.aimos.recommendation-score/v1',
+        recommendation_id: source.recommendation_id,
+        recommendation_event_id: verified.id,
+        actual_outcome: actualOutcome,
+        outcome_score: outcomeScore,
+        reasoning: 'The Housekeeper scored one due recommendation from retained post-recommendation run evidence.',
+      }, verified.id, { exclusiveOperationKey: true, returnReceipt: true });
 
-      scored.push({ id: rec.id, agent: rec.agent_id, taskType, outcomeScore, actualOutcome });
+      scored.push({ id: source.recommendation_id, agent: source.agent_id, taskType, outcomeScore, actualOutcome, eventId: terminal.event_id });
     }
 
     return { scored: scored.length, results: scored };
@@ -742,10 +754,9 @@ export async function afterActionReview(agentId, { prompt, response, taskType, c
     };
 
     // Save review — agents can read their past reviews to self-improve
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: COMPANY,
       agent_id: agentId,
-      mutation_authority: 'housekeeper',
       key: `aar:${agentId}:${Date.now()}`,
       value: JSON.stringify(review),
       scope: 'agent',
@@ -952,24 +963,25 @@ export async function curateSkillsFromSuccesses(companyId = COMPANY) {
         skillEmbedding = await getEmbedding(skillDesc);
       } catch { /* embedding optional */ }
 
-      await query(
-        `INSERT INTO procedural_skills (company_id, agent_id, skill_name, trigger_pattern, steps, expected_outcome, success_count, fail_count, last_used, tags, skill_embedding)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, 0, NOW(), $8, $9::vector)
-         ON CONFLICT (company_id, skill_name)
-         DO UPDATE SET success_count = procedural_skills.success_count + EXCLUDED.success_count,
-                       last_used = NOW(), updated_at = NOW(),
-                       tags = EXCLUDED.tags,
-                       skill_embedding = COALESCE(EXCLUDED.skill_embedding, procedural_skills.skill_embedding)`,
-        [
-          companyId, group.agentId, skillName,
-          group.taskType,
-          JSON.stringify(toolsUsed.map(t => `use ${t}`)),
-          `Curated from ${group.runs.length} high-confidence ${group.taskType} runs`,
-          group.runs.length,
-          JSON.stringify(['curated', group.taskType]),
-          skillEmbedding ? JSON.stringify(skillEmbedding) : null
-        ]
-      );
+      await executeHousekeeperCanonicalSave({
+        company_id: companyId,
+        agent_id: group.agentId,
+        key: `procedural_skill:${group.agentId}:${skillName}`,
+        value: JSON.stringify({
+          skill_name: skillName,
+          trigger_pattern: group.taskType,
+          steps: toolsUsed.map((tool) => `use ${tool}`),
+          expected_outcome: `Curated from ${group.runs.length} high-confidence ${group.taskType} runs`,
+          tags: ['curated', group.taskType],
+          source_run_count: group.runs.length,
+          average_confidence: adjustedConfidence,
+          embedding_observed: Boolean(skillEmbedding),
+        }),
+        scope: 'agent',
+        memory_type: 'procedural',
+        clearance_level: 3,
+        source: 'agent-learning:curated-skill',
+      });
       curated++;
     }
 

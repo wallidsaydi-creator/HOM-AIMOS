@@ -1,12 +1,12 @@
 /**
  * temporal-graph-fusion.js - temporal graph fusion operators
  *
- * Status: Live in /aimos/recall via native_paper_recall_operators; exported by
- * temporal/index.js.
+ * Status: Native structural projection in canonical /aimos/recall; exported by
+ * temporal/index.js. Rank influence is exactly zero pending calibration.
  * Runtime note: pure deterministic transformations. No provider calls, no
  * canonical memory mutation, no pruning, no decay, no deletion, and no provider
  * calls. In recall it contributes derived temporal graph signals to bounded
- * native scoring.
+ * the signed native receipt.
  *
  * Paper authority:
  * - Fusing Temporal Graphs .pdf

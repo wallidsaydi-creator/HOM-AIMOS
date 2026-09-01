@@ -92,6 +92,17 @@ function npmPackageFiles() {
   return result.files.map((entry) => entry.path);
 }
 
+function assertReleaseSourcesTracked(files) {
+  const tracked = new Set(execFileSync('git', ['ls-files', '-z'], {
+    cwd: ROOT,
+    encoding: 'utf8',
+  }).split('\0').filter(Boolean));
+  const untracked = files.filter((relativePath) => !tracked.has(relativePath));
+  if (untracked.length > 0) {
+    throw new Error(`public_release_source_untracked:${untracked.join(',')}`);
+  }
+}
+
 function copyRegularFile(relativePath, output, destinationPath = relativePath) {
   const source = path.resolve(ROOT, relativePath);
   if (!source.startsWith(`${ROOT}${path.sep}`) || !existsSync(source)) {
@@ -220,6 +231,14 @@ function initializeRepository(output, commit) {
     encoding: 'utf8',
   }).trim();
   if (count !== 1 || status) throw new Error('public_release_single_commit_invariant_failed');
+  const tracked = execFileSync('git', ['ls-files', '-z'], {
+    cwd: output,
+    encoding: 'utf8',
+  }).split('\0').filter(Boolean).sort();
+  const expected = [...publicFiles(output).map((entry) => entry.path), MANIFEST_NAME].sort();
+  if (canonicalJson(tracked) !== canonicalJson(expected)) {
+    throw new Error('public_release_git_tree_mismatch');
+  }
   return execFileSync('git', ['rev-parse', 'HEAD'], { cwd: output, encoding: 'utf8' }).trim();
 }
 
@@ -229,6 +248,7 @@ function main() {
   assertCleanSource();
   assertEmptyDestination(args.output);
   const files = [...new Set([...npmPackageFiles(), ...EXTRA_PUBLIC_FILES])].sort();
+  assertReleaseSourcesTracked(files);
   for (const relativePath of files) {
     copyRegularFile(relativePath, args.output);
     stripImmutableMigrationNotes(args.output, relativePath);

@@ -48,15 +48,9 @@ import {
   POISONEDRAG_PROTOCOL_ID,
 } from '../../eval/poisonedrag/harness.mjs';
 import {
-  createS7SuccessorCorpusClone,
-  s7SelectionPopulationFingerprint,
-  verifyS7SuccessorCorpusBinding,
-} from '../../eval/mutmem-v2/s7-successor-corpus.mjs';
-import {
-  readS7Json,
-  writeS7ImmutableJson,
-} from '../../eval/mutmem-v2/s7-artifact-custody.mjs';
-import { selfHash } from '../../eval/mutmem-v2/s7-protocol.mjs';
+  buildUserServiceManifest,
+  readInstalledUserServiceDefinition,
+} from '../service/manage-user-service.mjs';
 
 const { Pool } = pg;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -68,11 +62,8 @@ const ARCHITECTURE_AUTHORITY = path.join(ROOT, 'architecture-authority.json');
 const CANONICAL_BLIND_PROTOCOL = 'canonical-blind-v1';
 const TWIN_PRIME_G1P_PROTOCOL = 'twin-prime-g1p-v1';
 const TWIN_PRIME_G5_PROTOCOL = 'twin-prime-g5-v1';
-const MUTMEM_V2_S7_PROTOCOL = 'mutmem-v2-s7-v1';
-const MUTMEM_V2_S7_NATIVE_PROTOCOL = 'mutmem-v2-s7-native-v1';
 const TWIN_PRIME_G1P_CORPUS = path.join(ROOT, 'eval', 'data', 'twin-prime-g1p-canonical-v2');
 const TWIN_PRIME_G5_CONTRACT = path.join(ROOT, 'eval', 'twin-prime', 'tp-g5-contract-v6');
-const MUTMEM_V2_S7_CONTRACT = path.join(ROOT, 'eval', 'mutmem-v2', 's7-contract-v2');
 const POISONEDRAG_SOURCE_LOCK = path.join(ROOT, 'eval', 'poisonedrag', 'source-lock.json');
 const POISONEDRAG_PUBLIC_LOCK = path.join(ROOT, 'eval', 'poisonedrag', 'n100-public-target-lock.json');
 const POISONEDRAG_PRIVATE_ROOT = path.join(ROOT, 'eval', 'data', 'private', 'poisonedrag');
@@ -90,6 +81,10 @@ export function parseArgs(argv) {
     gate: null,
     benchmark: 'both',
     port: 9200,
+    portExplicit: false,
+    installedInstance: null,
+    agentId: null,
+    publicReproduce: false,
     limit: 20,
     limitExplicit: false,
     protocol: CANONICAL_BLIND_PROTOCOL,
@@ -100,9 +95,6 @@ export function parseArgs(argv) {
     judgeModel: 'gpt-5.6-terra',
     modelOverrideExplicit: false,
     keychainAccount: null,
-    predecessorRun: null,
-    successorSourceRun: null,
-    qualificationReceipt: null,
     keepScratchDb: false,
     resumeRun: null,
     outputRoot: path.join(ROOT, 'eval', 'public-results')
@@ -110,13 +102,19 @@ export function parseArgs(argv) {
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
     const next = argv[i + 1];
+    if (['--predecessor-run', '--successor-source-run', '--qualification-receipt']
+      .includes(arg)) {
+      throw new Error(`retired_mutmem_s7_option:${arg}`);
+    }
     if (arg === '--longmemeval-file' && next) {
       args.longmemevalFile = path.resolve(next);
       args.longmemevalFileExplicit = true;
       i += 1;
     }
     else if (arg === '--sample' && next) { args.sample = Number(next); args.sampleExplicit = true; i += 1; }
-    else if (arg === '--port' && next) { args.port = Number(next); i += 1; }
+    else if (arg === '--port' && next) { args.port = Number(next); args.portExplicit = true; i += 1; }
+    else if (arg === '--installed-instance' && next) { args.installedInstance = String(next).trim(); i += 1; }
+    else if (arg === '--agent-id' && next) { args.agentId = String(next).trim(); i += 1; }
     else if (arg === '--limit' && next) { args.limit = Number(next); args.limitExplicit = true; i += 1; }
     else if (arg === '--protocol' && next) { args.protocol = String(next).trim().toLowerCase(); i += 1; }
     else if (arg === '--benchmark' && next) { args.benchmark = String(next).toLowerCase(); i += 1; }
@@ -126,9 +124,6 @@ export function parseArgs(argv) {
     else if (arg === '--judge-model' && next) { args.judgeModel = next; args.modelOverrideExplicit = true; i += 1; }
     else if (arg === '--judge-provider' && next) { args.judgeProvider = next; args.modelOverrideExplicit = true; i += 1; }
     else if (arg === '--keychain-account' && next) { args.keychainAccount = String(next).trim(); i += 1; }
-    else if (arg === '--predecessor-run' && next) { args.predecessorRun = String(next).trim().toLowerCase(); i += 1; }
-    else if (arg === '--successor-source-run' && next) { args.successorSourceRun = String(next).trim().toLowerCase(); i += 1; }
-    else if (arg === '--qualification-receipt' && next) { args.qualificationReceipt = path.resolve(next); i += 1; }
     else if (arg === '--output-root' && next) { args.outputRoot = path.resolve(next); i += 1; }
     else if (arg === '--resume-run' && next) { args.resumeRun = String(next).trim().toLowerCase(); i += 1; }
     else if (arg === '--full') args.full = true;
@@ -137,10 +132,11 @@ export function parseArgs(argv) {
     else if (arg === '--historical-v1') args.historicalV1 = true;
     else if (arg === '--cognitive') args.cognitive = true;
     else if (arg === '--keep-scratch-db') args.keepScratchDb = true;
+    else if (arg === '--public-reproduce') args.publicReproduce = true;
   }
   if (!Number.isInteger(args.sample) || args.sample < 1) throw new Error('--sample must be a positive integer');
-  if (![CANONICAL_BLIND_PROTOCOL, LOCOMO_OFFICIAL_PROTOCOL, POISONEDRAG_PROTOCOL_ID, TWIN_PRIME_G1P_PROTOCOL, TWIN_PRIME_G5_PROTOCOL, MUTMEM_V2_S7_PROTOCOL, MUTMEM_V2_S7_NATIVE_PROTOCOL].includes(args.protocol)) {
-    throw new Error('--protocol must be canonical-blind-v1|locomo-upstream-qa-v1|poisonedrag-n100-v1|twin-prime-g1p-v1|twin-prime-g5-v1|mutmem-v2-s7-v1|mutmem-v2-s7-native-v1');
+  if (![CANONICAL_BLIND_PROTOCOL, LOCOMO_OFFICIAL_PROTOCOL, POISONEDRAG_PROTOCOL_ID, TWIN_PRIME_G1P_PROTOCOL, TWIN_PRIME_G5_PROTOCOL].includes(args.protocol)) {
+    throw new Error('--protocol must be canonical-blind-v1|locomo-upstream-qa-v1|poisonedrag-n100-v1|twin-prime-g1p-v1|twin-prime-g5-v1');
   }
   if (args.protocol === LOCOMO_OFFICIAL_PROTOCOL) {
     if (args.benchmark !== 'locomo') throw new Error('locomo-upstream-qa-v1 requires --benchmark locomo');
@@ -187,69 +183,18 @@ export function parseArgs(argv) {
     if (!args.keychainAccount) throw new Error('twin-prime-g5-v1 requires --keychain-account');
     args.limit = 20;
   }
-  if (args.protocol === MUTMEM_V2_S7_PROTOCOL) {
-    if (args.benchmark !== 'both') throw new Error('mutmem-v2-s7-v1 requires --benchmark both');
-    if (args.historicalV1 || args.lifecycleProof || args.cognitive || args.full || args.smoke) {
-      throw new Error('mutmem-v2-s7-v1 conflicts with historical/lifecycle/cognitive/full/smoke modes');
-    }
-    if (!['b4', 'b5'].includes(args.gate)) {
-      throw new Error('mutmem-v2-s7-v1 requires --gate b4|b5');
-    }
-    if (args.gate === 'b4' && args.predecessorRun !== null) {
-      throw new Error('mutmem-v2-s7-v1 Gate10 forbids --predecessor-run');
-    }
-    if (args.gate === 'b5'
-      && !/^\d{14}_[0-9a-f]{6}$/.test(String(args.predecessorRun || ''))) {
-      throw new Error('mutmem-v2-s7-v1 Gate50 requires --predecessor-run <completed Gate10 run id>');
-    }
-    if (args.sampleExplicit) throw new Error('mutmem-v2-s7-v1 population is fixed by its frozen contract');
-    if (args.modelOverrideExplicit) throw new Error('mutmem-v2-s7-v1 model roles are fixed to GPT-5.5 and GPT-5.6 Terra');
-    if (args.limitExplicit && args.limit !== 20) throw new Error('mutmem-v2-s7-v1 requires --limit 20');
-    if (!args.keychainAccount) throw new Error('mutmem-v2-s7-v1 requires --keychain-account');
-    args.limit = 20;
-  }
-  if (args.protocol === MUTMEM_V2_S7_NATIVE_PROTOCOL) {
-    if (args.benchmark !== 'both') throw new Error('mutmem-v2-s7-native-v1 requires --benchmark both');
-    if (args.historicalV1 || args.lifecycleProof || args.cognitive || args.full || args.smoke) {
-      throw new Error('mutmem-v2-s7-native-v1 conflicts with historical/lifecycle/cognitive/full/smoke modes');
-    }
-    if (args.gate !== 'b5') {
-      throw new Error('mutmem-v2-s7-native-v1 requires --gate b5');
-    }
-    if (!/^\d{14}_[0-9a-f]{6}$/.test(String(args.predecessorRun || ''))) {
-      throw new Error('mutmem-v2-s7-native-v1 requires --predecessor-run <completed historical Gate50 run id>');
-    }
-    if (args.sampleExplicit) throw new Error('mutmem-v2-s7-native-v1 population is fixed by the frozen S7 contract');
-    if (args.modelOverrideExplicit) throw new Error('mutmem-v2-s7-native-v1 model roles are fixed to GPT-5.5 and GPT-5.6 Terra');
-    if (args.limitExplicit && args.limit !== 20) throw new Error('mutmem-v2-s7-native-v1 requires --limit 20');
-    if (!args.keychainAccount) throw new Error('mutmem-v2-s7-native-v1 requires --keychain-account');
-    if ((args.successorSourceRun === null) !== (args.qualificationReceipt === null)) {
-      throw new Error('mutmem-v2-s7-native-v1 successor reuse requires both --successor-source-run and --qualification-receipt');
-    }
-    if (args.successorSourceRun !== null
-      && !/^\d{14}_[0-9a-f]{6}$/.test(args.successorSourceRun)) {
-      throw new Error('--successor-source-run must be a canonical run id');
-    }
-    if (args.successorSourceRun !== null && args.resumeRun === args.successorSourceRun) {
-      throw new Error('--successor-source-run cannot equal --resume-run');
-    }
-    args.limit = 20;
-  }
-  if (args.protocol !== MUTMEM_V2_S7_NATIVE_PROTOCOL
-    && (args.successorSourceRun !== null || args.qualificationReceipt !== null)) {
-    throw new Error('successor corpus reuse is mutmem-v2-s7-native-v1 only');
-  }
   if (!Number.isInteger(args.limit) || args.limit < 1 || args.limit > 200) throw new Error('--limit must be 1..200');
   if (!Number.isInteger(args.port) || args.port < 1024 || args.port > 65535) throw new Error('--port must be 1024..65535');
   if (args.keychainAccount !== null
     && (!args.keychainAccount || args.keychainAccount.length > 128 || /\s/.test(args.keychainAccount))) {
     throw new Error('--keychain-account must be a non-empty Keychain account name without whitespace');
   }
-  if (args.resumeRun && !/^\d{14}_[0-9a-f]{6}$/.test(args.resumeRun)) throw new Error('--resume-run must be an existing canonical run id');
-  if (args.predecessorRun !== null
-    && !/^\d{14}_[0-9a-f]{6}$/.test(args.predecessorRun)) {
-    throw new Error('--predecessor-run must be a canonical run id');
+  if (args.agentId !== null
+    && (!/^[a-zA-Z0-9_-]{1,64}$/.test(args.agentId)
+      || ['housekeeper', 'aimos_flag_signer'].includes(args.agentId))) {
+    throw new Error('--agent-id must name the enrolled ordinary AIMOS agent');
   }
+  if (args.resumeRun && !/^\d{14}_[0-9a-f]{6}$/.test(args.resumeRun)) throw new Error('--resume-run must be an existing canonical run id');
   if ([9000, 9001, 9100].includes(args.port)) throw new Error(`port ${args.port} is reserved by a live HOM service`);
   if (!['both', 'locomo', 'longmemeval', 'poisonedrag'].includes(args.benchmark)) {
     throw new Error('--benchmark must be both|locomo|longmemeval|poisonedrag');
@@ -282,6 +227,19 @@ export function parseArgs(argv) {
   // --smoke overrides scope to the smallest complete canonical query run.
   if (args.smoke) { args.full = false; args.sample = 3; args.cognitive = false; }
   if (args.lifecycleProof) { args.full = false; args.sample = 3; args.cognitive = false; }
+  if (args.installedInstance) {
+    if (!/^[a-z][a-z0-9_-]{0,62}$/.test(args.installedInstance)) {
+      throw new Error('--installed-instance must be a valid installed AIMOS instance name');
+    }
+    if (args.portExplicit || args.keepScratchDb || args.lifecycleProof || args.historicalV1
+      || args.gate || [TWIN_PRIME_G1P_PROTOCOL, TWIN_PRIME_G5_PROTOCOL].includes(args.protocol)) {
+      throw new Error('installed-service mode conflicts with scratch lifecycle and historical protocol options');
+    }
+    if (!args.agentId) throw new Error('installed-service mode requires --agent-id for the enrolled ordinary agent');
+  }
+  if (args.publicReproduce && !args.installedInstance) {
+    throw new Error('public reproduce requires the installer-created --installed-instance');
+  }
   return args;
 }
 
@@ -293,14 +251,447 @@ function sha256File(file) {
   return sha256(readFileSync(file));
 }
 
-function urlForDatabase(name) {
-  const url = new URL(resolveAimosDatabaseUrl([]));
+function selfHashJson(value, field) {
+  const unsigned = { ...value };
+  delete unsigned[field];
+  return sha256(JSON.stringify(unsigned));
+}
+
+function assertTerminalInteger(value, field) {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`benchmark_terminal_${field}_invalid`);
+  }
+  return value;
+}
+
+function assertTerminalHash(value, field) {
+  if (!/^[0-9a-f]{64}$/.test(String(value || ''))) {
+    throw new Error(`benchmark_terminal_${field}_invalid`);
+  }
+  return String(value);
+}
+
+function assertTerminalRelativePath(value, field) {
+  const candidate = String(value || '');
+  if (!candidate || path.isAbsolute(candidate) || candidate.split(/[\\/]/).includes('..')) {
+    throw new Error(`benchmark_terminal_${field}_invalid`);
+  }
+  return candidate;
+}
+
+export function verifyBenchmarkTerminalProjection(projection) {
+  if (projection?.schema !== 'hom.aimos.benchmark-terminal-evidence/v1') {
+    throw new Error('benchmark_terminal_schema_invalid');
+  }
+  if (!/^[a-z0-9][a-z0-9_-]{5,63}$/i.test(String(projection.run_id || ''))) {
+    throw new Error('benchmark_terminal_run_id_invalid');
+  }
+  const canonicalProtocol = (projection.protocol === CANONICAL_BLIND_PROTOCOL
+      && ['longmemeval', 'locomo'].includes(projection.benchmark))
+    || (projection.protocol === LOCOMO_OFFICIAL_PROTOCOL && projection.benchmark === 'locomo');
+  const poisonedRagProtocol = projection.protocol === POISONEDRAG_PROTOCOL_ID
+    && projection.benchmark === 'poisonedrag';
+  if (!canonicalProtocol && !poisonedRagProtocol) {
+    throw new Error('benchmark_terminal_protocol_invalid');
+  }
+  const intended = assertTerminalInteger(projection.intended_n, 'intended_n');
+  const selected = assertTerminalInteger(projection.selected_n, 'selected_n');
+  const completed = assertTerminalInteger(projection.completed_n, 'completed_n');
+  const incomplete = assertTerminalInteger(projection.incomplete_n, 'incomplete_n');
+  const failed = assertTerminalInteger(projection.failed_n, 'failed_n');
+  const evaluated = assertTerminalInteger(projection.evaluated_n, 'evaluated_n');
+  if (intended < 1
+    || selected !== intended
+    || completed !== intended
+    || evaluated !== intended
+    || incomplete !== 0
+    || failed !== 0
+    || completed + incomplete !== selected) {
+    throw new Error('benchmark_terminal_denominator_invalid');
+  }
+  const expectedPhases = poisonedRagProtocol
+    ? []
+    : projection.protocol === LOCOMO_OFFICIAL_PROTOCOL
+      ? ['recall', 'generate']
+      : ['recall', 'generate', 'judge'];
+  if (!Array.isArray(projection.phases)
+    || projection.phases.length !== expectedPhases.length) {
+    throw new Error('benchmark_terminal_phase_set_invalid');
+  }
+  for (let index = 0; index < expectedPhases.length; index += 1) {
+    const phase = projection.phases[index];
+    if (phase?.phase !== expectedPhases[index]
+      || assertTerminalInteger(phase.selected_n, 'phase_selected_n') !== intended
+      || assertTerminalInteger(phase.completed_n, 'phase_completed_n') !== intended
+      || assertTerminalInteger(phase.missing_n, 'phase_missing_n') !== 0
+      || assertTerminalInteger(phase.failed_n, 'phase_failed_n') !== 0) {
+      throw new Error(`benchmark_terminal_phase_invalid:${expectedPhases[index]}`);
+    }
+    assertTerminalRelativePath(phase.file, 'phase_path');
+    assertTerminalHash(phase.summary_sha256, 'phase_summary_sha256');
+    assertTerminalHash(phase.file_sha256, 'phase_file_sha256');
+  }
+  assertTerminalRelativePath(projection.aggregate?.file, 'aggregate_path');
+  if (canonicalProtocol) {
+    assertTerminalHash(projection.selection_sha256, 'selection_sha256');
+    assertTerminalHash(projection.selection_file_sha256, 'selection_file_sha256');
+    assertTerminalRelativePath(projection.selection_file, 'selection_path');
+  } else {
+    assertTerminalHash(projection.execution_plan_sha256, 'execution_plan_sha256');
+    assertTerminalHash(projection.outcomes_root_sha256, 'outcomes_root_sha256');
+  }
+  assertTerminalHash(projection.aggregate?.file_sha256, 'aggregate_file_sha256');
+  assertTerminalHash(projection.aggregate?.summary_sha256, 'aggregate_summary_sha256');
+  assertTerminalHash(projection.aggregate?.rows_sha256, 'aggregate_rows_sha256');
+  const claimed = projection.terminal_evidence_sha256;
+  if (!claimed || claimed !== selfHashJson(projection, 'terminal_evidence_sha256')) {
+    throw new Error('benchmark_terminal_evidence_hash_invalid');
+  }
+  return projection;
+}
+
+export function buildCanonicalBenchmarkTerminalEvidence({ runId, protocol, benchmark, pass }) {
+  const selection = pass?.selection?.value;
+  const aggregate = pass?.aggregate?.value;
+  if (selection?.schema !== 'hom.canonical-query-selection/v1'
+    || selection.run_id !== runId
+    || selection.benchmark !== benchmark
+    || selection.question_count !== selection.entries?.length
+    || selection.selection_sha256 !== selfHashJson(selection, 'selection_sha256')) {
+    throw new Error('benchmark_terminal_selection_invalid');
+  }
+  const official = protocol === LOCOMO_OFFICIAL_PROTOCOL;
+  if (aggregate?.schema !== (official
+    ? 'hom.locomo-official-summary/v1'
+    : 'hom.canonical-benchmark-summary/v2')
+    || aggregate.run_id !== runId
+    || aggregate.benchmark !== benchmark
+    || aggregate.selection_sha256 !== selection.selection_sha256
+    || aggregate.summary_sha256 !== selfHashJson(aggregate, 'summary_sha256')
+    || (official && aggregate.protocol?.id !== LOCOMO_OFFICIAL_PROTOCOL)) {
+    throw new Error('benchmark_terminal_aggregate_invalid');
+  }
+  const metrics = aggregate.metrics || {};
+  const evaluated = official
+    ? metrics.official_qa?.evaluated
+    : metrics.judged_qa?.judged;
+  const phaseEntries = [
+    ['recall', pass.recall],
+    ['generate', pass.generate],
+    ...(official ? [] : [['judge', pass.judge]]),
+  ].map(([phaseName, artifact]) => {
+    const value = artifact?.value;
+    if (value?.schema !== 'hom.canonical-query-phase-summary/v1'
+      || value.run_id !== runId
+      || value.benchmark !== benchmark
+      || value.phase !== phaseName
+      || value.summary_sha256 !== selfHashJson(value, 'summary_sha256')) {
+      throw new Error(`benchmark_terminal_phase_summary_invalid:${phaseName}`);
+    }
+    return {
+      phase: phaseName,
+      file: artifact.file,
+      selected_n: value.selected,
+      completed_n: value.completed,
+      missing_n: value.missing,
+      failed_n: Array.isArray(value.failures) ? value.failures.length : -1,
+      summary_sha256: value.summary_sha256,
+      file_sha256: artifact.sha256,
+    };
+  });
+  const evidence = {
+    schema: 'hom.aimos.benchmark-terminal-evidence/v1',
+    run_id: runId,
+    protocol,
+    benchmark,
+    intended_n: selection.question_count,
+    selected_n: metrics.selected,
+    completed_n: metrics.complete,
+    incomplete_n: metrics.incomplete,
+    failed_n: metrics.incomplete,
+    evaluated_n: evaluated,
+    selection_sha256: selection.selection_sha256,
+    selection_file: pass.selection.file,
+    selection_file_sha256: pass.selection.sha256,
+    phases: phaseEntries,
+    aggregate: {
+      file: pass.aggregate.file,
+      file_sha256: pass.aggregate.sha256,
+      summary_sha256: aggregate.summary_sha256,
+      rows_sha256: aggregate.rows_sha256,
+    },
+  };
+  evidence.terminal_evidence_sha256 = selfHashJson(evidence, 'terminal_evidence_sha256');
+  return verifyBenchmarkTerminalProjection(evidence);
+}
+
+export function buildPoisonedRagTerminalEvidence({ runId, pass }) {
+  const summary = pass?.summary?.value;
+  if (summary?.schema !== 'hom.aimos.poisonedrag-summary/v1'
+    || summary.protocol !== POISONEDRAG_PROTOCOL_ID
+    || summary.run_id !== runId
+    || summary.denominator_complete !== true
+    || summary.summary_sha256 !== selfHashJson(summary, 'summary_sha256')
+    || !Array.isArray(summary.target_outcomes)
+    || summary.target_outcomes.length !== summary.completed_n) {
+    throw new Error('benchmark_terminal_poisonedrag_summary_invalid');
+  }
+  const evidence = {
+    schema: 'hom.aimos.benchmark-terminal-evidence/v1',
+    run_id: runId,
+    protocol: POISONEDRAG_PROTOCOL_ID,
+    benchmark: 'poisonedrag',
+    intended_n: summary.intended_n,
+    selected_n: summary.intended_n,
+    completed_n: summary.completed_n,
+    incomplete_n: summary.intended_n - summary.completed_n,
+    failed_n: summary.intended_n - summary.completed_n,
+    evaluated_n: summary.target_outcomes.length,
+    execution_plan_sha256: summary.execution_plan_sha256,
+    outcomes_root_sha256: sha256(JSON.stringify(summary.target_outcomes)),
+    phases: [],
+    aggregate: {
+      file: pass.summary.file,
+      file_sha256: pass.summary.sha256,
+      summary_sha256: summary.summary_sha256,
+      rows_sha256: sha256(JSON.stringify(summary.target_outcomes)),
+    },
+  };
+  evidence.terminal_evidence_sha256 = selfHashJson(evidence, 'terminal_evidence_sha256');
+  return verifyBenchmarkTerminalProjection(evidence);
+}
+
+export function verifyBenchmarkRunTerminalProjection(projection) {
+  if (projection?.schema !== 'hom.aimos.benchmark-run-terminal/v1'
+    || !/^[a-z0-9][a-z0-9_-]{5,63}$/i.test(String(projection.run_id || ''))
+    || !Array.isArray(projection.benchmarks)
+    || projection.benchmarks.length < 1) {
+    throw new Error('benchmark_run_terminal_shape_invalid');
+  }
+  const identities = new Set();
+  const observedBenchmarks = [];
+  let intended = 0;
+  let selected = 0;
+  let completed = 0;
+  let evaluated = 0;
+  let incomplete = 0;
+  let failed = 0;
+  for (const member of projection.benchmarks) {
+    verifyBenchmarkTerminalProjection(member);
+    if (member.run_id !== projection.run_id || member.protocol !== projection.protocol) {
+      throw new Error('benchmark_run_terminal_member_binding_invalid');
+    }
+    const identity = `${member.protocol}:${member.benchmark}`;
+    if (identities.has(identity)) throw new Error('benchmark_run_terminal_member_duplicate');
+    identities.add(identity);
+    observedBenchmarks.push(member.benchmark);
+    intended += member.intended_n;
+    selected += member.selected_n;
+    completed += member.completed_n;
+    evaluated += member.evaluated_n;
+    incomplete += member.incomplete_n;
+    failed += member.failed_n;
+  }
+  const expectedBenchmarks = projection.protocol === POISONEDRAG_PROTOCOL_ID
+    ? projection.requested_benchmark === 'poisonedrag' ? ['poisonedrag'] : []
+    : projection.protocol === LOCOMO_OFFICIAL_PROTOCOL
+      ? projection.requested_benchmark === 'locomo' ? ['locomo'] : []
+      : projection.protocol === CANONICAL_BLIND_PROTOCOL
+        ? projection.requested_benchmark === 'both'
+          ? ['longmemeval', 'locomo']
+          : ['longmemeval', 'locomo'].includes(projection.requested_benchmark)
+            ? [projection.requested_benchmark]
+            : []
+        : [];
+  if (expectedBenchmarks.length === 0
+    || JSON.stringify(observedBenchmarks) !== JSON.stringify(expectedBenchmarks)) {
+    throw new Error('benchmark_run_terminal_requested_benchmark_mismatch');
+  }
+  for (const [field, derived] of [
+    ['intended_n', intended],
+    ['selected_n', selected],
+    ['completed_n', completed],
+    ['evaluated_n', evaluated],
+    ['incomplete_n', incomplete],
+    ['failed_n', failed],
+  ]) {
+    if (assertTerminalInteger(projection[field], field) !== derived) {
+      throw new Error(`benchmark_run_terminal_${field}_mismatch`);
+    }
+  }
+  if (intended < 1 || selected !== intended || completed !== intended
+    || evaluated !== intended || incomplete !== 0 || failed !== 0
+    || projection.denominator_complete !== true) {
+    throw new Error('benchmark_run_terminal_denominator_invalid');
+  }
+  if (projection.run_terminal_sha256 !== selfHashJson(projection, 'run_terminal_sha256')) {
+    throw new Error('benchmark_run_terminal_hash_invalid');
+  }
+  return projection;
+}
+
+export function buildBenchmarkRunTerminalEvidence({ runId, protocol, requestedBenchmark, passes }) {
+  const benchmarks = [];
+  if (passes?.canonical) {
+    for (const benchmark of ['longmemeval', 'locomo']) {
+      const terminal = passes.canonical[benchmark]?.terminal;
+      if (terminal) benchmarks.push(terminal);
+    }
+  }
+  if (passes?.poisonedrag?.terminal) benchmarks.push(passes.poisonedrag.terminal);
+  const totals = benchmarks.reduce((accumulator, member) => ({
+    intended_n: accumulator.intended_n + member.intended_n,
+    selected_n: accumulator.selected_n + member.selected_n,
+    completed_n: accumulator.completed_n + member.completed_n,
+    evaluated_n: accumulator.evaluated_n + member.evaluated_n,
+    incomplete_n: accumulator.incomplete_n + member.incomplete_n,
+    failed_n: accumulator.failed_n + member.failed_n,
+  }), {
+    intended_n: 0,
+    selected_n: 0,
+    completed_n: 0,
+    evaluated_n: 0,
+    incomplete_n: 0,
+    failed_n: 0,
+  });
+  const evidence = {
+    schema: 'hom.aimos.benchmark-run-terminal/v1',
+    run_id: runId,
+    protocol,
+    requested_benchmark: requestedBenchmark,
+    benchmarks,
+    ...totals,
+    denominator_complete: totals.intended_n > 0
+      && totals.selected_n === totals.intended_n
+      && totals.completed_n === totals.intended_n
+      && totals.evaluated_n === totals.intended_n
+      && totals.incomplete_n === 0
+      && totals.failed_n === 0,
+  };
+  evidence.run_terminal_sha256 = selfHashJson(evidence, 'run_terminal_sha256');
+  return verifyBenchmarkRunTerminalProjection(evidence);
+}
+
+function readTerminalBoundArtifact(runDirectory, relativeFile, expectedSha256, parseJson = true) {
+  const relative = assertTerminalRelativePath(relativeFile, 'artifact_path');
+  const root = path.resolve(runDirectory);
+  const file = path.resolve(root, relative);
+  if (!file.startsWith(`${root}${path.sep}`)
+    || !existsSync(file)
+    || lstatSync(file).isSymbolicLink()
+    || !statSync(file).isFile()
+    || sha256File(file) !== expectedSha256) {
+    throw new Error(`benchmark_terminal_artifact_invalid:${relative}`);
+  }
+  return { file, value: parseJson ? JSON.parse(readFileSync(file, 'utf8')) : null };
+}
+
+export function verifyBenchmarkRunDirectoryTerminal(runDirectory) {
+  const root = path.resolve(runDirectory);
+  const summaryFile = path.join(root, 'benchmark-summary.json');
+  const statusFile = path.join(root, 'run-status.json');
+  const hashManifestFile = path.join(root, 'artifact-hashes.json');
+  for (const file of [summaryFile, statusFile, hashManifestFile]) {
+    if (!existsSync(file) || lstatSync(file).isSymbolicLink() || !statSync(file).isFile()) {
+      throw new Error(`benchmark_terminal_required_artifact_missing:${path.basename(file)}`);
+    }
+  }
+  const summary = JSON.parse(readFileSync(summaryFile, 'utf8'));
+  const status = JSON.parse(readFileSync(statusFile, 'utf8'));
+  const hashes = JSON.parse(readFileSync(hashManifestFile, 'utf8'));
+  const terminal = verifyBenchmarkRunTerminalProjection(summary.terminal);
+  if (summary.run_id?.toLowerCase() !== terminal.run_id
+    || status.state !== 'complete'
+    || status.phase !== 'complete'
+    || status.terminal?.run_terminal_sha256 !== terminal.run_terminal_sha256
+    || JSON.stringify(status.terminal) !== JSON.stringify(terminal)
+    || hashes['benchmark-summary.json'] !== sha256File(summaryFile)) {
+    throw new Error('benchmark_terminal_top_level_binding_invalid');
+  }
+  const proofName = existsSync(path.join(root, 'installed-service-proof.json'))
+    ? 'installed-service-proof.json'
+    : 'isolation-proof.json';
+  const proof = readTerminalBoundArtifact(root, proofName, hashes[proofName]).value;
+  if (proof.terminal?.run_terminal_sha256 !== terminal.run_terminal_sha256
+    || JSON.stringify(proof.terminal) !== JSON.stringify(terminal)) {
+    throw new Error('benchmark_terminal_proof_binding_invalid');
+  }
+  if (proofName === 'installed-service-proof.json'
+    && proof.proof_sha256 !== selfHashJson(proof, 'proof_sha256')) {
+    throw new Error('benchmark_terminal_execution_proof_hash_invalid');
+  }
+  const environment = readTerminalBoundArtifact(
+    root,
+    'environment.json',
+    hashes['environment.json'],
+  ).value;
+  if (environment.schema !== 'hom.aimos.benchmark-environment/v1'
+    || environment.authority !== 'descriptive_evidence_only'
+    || environment.environment_evidence_sha256 !== selfHashJson(environment, 'environment_evidence_sha256')
+    || summary.environment?.environment_evidence_sha256 !== environment.environment_evidence_sha256
+    || proof.environment?.environment_evidence_sha256 !== environment.environment_evidence_sha256
+    || JSON.stringify(summary.environment) !== JSON.stringify(environment)
+    || JSON.stringify(proof.environment) !== JSON.stringify(environment)) {
+    throw new Error('benchmark_terminal_environment_binding_invalid');
+  }
+  for (const member of terminal.benchmarks) {
+    if (member.selection_file) {
+      const selection = readTerminalBoundArtifact(
+        root,
+        member.selection_file,
+        member.selection_file_sha256,
+      ).value;
+      if (selection.selection_sha256 !== member.selection_sha256
+        || selection.selection_sha256 !== selfHashJson(selection, 'selection_sha256')) {
+        throw new Error('benchmark_terminal_selection_binding_invalid');
+      }
+    }
+    for (const phase of member.phases) {
+      const phaseSummary = readTerminalBoundArtifact(root, phase.file, phase.file_sha256).value;
+      if (phaseSummary.summary_sha256 !== phase.summary_sha256
+        || phaseSummary.summary_sha256 !== selfHashJson(phaseSummary, 'summary_sha256')) {
+        throw new Error(`benchmark_terminal_phase_binding_invalid:${phase.phase}`);
+      }
+    }
+    const aggregate = readTerminalBoundArtifact(
+      root,
+      member.aggregate.file,
+      member.aggregate.file_sha256,
+    ).value;
+    if (aggregate.summary_sha256 !== member.aggregate.summary_sha256
+      || aggregate.summary_sha256 !== selfHashJson(aggregate, 'summary_sha256')) {
+      throw new Error('benchmark_terminal_aggregate_binding_invalid');
+    }
+    if (member.protocol === POISONEDRAG_PROTOCOL_ID) {
+      if (sha256(JSON.stringify(aggregate.target_outcomes)) !== member.outcomes_root_sha256) {
+        throw new Error('benchmark_terminal_outcomes_binding_invalid');
+      }
+    } else {
+      readTerminalBoundArtifact(root, aggregate.rows_file, member.aggregate.rows_sha256, false);
+    }
+  }
+  return {
+    success: true,
+    run_id: terminal.run_id,
+    protocol: terminal.protocol,
+    benchmark_count: terminal.benchmarks.length,
+    intended_n: terminal.intended_n,
+    completed_n: terminal.completed_n,
+    evaluated_n: terminal.evaluated_n,
+    failed_n: terminal.failed_n,
+    incomplete_n: terminal.incomplete_n,
+    run_terminal_sha256: terminal.run_terminal_sha256,
+  };
+}
+
+function urlForDatabase(name, runtimeArgs = []) {
+  const url = new URL(resolveAimosDatabaseUrl(runtimeArgs));
   url.pathname = `/${name}`;
   return url.toString();
 }
 
-async function withPool(databaseName, fn) {
-  const pool = new Pool({ connectionString: urlForDatabase(databaseName), ssl: false, connectionTimeoutMillis: 5000 });
+async function withPool(databaseName, fn, runtimeArgs = []) {
+  const pool = new Pool({ connectionString: urlForDatabase(databaseName, runtimeArgs), ssl: false, connectionTimeoutMillis: 5000 });
   try { return await fn(pool); } finally { await pool.end().catch(() => {}); }
 }
 
@@ -320,18 +711,26 @@ async function canonicalFootprint() {
   });
 }
 
-async function scratchProof(databaseName) {
+async function scratchProof(databaseName, runtimeArgs = []) {
   return withPool(databaseName, async (pool) => {
     const result = await pool.query(
       `SELECT
          (SELECT count(*)::int FROM schema_migrations) AS migrations,
          (SELECT count(*)::int FROM aimos_memories) AS memories,
          (SELECT count(*)::int FROM aimos_memories WHERE source = 'guide:genesis-install') AS guide_memories,
+         (SELECT count(*)::int FROM aimos_memories WHERE source = 'heartbeat') AS heartbeat_memories,
          (SELECT count(*)::int FROM aimos_memories
            WHERE key LIKE 'benchmark:%'
               OR key LIKE 'sess:bench:%'
               OR source LIKE 'benchmark_%'
               OR source LIKE 'benchmark:%') AS benchmark_memories,
+         (SELECT count(*)::int FROM aimos_memories
+           WHERE source <> 'guide:genesis-install'
+             AND source <> 'heartbeat'
+             AND NOT (key LIKE 'benchmark:%'
+               OR key LIKE 'sess:bench:%'
+               OR source LIKE 'benchmark_%'
+               OR source LIKE 'benchmark:%')) AS operational_memories,
          (SELECT count(*)::int FROM aimos_memories m LEFT JOIN aimos_memory_provenance p ON p.memory_id=m.id WHERE p.memory_id IS NULL) AS orphaned_memories`
     );
     const hashes = await pool.query(
@@ -349,7 +748,105 @@ async function scratchProof(databaseName) {
       benchmark_provenance_rows: hashes.rowCount,
       benchmark_chain_fingerprint: sha256(JSON.stringify(hashes.rows))
     };
-  });
+  }, runtimeArgs);
+}
+
+async function buildBenchmarkEnvironmentEvidence({
+  args,
+  databaseName,
+  runtimeArgs = [],
+  runId,
+  startedAt,
+  executionMode,
+  serviceConfigurationSha256 = null,
+}) {
+  const database = await withPool(databaseName, async (pool) => {
+    const version = await pool.query(`SELECT current_setting('server_version') AS server_version`);
+    const extensions = await pool.query(
+      `SELECT extname, extversion FROM pg_extension ORDER BY extname`,
+    );
+    return {
+      server_version: version.rows[0].server_version,
+      extensions: Object.fromEntries(extensions.rows.map((row) => [row.extname, row.extversion])),
+    };
+  }, runtimeArgs);
+  const lock = JSON.parse(readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8'));
+  const dependencyVersions = Object.fromEntries(Object.keys(lock.packages?.['']?.dependencies || {})
+    .sort()
+    .map((name) => [name, lock.packages?.[`node_modules/${name}`]?.version || null]));
+  const cpus = os.cpus();
+  const configuration = canonicalRunConfiguration(args);
+  const identity = {
+    authority: 'descriptive_evidence_only',
+    execution_mode: executionMode,
+    service_configuration_sha256: serviceConfigurationSha256,
+    operating_system: {
+      platform: os.platform(),
+      release: os.release(),
+      architecture: os.arch(),
+    },
+    hardware: {
+      cpu_model: cpus[0]?.model || 'unknown',
+      logical_cpu_count: cpus.length,
+      total_memory_bytes: os.totalmem(),
+    },
+    runtime: {
+      node_version: process.version,
+      node_executable_sha256: sha256File(process.execPath),
+      package_lock_version: lock.lockfileVersion,
+      package_json_sha256: sha256File(path.join(ROOT, 'package.json')),
+      package_lock_sha256: sha256File(path.join(ROOT, 'package-lock.json')),
+      dependency_versions: dependencyVersions,
+    },
+    database,
+    concurrency: {
+      benchmark_query_workers: 1,
+      native_save_workers: 1,
+      provider_requests_per_question: configuration.protocol === POISONEDRAG_PROTOCOL_ID
+        ? 6
+        : configuration.protocol === LOCOMO_OFFICIAL_PROTOCOL
+          ? 1
+          : 2,
+      execution_order: 'deterministic_sequential_question_order',
+    },
+    protocol_configuration: configuration,
+    native_surfaces: {
+      save: '/aimos/save',
+      recall: '/aimos/recall',
+      second_runtime_owner: false,
+      second_database_authority: false,
+      second_identity_authority: false,
+    },
+  };
+  const evidence = {
+    schema: 'hom.aimos.benchmark-environment/v1',
+    run_id: runId,
+    started_at: startedAt,
+    captured_at: new Date().toISOString(),
+    ...identity,
+    environment_identity_sha256: sha256(JSON.stringify(identity)),
+  };
+  evidence.environment_evidence_sha256 = selfHashJson(evidence, 'environment_evidence_sha256');
+  return evidence;
+}
+
+async function retainBenchmarkEnvironmentEvidence(outputDir, input) {
+  const file = path.join(outputDir, 'environment.json');
+  const current = await buildBenchmarkEnvironmentEvidence(input);
+  if (existsSync(file)) {
+    if (lstatSync(file).isSymbolicLink() || !statSync(file).isFile()) {
+      throw new Error('benchmark_environment_artifact_invalid');
+    }
+    const retained = JSON.parse(readFileSync(file, 'utf8'));
+    if (retained.environment_evidence_sha256 !== selfHashJson(retained, 'environment_evidence_sha256')
+      || retained.environment_identity_sha256 !== current.environment_identity_sha256
+      || retained.run_id !== input.runId) {
+      throw new Error('benchmark_environment_resume_mismatch');
+    }
+    return retained;
+  }
+  writeFileSync(file, `${JSON.stringify(current, null, 2)}\n`, { flag: 'wx', mode: 0o600 });
+  return current;
 }
 
 function spawnLogged(command, args, logPath, { finite = true } = {}) {
@@ -547,6 +1044,32 @@ function readLatestJsonArtifact(dir, prefix) {
   };
 }
 
+function readCanonicalAggregate(dir, benchmark) {
+  const names = [];
+  const fixed = path.join(dir, `canonical-summary-${benchmark}.json`);
+  if (existsSync(fixed)) names.push(fixed);
+  const successorRoot = path.join(dir, 'aggregate-successors', benchmark);
+  if (existsSync(successorRoot)) {
+    for (const entry of readdirSync(successorRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const candidate = path.join(successorRoot, entry.name, `canonical-summary-${benchmark}.json`);
+      if (existsSync(candidate)) names.push(candidate);
+    }
+  }
+  const complete = names.map((file) => ({
+    file,
+    value: JSON.parse(readFileSync(file, 'utf8')),
+  })).filter((entry) => Number(entry.value?.metrics?.incomplete) === 0);
+  if (complete.length !== 1) {
+    throw new Error(`canonical_complete_aggregate_count_invalid:${benchmark}:${complete.length}`);
+  }
+  return {
+    file: path.relative(dir, complete[0].file),
+    sha256: sha256File(complete[0].file),
+    value: complete[0].value,
+  };
+}
+
 function canonicalSelections(args) {
   const benchmarks = args.benchmark === 'both'
     ? ['longmemeval', 'locomo']
@@ -572,6 +1095,9 @@ async function runModelPreflight(context, logDir, generatorModel = 'gpt-5.4') {
       '--live',
       '--generator-model', generatorModel,
       '--receipt-file', modelPreflightFile,
+      ...(context.databaseName ? ['--aimos-db', context.databaseName] : []),
+      ...(context.installedService ? ['--installed-service'] : []),
+      ...(context.runtimeCliArgs || []),
     ], path.join(logDir, 'model-access-preflight.log'));
   }
   if (lstatSync(modelPreflightFile).isSymbolicLink() || !statSync(modelPreflightFile).isFile()) {
@@ -612,6 +1138,10 @@ async function runCanonicalBenchmark(args, context) {
       '--run-id', context.runId,
       '--run-dir', context.outputDir,
       '--selection-file', selectionFile,
+      '--aimos-db', context.databaseName,
+      '--agent-id', context.agentId || 'housekeeper',
+      ...(context.installedService ? ['--installed-service'] : []),
+      ...(context.runtimeCliArgs || []),
     ];
     context.onPhase?.(`${benchmark}-prepare`);
     await spawnLogged(process.execPath, [
@@ -633,6 +1163,9 @@ async function runCanonicalBenchmark(args, context) {
       '--selection-file', selectionFile,
       '--aimos-db', context.databaseName,
       '--aimos-base', context.baseUrl,
+      '--agent-id', context.agentId || 'housekeeper',
+      ...(context.installedService ? ['--installed-service'] : []),
+      ...(context.runtimeCliArgs || []),
       '--dry-run',
     ], path.join(logDir, `${benchmark}-replay-preflight.log`));
     prepared.push({ benchmark, selectionFile, common });
@@ -651,6 +1184,9 @@ async function runCanonicalBenchmark(args, context) {
       '--selection-file', selectionFile,
       '--aimos-db', context.databaseName,
       '--aimos-base', context.baseUrl,
+      '--agent-id', context.agentId || 'housekeeper',
+      ...(context.installedService ? ['--installed-service'] : []),
+      ...(context.runtimeCliArgs || []),
       '--delay-ms', '2100',
       '--retries', '3',
     ], path.join(logDir, `${benchmark}-replay.log`));
@@ -696,7 +1232,7 @@ async function runCanonicalBenchmark(args, context) {
       '--selection-file', selectionFile,
     ], path.join(logDir, `${benchmark}-aggregate.log`));
 
-    canonical[benchmark] = {
+    const pass = {
       selection: {
         file: path.basename(selectionFile),
         sha256: sha256File(selectionFile),
@@ -708,18 +1244,21 @@ async function runCanonicalBenchmark(args, context) {
       judge: args.protocol === LOCOMO_OFFICIAL_PROTOCOL
         ? null
         : readLatestJsonArtifact(context.outputDir, `phase-judge-${benchmark}-`),
-      aggregate: {
-        file: args.protocol === LOCOMO_OFFICIAL_PROTOCOL
-          ? 'locomo-official-summary.json'
-          : `canonical-summary-${benchmark}.json`,
-        sha256: sha256File(path.join(context.outputDir, args.protocol === LOCOMO_OFFICIAL_PROTOCOL
-          ? 'locomo-official-summary.json'
-          : `canonical-summary-${benchmark}.json`)),
-        value: JSON.parse(readFileSync(path.join(context.outputDir, args.protocol === LOCOMO_OFFICIAL_PROTOCOL
-          ? 'locomo-official-summary.json'
-          : `canonical-summary-${benchmark}.json`), 'utf8')),
-      },
+      aggregate: args.protocol === LOCOMO_OFFICIAL_PROTOCOL
+        ? {
+          file: 'locomo-official-summary.json',
+          sha256: sha256File(path.join(context.outputDir, 'locomo-official-summary.json')),
+          value: JSON.parse(readFileSync(path.join(context.outputDir, 'locomo-official-summary.json'), 'utf8')),
+        }
+        : readCanonicalAggregate(context.outputDir, benchmark),
     };
+    pass.terminal = buildCanonicalBenchmarkTerminalEvidence({
+      runId: context.runId,
+      protocol: args.protocol,
+      benchmark,
+      pass,
+    });
+    canonical[benchmark] = pass;
   }
   return canonical;
 }
@@ -737,6 +1276,9 @@ async function runPoisonedRagBenchmark(args, context) {
     '--run-dir', context.outputDir,
     '--aimos-base', context.baseUrl,
     '--aimos-db', context.databaseName,
+    '--agent-id', context.agentId || 'housekeeper',
+    ...(context.installedService ? ['--installed-service'] : []),
+    ...(context.runtimeCliArgs || []),
     '--target-count', String(targetCount),
     '--delay-ms', '2100',
     '--retries', String(POISONEDRAG_MAX_ATTEMPTS),
@@ -748,6 +1290,10 @@ async function runPoisonedRagBenchmark(args, context) {
     '--run-id', context.runId,
     '--run-dir', context.outputDir,
     '--aimos-base', context.baseUrl,
+    '--aimos-db', context.databaseName,
+    '--agent-id', context.agentId || 'housekeeper',
+    ...(context.installedService ? ['--installed-service'] : []),
+    ...(context.runtimeCliArgs || []),
     '--target-count', String(targetCount),
     '--delay-ms', '2100',
     '--retries', String(POISONEDRAG_MAX_ATTEMPTS),
@@ -765,7 +1311,7 @@ async function runPoisonedRagBenchmark(args, context) {
     || summary.denominator_complete !== true) {
     throw new Error('poisonedrag_summary_invalid');
   }
-  return {
+  const pass = {
     model_preflight: modelPreflight,
     target_count: targetCount,
     summary: {
@@ -774,6 +1320,8 @@ async function runPoisonedRagBenchmark(args, context) {
       value: summary,
     },
   };
+  pass.terminal = buildPoisonedRagTerminalEvidence({ runId: context.runId, pass });
+  return pass;
 }
 
 function baseHarnessArgs(args, databaseName, baseUrl) {
@@ -852,80 +1400,6 @@ export function canonicalRunConfiguration(args) {
       t_enforcement_scope: 'exact_scratch_database_only',
       canonical_policy_unchanged: true,
       pilot_contract_sha256: pilotContract.pilot_contract_sha256,
-      artifact_manifest_sha256: artifactManifest.artifact_manifest_sha256,
-    };
-  }
-  if (args.protocol === MUTMEM_V2_S7_NATIVE_PROTOCOL) {
-    const selectionContractFile = path.join(MUTMEM_V2_S7_CONTRACT, 'selection-contract.json');
-    const artifactManifestFile = path.join(MUTMEM_V2_S7_CONTRACT, 'artifact-manifest.json');
-    const selectionContract = JSON.parse(readFileSync(selectionContractFile, 'utf8'));
-    const artifactManifest = JSON.parse(readFileSync(artifactManifestFile, 'utf8'));
-    return {
-      protocol: args.protocol,
-      benchmark: 'both',
-      gate: 'b5',
-      gate_name: 'gate50',
-      utility_questions: 50,
-      utility_arms: ['N1'],
-      historical_predecessor_gate50_run_id: args.predecessorRun,
-      successor_source_run_id: args.successorSourceRun,
-      successor_corpus_mode: args.successorSourceRun
-        ? 'exact_post_replay_pre_poison_database_clone'
-        : 'native_session_replay',
-      qualification_receipt_file_sha256: args.qualificationReceipt
-        ? sha256File(args.qualificationReceipt) : null,
-      poison_targets: 5,
-      poison_arms: ['P0', 'P1'],
-      recall_depth_k: 20,
-      poison_disclosure_k: 5,
-      generator: 'codex:gpt-5.5',
-      generator_reasoning: 'medium',
-      judge: 'codex:gpt-5.6-terra',
-      judge_reasoning: 'high',
-      phase_retries: 6,
-      signed_recall_governor: 'hom.aimos.mutmem-v2-s7-signed-envelope-governor/v1',
-      effective_policy_authority: 'none_permanent_native_gearbox',
-      scratch_only: true,
-      canonical_policy_unchanged: true,
-      signed_purge_on_success: false,
-      selection_contract_sha256: selectionContract.selection_contract_sha256,
-      artifact_manifest_sha256: artifactManifest.artifact_manifest_sha256,
-    };
-  }
-  if (args.protocol === MUTMEM_V2_S7_PROTOCOL) {
-    const selectionContractFile = path.join(MUTMEM_V2_S7_CONTRACT, 'selection-contract.json');
-    const artifactManifestFile = path.join(MUTMEM_V2_S7_CONTRACT, 'artifact-manifest.json');
-    const selectionContract = JSON.parse(readFileSync(selectionContractFile, 'utf8'));
-    const artifactManifest = JSON.parse(readFileSync(artifactManifestFile, 'utf8'));
-    const gateName = args.gate === 'b5' ? 'gate50' : 'gate10';
-    const utilityQuestions = gateName === 'gate50' ? 50 : 10;
-    return {
-      protocol: args.protocol,
-      benchmark: 'both',
-      gate: args.gate,
-      gate_name: gateName,
-      utility_questions: utilityQuestions,
-      utility_arms: ['M0', 'M1'],
-      predecessor_gate10_run_id: gateName === 'gate50' ? args.predecessorRun : null,
-      gate10_stop_retained: gateName === 'gate50',
-      latency_gate_rule: gateName === 'gate50'
-        ? 'enforced_candidate_m1_p95'
-        : 'max_arm_p95_frozen',
-      poison_targets: 5,
-      poison_arms: ['P0', 'P1'],
-      recall_depth_k: 20,
-      poison_disclosure_k: 5,
-      generator: 'codex:gpt-5.5',
-      generator_reasoning: 'medium',
-      judge: 'codex:gpt-5.6-terra',
-      judge_reasoning: 'high',
-      phase_retries: 6,
-      signed_save_interval_ms: 2100,
-      effective_policy_authority: 'signed_system_config_ledger',
-      scratch_only: true,
-      canonical_policy_unchanged: true,
-      signed_purge_on_success: true,
-      selection_contract_sha256: selectionContract.selection_contract_sha256,
       artifact_manifest_sha256: artifactManifest.artifact_manifest_sha256,
     };
   }
@@ -1095,274 +1569,6 @@ async function runTwinPrimeG5(args, context) {
   };
 }
 
-function verifiedS7ReplaySummary(
-  runDir,
-  runId,
-  databaseName,
-  benchmark,
-  selectionFile,
-  sessionsFile,
-) {
-  const selection = JSON.parse(readFileSync(selectionFile, 'utf8'));
-  const corpus = JSON.parse(readFileSync(sessionsFile, 'utf8'));
-  const selectedScopes = new Set(selection.entries.map((entry) => String(entry.scope_id)));
-  const selected = corpus.scopes.filter((scope) => selectedScopes.has(String(scope.scope_id)));
-  const expectedSessions = selected.reduce((sum, scope) => sum + scope.sessions.length, 0);
-  const expectedScopes = selectedScopes.size;
-  if (selected.length !== expectedScopes || expectedSessions < 1) {
-    throw new Error(`mutmem_v2_s7_replay_population_invalid:${benchmark}`);
-  }
-  const candidates = readdirSync(runDir)
-    .filter((name) => name.startsWith(`replay-summary-${benchmark}-`) && name.endsWith('.json'))
-    .sort()
-    .reverse();
-  for (const name of candidates) {
-    const file = path.join(runDir, name);
-    if (lstatSync(file).isSymbolicLink() || !lstatSync(file).isFile()) continue;
-    let summary;
-    try { summary = JSON.parse(readFileSync(file, 'utf8')); } catch { continue; }
-    const unsigned = { ...summary };
-    delete unsigned.summary_sha256;
-    if (summary?.schema === 'hom.canonical-replay-summary/v1'
-      && summary.run_id === runId
-      && summary.benchmark === benchmark
-      && summary.database_name === databaseName
-      && summary.completed_sessions === expectedSessions
-      && summary.totals?.sessions === expectedSessions
-      && summary.totals?.scopes === expectedScopes
-      && summary.failed_sessions === 0
-      && summary.summary_sha256 === sha256(JSON.stringify(unsigned))) {
-      return Object.freeze({ file, summary });
-    }
-  }
-  return null;
-}
-
-function bindS7SuccessorReplayReuse(args, context, gate) {
-  const binding = verifyS7SuccessorCorpusBinding({
-    root: ROOT,
-    outputDir: context.outputDir,
-    targetRun: context.runId,
-    targetDatabase: context.databaseName,
-    sourceRun: args.successorSourceRun,
-    qualificationFile: args.qualificationReceipt,
-  });
-  const sourceDir = path.join(args.outputRoot, args.successorSourceRun);
-  const currentSelectionFile = path.join(
-    context.outputDir, 'mutmem-v2-s7', gate, 'selection.json',
-  );
-  const sourceSelectionFile = path.join(
-    sourceDir, 'mutmem-v2-s7', gate, 'selection.json',
-  );
-  const currentPopulation = s7SelectionPopulationFingerprint(
-    readS7Json(currentSelectionFile, 20_000_000),
-  );
-  const sourcePopulation = s7SelectionPopulationFingerprint(
-    readS7Json(sourceSelectionFile, 20_000_000),
-  );
-  if (currentPopulation !== sourcePopulation
-    || sourcePopulation !== binding.binding.source_selection_population_sha256) {
-    throw new Error('mutmem_v2_s7_successor_selection_population_mismatch');
-  }
-  const replay = {};
-  for (const benchmark of ['locomo', 'longmemeval']) {
-    const retained = verifiedS7ReplaySummary(
-      sourceDir,
-      args.successorSourceRun,
-      `aimos_benchmark_${args.successorSourceRun}`,
-      benchmark,
-      path.join(sourceDir, `selection-${benchmark}.json`),
-      path.join(CORPUS_ROOT_FOR_S7(), `${benchmark}-sessions.json`),
-    );
-    if (!retained) {
-      throw new Error(`mutmem_v2_s7_successor_replay_summary_invalid:${benchmark}`);
-    }
-    replay[benchmark] = {
-      source_summary_file: path.relative(sourceDir, retained.file),
-      source_summary_file_sha256: sha256File(retained.file),
-      source_summary_sha256: retained.summary.summary_sha256,
-      completed_sessions: retained.summary.completed_sessions,
-      failed_sessions: retained.summary.failed_sessions,
-    };
-  }
-  const body = {
-    schema: 'hom.aimos.mutmem-v2-s7-successor-replay-reuse/v1',
-    target_run: context.runId,
-    target_database: context.databaseName,
-    source_run: args.successorSourceRun,
-    source_database: `aimos_benchmark_${args.successorSourceRun}`,
-    successor_corpus_binding_sha256: binding.binding.binding_sha256,
-    qualification_receipt_sha256: binding.binding.qualification.receipt_sha256,
-    selection_population_sha256: currentPopulation,
-    replay,
-    exact_database_clone_verified_before_server_start: true,
-    public_session_population_unchanged: true,
-    session_replay_skipped: true,
-    recall_authorized: false,
-    model_execution_authorized: false,
-    automatic_policy_activation: false,
-  };
-  const artifact = { ...body, binding_sha256: selfHash(body, 'binding_sha256') };
-  const file = path.join(
-    context.outputDir, 'mutmem-v2-s7', gate, 'successor-replay-reuse.json',
-  );
-  writeS7ImmutableJson(file, artifact);
-  return Object.freeze({ file, artifact });
-}
-
-async function runMutMemV2S7(args, context) {
-  const logDir = path.join(context.outputDir, 'logs');
-  mkdirSync(logDir, { recursive: true, mode: 0o700 });
-  const gate = args.gate === 'b5' ? 'gate50' : 'gate10';
-  const currentNative = args.protocol === MUTMEM_V2_S7_NATIVE_PROTOCOL;
-  const questionCount = gate === 'gate50' ? 50 : 10;
-  const predecessorArgs = gate === 'gate50'
-    ? ['--predecessor-run', args.predecessorRun]
-    : [];
-  const common = [
-    'eval/mutmem-v2/run-s7-gate10.mjs',
-    '--run-id', context.runId,
-    '--run-dir', context.outputDir,
-    '--gate', gate,
-    ...predecessorArgs,
-    ...(currentNative ? ['--current-native'] : []),
-  ];
-
-  context.onPhase?.(`mutmem-v2-s7-${gate}-prepare`);
-  await spawnLogged(process.execPath, [
-    'eval/mutmem-v2/prepare-s7-gate10-execution.mjs',
-    '--run-id', context.runId,
-    '--run-dir', context.outputDir,
-    '--gate', gate,
-    ...(currentNative ? ['--current-native'] : []),
-  ], path.join(logDir, `mutmem-v2-s7-${gate}-prepare.log`));
-
-  const modelPreflight = await runModelPreflight(context, logDir, 'gpt-5.5');
-  const successorReplay = args.successorSourceRun
-    ? bindS7SuccessorReplayReuse(args, context, gate)
-    : null;
-  if (successorReplay) {
-    console.log(JSON.stringify({
-      event: 'mutmem_v2_s7_successor_replay_reused',
-      source_run: args.successorSourceRun,
-      binding_sha256: successorReplay.artifact.binding_sha256,
-      session_replay_skipped: true,
-    }));
-  }
-  for (const benchmark of successorReplay ? [] : ['locomo', 'longmemeval']) {
-    const selectionFile = path.join(context.outputDir, `selection-${benchmark}.json`);
-    const sessionsFile = path.join(CORPUS_ROOT_FOR_S7(), `${benchmark}-sessions.json`);
-    const retainedReplay = verifiedS7ReplaySummary(
-      context.outputDir,
-      context.runId,
-      context.databaseName,
-      benchmark,
-      selectionFile,
-      sessionsFile,
-    );
-    if (retainedReplay) {
-      console.log(JSON.stringify({
-        event: 'mutmem_v2_s7_replay_reused',
-        benchmark,
-        completed_sessions: retainedReplay.summary.completed_sessions,
-        summary_sha256: retainedReplay.summary.summary_sha256,
-      }));
-      continue;
-    }
-    context.onPhase?.(`mutmem-v2-s7-${gate}-${benchmark}-replay-preflight`);
-    await spawnLogged(process.execPath, [
-      'eval/replay-sessions.mjs',
-      '--benchmark', benchmark,
-      '--sessions-file', sessionsFile,
-      '--run-id', context.runId,
-      '--run-dir', context.outputDir,
-      '--selection-file', selectionFile,
-      '--aimos-db', context.databaseName,
-      '--aimos-base', context.baseUrl,
-      '--dry-run',
-    ], path.join(logDir, `mutmem-v2-s7-${gate}-${benchmark}-replay-preflight.log`));
-    context.onPhase?.(`mutmem-v2-s7-${gate}-${benchmark}-replay`);
-    await spawnLogged(process.execPath, [
-      'eval/replay-sessions.mjs',
-      '--benchmark', benchmark,
-      '--sessions-file', sessionsFile,
-      '--run-id', context.runId,
-      '--run-dir', context.outputDir,
-      '--selection-file', selectionFile,
-      '--aimos-db', context.databaseName,
-      '--aimos-base', context.baseUrl,
-      '--delay-ms', '2100',
-      '--retries', '6',
-    ], path.join(logDir, `mutmem-v2-s7-${gate}-${benchmark}-replay.log`));
-  }
-
-  context.onPhase?.(`mutmem-v2-s7-${gate}-utility-recall`);
-  await spawnInteractive(process.execPath, [
-    ...common,
-    '--phase', 'utility-recall',
-    '--aimos-db', context.databaseName,
-    '--aimos-base', context.baseUrl,
-    '--server-pid', String(context.serverPid),
-    '--keychain-account', args.keychainAccount,
-    '--live',
-  ]);
-  context.onPhase?.(`mutmem-v2-s7-${gate}-poison-screen`);
-  await spawnLogged(process.execPath, [
-    ...common,
-    '--phase', 'poison-screen',
-    '--aimos-db', context.databaseName,
-    '--aimos-base', context.baseUrl,
-    '--server-pid', String(context.serverPid),
-    '--live',
-  ], path.join(logDir, `mutmem-v2-s7-${gate}-poison-screen.log`));
-
-  for (const phase of ['generate', 'judge', 'aggregate']) {
-    context.onPhase?.(`mutmem-v2-s7-${gate}-${phase}`);
-    await spawnLogged(process.execPath, [...common, '--phase', phase],
-      path.join(logDir, `mutmem-v2-s7-${gate}-${phase}.log`));
-  }
-  const summaryFile = path.join(context.outputDir, 'mutmem-v2-s7', gate, `${gate}-summary.json`);
-  if (!existsSync(summaryFile) || lstatSync(summaryFile).isSymbolicLink()) {
-    throw new Error(`mutmem_v2_s7_${gate}_summary_missing`);
-  }
-  const summary = JSON.parse(readFileSync(summaryFile, 'utf8'));
-  const terminalStates = currentNative
-    ? ['PASS_CURRENT_NATIVE_GATE50_AWAIT_OPERATOR_DECISION',
-        'STOP_CURRENT_NATIVE_GATE50', 'FAIL_SECURITY_GATE', 'INDETERMINATE_POPULATION']
-    : gate === 'gate10'
-    ? ['PASS_GATE10_AWAIT_OPERATOR_DECISION', 'STOP_UTILITY_REGRESSION',
-        'FAIL_SECURITY_GATE', 'INDETERMINATE_POPULATION']
-    : ['PASS_GATE50_AWAIT_OPERATOR_DECISION', 'STOP_GATE50_UTILITY_REGRESSION',
-        'FAIL_SECURITY_GATE', 'INDETERMINATE_POPULATION'];
-  const expectedSchema = currentNative
-    ? 'hom.aimos.mutmem-v2-s7-current-native-gate50-summary/v1'
-    : `hom.aimos.mutmem-v2-s7-${gate}-summary/v1`;
-  if (summary?.schema !== expectedSchema
-    || summary.run_id !== context.runId
-    || summary.gate !== gate
-    || (currentNative
-      ? summary.utility?.by_arm?.current_native_n1?.questions !== questionCount
-        || summary.utility?.by_arm?.historical_gate50_m1?.questions !== questionCount
-      : summary.utility?.by_arm?.M0?.questions !== questionCount
-        || summary.utility?.by_arm?.M1?.questions !== questionCount)
-    || !terminalStates.includes(summary.decision?.terminal_state)
-    || !/^[0-9a-f]{64}$/.test(String(summary.summary_sha256 || ''))) {
-    throw new Error(`mutmem_v2_s7_${gate}_summary_invalid`);
-  }
-  return {
-    model_preflight: modelPreflight,
-    summary: {
-      file: path.relative(context.outputDir, summaryFile),
-      sha256: sha256File(summaryFile),
-      value: summary,
-    },
-  };
-}
-
-function CORPUS_ROOT_FOR_S7() {
-  return path.join(ROOT, 'eval', 'data', 'canonical');
-}
-
 function writeRunStatus(outputDir, status) {
   const file = path.join(outputDir, 'run-status.json');
   const temporary = `${file}.tmp`;
@@ -1461,8 +1667,260 @@ export function writeRetryRecoveryReceipt(outputDir, runId, manifest) {
   return { file: path.basename(file), sha256: sha256File(file), value: receipt };
 }
 
+function installedRuntimeArgs(definition) {
+  return [
+    '--aimos-instance', definition.instance,
+    '--aimos-postgres-port', String(definition.postgres_port),
+  ];
+}
+
+async function requireInstalledBenchmarkService(definition) {
+  const origin = `http://127.0.0.1:${definition.port}`;
+  const response = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(10_000) });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body.ready !== true
+    || body.runtime?.database_name !== definition.database
+    || Number(body.runtime?.server_port) !== Number(definition.port)
+    || body.runtime?.benchmark_scratch !== false) {
+    throw new Error('installed_benchmark_service_identity_mismatch');
+  }
+  return { origin, health: body };
+}
+
+function installedDatasetBindings(args) {
+  if (args.protocol === POISONEDRAG_PROTOCOL_ID) {
+    return {
+      poisonedrag_source_lock: {
+        file: path.relative(ROOT, POISONEDRAG_SOURCE_LOCK),
+        sha256: sha256File(POISONEDRAG_SOURCE_LOCK),
+      },
+      poisonedrag_public_target_lock: {
+        file: path.relative(ROOT, POISONEDRAG_PUBLIC_LOCK),
+        sha256: sha256File(POISONEDRAG_PUBLIC_LOCK),
+      },
+      poisonedrag_private_target_manifest: {
+        file: 'n100-private-target-manifest.json',
+        sha256: sha256File(path.join(POISONEDRAG_PRIVATE_ROOT, 'n100-private-target-manifest.json')),
+        redistributed: false,
+      },
+      poisonedrag_corpus_resolution: {
+        file: 'n100-corpus-resolution.json',
+        sha256: sha256File(path.join(POISONEDRAG_PRIVATE_ROOT, 'n100-corpus-resolution.json')),
+        redistributed: false,
+      },
+      poisonedrag_candidate_pool: {
+        file: 'n100-candidate-pool.jsonl',
+        sha256: sha256File(path.join(POISONEDRAG_PRIVATE_ROOT, 'n100-candidate-pool.jsonl')),
+        redistributed: false,
+      },
+    };
+  }
+  const corpusManifest = path.join(ROOT, 'eval', 'data', 'canonical', 'corpus-manifest.json');
+  return {
+    longmemeval: { path: args.longmemevalFile, sha256: sha256File(args.longmemevalFile) },
+    locomo: { path: LOCOMO_DATASET, sha256: sha256File(LOCOMO_DATASET) },
+    canonical_corpus_manifest: { path: corpusManifest, sha256: sha256File(corpusManifest) },
+  };
+}
+
+async function runInstalledServiceBenchmark(args) {
+  const definition = readInstalledUserServiceDefinition(args.installedInstance);
+  const serviceManifest = buildUserServiceManifest(definition);
+  const { origin, health: healthBefore } = await requireInstalledBenchmarkService(definition);
+  const runtimeCliArgs = installedRuntimeArgs(definition);
+  const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
+  const runId = args.resumeRun || `${stamp}_${randomBytes(3).toString('hex')}`;
+  const outputDir = path.join(args.outputRoot, runId);
+  const resuming = Boolean(args.resumeRun);
+  mkdirSync(args.outputRoot, { recursive: true, mode: 0o700 });
+  if (resuming) {
+    if (!existsSync(outputDir) || statSync(outputDir).isSymbolicLink()) {
+      throw new Error('resume_run_directory_missing_or_invalid');
+    }
+  } else {
+    mkdirSync(outputDir, { recursive: false, mode: 0o700 });
+  }
+
+  const datasets = installedDatasetBindings(args);
+  const configuration = {
+    ...canonicalRunConfiguration(args),
+    execution_mode: 'installed-service',
+    installed_instance: definition.instance,
+    service_configuration_sha256: serviceManifest.configuration_sha256,
+    database_name: definition.database,
+    postgres_port: definition.postgres_port,
+    http_port: definition.port,
+    agent_id: args.agentId,
+    lifecycle_authority: false,
+  };
+  const observedBefore = await scratchProof(definition.database, runtimeCliArgs);
+  let baseline = observedBefore;
+  let startedAt;
+  if (resuming) {
+    const retainedManifest = readRunManifest(outputDir, runId, definition.database, configuration);
+    baseline = retainedManifest.baseline;
+    startedAt = retainedManifest.started_at;
+    if (!baseline || baseline.orphaned_memories !== 0 || baseline.operational_memories !== 0) {
+      throw new Error('installed_benchmark_baseline_invalid');
+    }
+  } else {
+    if (observedBefore.orphaned_memories !== 0) throw new Error('installed_benchmark_service_has_orphaned_memories');
+    if (observedBefore.operational_memories !== 0) {
+      throw new Error('installed_benchmark_service_is_not_fresh_reproduction_state');
+    }
+    startedAt = new Date().toISOString();
+    writeRunManifest(outputDir, {
+      run_id: runId,
+      database_name: definition.database,
+      started_at: startedAt,
+      configuration,
+      datasets,
+      baseline,
+      canonical_before: null,
+    });
+  }
+
+  const environment = await retainBenchmarkEnvironmentEvidence(outputDir, {
+    args,
+    databaseName: definition.database,
+    runtimeArgs: runtimeCliArgs,
+    runId: runId.toLowerCase(),
+    startedAt,
+    executionMode: 'installed-service',
+    serviceConfigurationSha256: serviceManifest.configuration_sha256,
+  });
+
+  const passes = {};
+  const context = {
+    runId: runId.toLowerCase(),
+    databaseName: definition.database,
+    outputDir,
+    baseUrl: origin,
+    runtimeCliArgs,
+    installedService: true,
+    agentId: args.agentId,
+    onPhase: (phase) => writeRunStatus(outputDir, {
+      run_id: runId,
+      database_name: definition.database,
+      state: 'running',
+      phase,
+      resumable: true,
+      execution_mode: 'installed-service',
+    }),
+  };
+  writeRunStatus(outputDir, {
+    run_id: runId,
+    database_name: definition.database,
+    state: 'running',
+    phase: resuming ? 'installed-service-resume' : 'installed-service-preflight',
+    resumable: true,
+    execution_mode: 'installed-service',
+  });
+
+  try {
+    if (args.protocol === POISONEDRAG_PROTOCOL_ID) {
+      passes.poisonedrag = await runPoisonedRagBenchmark(args, context);
+    } else {
+      passes.canonical = await runCanonicalBenchmark(args, context);
+    }
+    const terminal = buildBenchmarkRunTerminalEvidence({
+      runId: context.runId,
+      protocol: args.protocol,
+      requestedBenchmark: args.benchmark,
+      passes,
+    });
+    const afterBenchmark = await scratchProof(definition.database, runtimeCliArgs);
+    if (afterBenchmark.orphaned_memories !== 0) {
+      throw new Error(`installed database has ${afterBenchmark.orphaned_memories} orphaned memories`);
+    }
+    if (afterBenchmark.benchmark_memories <= baseline.benchmark_memories) {
+      throw new Error('benchmark ingestion produced no run-specific installed memory delta');
+    }
+    const { health: healthAfter } = await requireInstalledBenchmarkService(definition);
+    const proof = {
+      schema: 'hom.aimos.installed-benchmark-execution/v1',
+      run_id: runId,
+      protocol: args.protocol,
+      benchmark: args.benchmark,
+      execution_mode: 'installed-service',
+      installation: {
+        instance: definition.instance,
+        configuration_sha256: serviceManifest.configuration_sha256,
+        source_root: definition.source_root,
+        database_name: definition.database,
+        postgres_port: definition.postgres_port,
+        http_port: definition.port,
+        agent_id: args.agentId,
+      },
+      lifecycle: {
+        genesis: false,
+        database_create_or_clone: false,
+        child_server_spawn: false,
+        service_stop_or_restart: false,
+        purge: false,
+      },
+      datasets,
+      environment,
+      baseline,
+      after_benchmark: afterBenchmark,
+      health_before: healthBefore,
+      health_after: healthAfter,
+      passes,
+      terminal,
+    };
+    proof.proof_sha256 = sha256(JSON.stringify(proof));
+    writeFileSync(path.join(outputDir, 'installed-service-proof.json'), `${JSON.stringify(proof, null, 2)}\n`, { mode: 0o600 });
+    writeFileSync(path.join(outputDir, 'benchmark-summary.json'), `${JSON.stringify({
+      run_id: runId,
+      mode: 'installed-service',
+      benchmark: args.benchmark,
+      protocol: args.protocol,
+      passes,
+      terminal,
+      environment,
+    }, null, 2)}\n`, { mode: 0o600 });
+    writeFileSync(path.join(outputDir, 'reproduce-command.txt'),
+      `npm run reproduce -- --installed-instance ${definition.instance} --agent-id ${args.agentId}${args.full ? ' --full' : ` --sample ${args.sample}`} --benchmark ${args.benchmark} --protocol ${args.protocol} --limit ${args.limit}${args.keychainAccount ? ` --keychain-account ${args.keychainAccount}` : ''}\n`);
+    writeFileSync(path.join(outputDir, 'artifact-hashes.json'), `${JSON.stringify(await artifactHashes(outputDir), null, 2)}\n`);
+    writeRunStatus(outputDir, {
+      run_id: runId,
+      database_name: definition.database,
+      state: 'complete',
+      phase: 'complete',
+      resumable: false,
+      execution_mode: 'installed-service',
+      terminal,
+    });
+    console.log(JSON.stringify({ output_dir: outputDir, installation: proof.installation, passes }, null, 2));
+  } catch (error) {
+    appendFileSync(path.join(outputDir, 'diagnostics.jsonl'), `${JSON.stringify({
+      schema: 'hom.aimos.benchmark-diagnostic/v1',
+      observed_at: new Date().toISOString(),
+      run_id: runId,
+      protocol: args.protocol,
+      database_name: definition.database,
+      execution_mode: 'installed-service',
+      lifecycle_authority: false,
+      error_name: String(error?.name || 'Error').slice(0, 128),
+      error_message: String(error?.message || error || 'unknown_error').slice(0, 2000),
+    })}\n`, { mode: 0o600 });
+    writeRunStatus(outputDir, {
+      run_id: runId,
+      database_name: definition.database,
+      state: 'failed',
+      phase: 'failed',
+      resumable: true,
+      execution_mode: 'installed-service',
+      error: { name: String(error?.name || 'Error'), message: String(error?.message || error) },
+      resume_command: `npm run reproduce -- --installed-instance ${definition.instance} --agent-id ${args.agentId} --resume-run ${runId} --benchmark ${args.benchmark} --protocol ${args.protocol} --limit ${args.limit}`,
+    });
+    throw error;
+  }
+}
+
 async function main() {
   const args = parseArgs(process.argv);
+  if (args.installedInstance) return runInstalledServiceBenchmark(args);
   const stamp = new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14);
   const runId = args.resumeRun || `${stamp}_${randomBytes(3).toString('hex')}`;
   const databaseName = `aimos_benchmark_${runId.toLowerCase()}`;
@@ -1519,53 +1977,7 @@ async function main() {
   if (currentCanonicalFootprint.benchmark_rows !== 0) {
     throw new Error('canonical AIMOS already contains benchmark memories; run the authorized cleanup ceremony before benchmarking');
   }
-  const datasets = [MUTMEM_V2_S7_PROTOCOL, MUTMEM_V2_S7_NATIVE_PROTOCOL].includes(args.protocol)
-    ? {
-        canonical_corpus_manifest: {
-          path: path.join(ROOT, 'eval', 'data', 'canonical', 'corpus-manifest.json'),
-          sha256: sha256File(path.join(ROOT, 'eval', 'data', 'canonical', 'corpus-manifest.json')),
-        },
-        locomo_sessions: {
-          path: path.join(ROOT, 'eval', 'data', 'canonical', 'locomo-sessions.json'),
-          sha256: sha256File(path.join(ROOT, 'eval', 'data', 'canonical', 'locomo-sessions.json')),
-        },
-        longmemeval_sessions: {
-          path: path.join(ROOT, 'eval', 'data', 'canonical', 'longmemeval-sessions.json'),
-          sha256: sha256File(path.join(ROOT, 'eval', 'data', 'canonical', 'longmemeval-sessions.json')),
-        },
-        s7_selection_contract: {
-          path: path.join(MUTMEM_V2_S7_CONTRACT, 'selection-contract.json'),
-          sha256: sha256File(path.join(MUTMEM_V2_S7_CONTRACT, 'selection-contract.json')),
-        },
-        s7_artifact_manifest: {
-          path: path.join(MUTMEM_V2_S7_CONTRACT, 'artifact-manifest.json'),
-          sha256: sha256File(path.join(MUTMEM_V2_S7_CONTRACT, 'artifact-manifest.json')),
-        },
-        poisonedrag_source_lock: {
-          file: path.relative(ROOT, POISONEDRAG_SOURCE_LOCK),
-          sha256: sha256File(POISONEDRAG_SOURCE_LOCK),
-        },
-        poisonedrag_public_target_lock: {
-          file: path.relative(ROOT, POISONEDRAG_PUBLIC_LOCK),
-          sha256: sha256File(POISONEDRAG_PUBLIC_LOCK),
-        },
-        poisonedrag_private_target_manifest: {
-          file: 'n100-private-target-manifest.json',
-          sha256: sha256File(path.join(POISONEDRAG_PRIVATE_ROOT, 'n100-private-target-manifest.json')),
-          redistributed: false,
-        },
-        poisonedrag_corpus_resolution: {
-          file: 'n100-corpus-resolution.json',
-          sha256: sha256File(path.join(POISONEDRAG_PRIVATE_ROOT, 'n100-corpus-resolution.json')),
-          redistributed: false,
-        },
-        poisonedrag_candidate_pool: {
-          file: 'n100-candidate-pool.jsonl',
-          sha256: sha256File(path.join(POISONEDRAG_PRIVATE_ROOT, 'n100-candidate-pool.jsonl')),
-          redistributed: false,
-        },
-      }
-    : args.protocol === POISONEDRAG_PROTOCOL_ID
+  const datasets = args.protocol === POISONEDRAG_PROTOCOL_ID
     ? {
         poisonedrag_source_lock: {
           file: path.relative(ROOT, POISONEDRAG_SOURCE_LOCK),
@@ -1646,8 +2058,8 @@ async function main() {
   const startedAt = resumeManifest?.started_at || new Date().toISOString();
   const passes = {};
   let health = null;
+  let environment = null;
   let baseline = resumeManifest?.baseline || null;
-  let successorCorpus = resumeManifest?.successor_corpus || null;
   let resumable = false;
   const resumeScopeArgs = args.full
     ? '--full'
@@ -1662,69 +2074,19 @@ async function main() {
       run_id: runId,
       database_name: databaseName,
       state: resuming ? 'resuming' : 'initializing',
-      phase: resuming
-        ? 'scratch-server-start'
-        : args.successorSourceRun
-          ? 'successor-corpus-clone'
-          : 'genesis-install',
+      phase: resuming ? 'scratch-server-start' : 'genesis-install',
       resumable: resuming,
     });
     if (resuming) {
       if (!await databaseExists(databaseName)) throw new Error('resume_scratch_database_missing');
       scratchCreated = true;
-      if (args.successorSourceRun) {
-        const verified = verifyS7SuccessorCorpusBinding({
-          root: ROOT,
-          outputDir,
-          targetRun: runId.toLowerCase(),
-          targetDatabase: databaseName,
-          sourceRun: args.successorSourceRun,
-          qualificationFile: args.qualificationReceipt,
-        });
-        if (!successorCorpus
-          || successorCorpus.binding_sha256 !== verified.binding.binding_sha256
-          || successorCorpus.file_sha256 !== verified.file_sha256) {
-          throw new Error('mutmem_v2_s7_successor_resume_manifest_binding_mismatch');
-        }
-      }
       resumable = Boolean(args.keepScratchDb
         && existsSync(path.join(outputDir, 'run-manifest.json')));
     } else {
-      if (args.successorSourceRun) {
-        let clone;
-        try {
-          clone = await createS7SuccessorCorpusClone({
-            root: ROOT,
-            outputRoot: args.outputRoot,
-            outputDir,
-            targetRun: runId.toLowerCase(),
-            targetDatabase: databaseName,
-            sourceRun: args.successorSourceRun,
-            qualificationFile: args.qualificationReceipt,
-          });
-        } finally {
-          scratchCreated = await databaseExists(databaseName);
-        }
-        successorCorpus = {
-          schema: clone.binding.schema,
-          file: path.relative(outputDir, clone.file),
-          file_sha256: clone.file_sha256,
-          binding_sha256: clone.binding.binding_sha256,
-          source_run: clone.binding.source_run,
-          source_database: clone.binding.source_database,
-          source_selection_population_sha256:
-            clone.binding.source_selection_population_sha256,
-          qualification_receipt_sha256:
-            clone.binding.qualification.receipt_sha256,
-          source_closure_sha256:
-            clone.binding.qualification.source_closure_sha256,
-        };
-      } else {
-        scratchCreated = true;
-        await spawnLogged(process.execPath, [
-          'scripts/genesis-install.mjs', '--aimos-db', databaseName, '--aimos-port', String(args.port)
-        ], installerLog);
-      }
+      scratchCreated = true;
+      await spawnLogged(process.execPath, [
+        'scripts/genesis-install.mjs', '--aimos-db', databaseName, '--aimos-port', String(args.port)
+      ], installerLog);
       baseline = await scratchProof(databaseName);
       writeRunManifest(outputDir, {
         run_id: runId,
@@ -1733,7 +2095,6 @@ async function main() {
         configuration,
         datasets,
         baseline,
-        ...(successorCorpus ? { successor_corpus: successorCorpus } : {}),
         canonical_before: canonicalBefore,
       });
       resumable = Boolean(args.keepScratchDb
@@ -1743,6 +2104,13 @@ async function main() {
       'server.js', '--aimos-db', databaseName, '--aimos-port', String(args.port)
     ], serverLog, { finite: false });
     health = await waitForHealth(baseUrl, server, databaseName);
+    environment = await retainBenchmarkEnvironmentEvidence(outputDir, {
+      args,
+      databaseName,
+      runId: runId.toLowerCase(),
+      startedAt,
+      executionMode: 'isolated-native',
+    });
     resumable = Boolean(args.keepScratchDb
       && scratchCreated
       && !scratchPurged
@@ -1859,21 +2227,6 @@ async function main() {
           resumable,
         }),
       });
-    } else if ([MUTMEM_V2_S7_PROTOCOL, MUTMEM_V2_S7_NATIVE_PROTOCOL].includes(args.protocol)) {
-      passes.mutmem_v2_s7 = await runMutMemV2S7(args, {
-        runId: runId.toLowerCase(),
-        databaseName,
-        outputDir,
-        baseUrl,
-        serverPid: server.pid,
-        onPhase: (phase) => writeRunStatus(outputDir, {
-          run_id: runId,
-          database_name: databaseName,
-          state: 'running',
-          phase,
-          resumable,
-        }),
-      });
     } else {
       passes.canonical = await runCanonicalBenchmark(args, {
         runId: runId.toLowerCase(),
@@ -1890,6 +2243,17 @@ async function main() {
       });
     }
 
+    const terminal = args.lifecycleProof
+      || args.historicalV1
+      || [TWIN_PRIME_G1P_PROTOCOL, TWIN_PRIME_G5_PROTOCOL].includes(args.protocol)
+      ? null
+      : buildBenchmarkRunTerminalEvidence({
+          runId: runId.toLowerCase(),
+          protocol: args.protocol,
+          requestedBenchmark: args.benchmark,
+          passes,
+        });
+
     await stopChild(server);
     server = null;
 
@@ -1903,6 +2267,7 @@ async function main() {
       baseline,
       after_benchmark: scratchAfter,
       datasets,
+      environment,
       passes,
     }, null, 2)}\n`);
     const prePurgeHashes = await artifactHashes(outputDir);
@@ -1913,7 +2278,7 @@ async function main() {
     );
 
     restoreSharedFiles();
-    const purge = args.keepScratchDb && args.protocol !== MUTMEM_V2_S7_PROTOCOL
+    const purge = args.keepScratchDb
       ? null
       : await runSignedScratchPurge(databaseName, purgeReceiptPath);
     if (purge) {
@@ -1938,11 +2303,7 @@ async function main() {
               ? 'twin-prime-g1p'
               : args.protocol === TWIN_PRIME_G5_PROTOCOL
                 ? 'twin-prime-g5'
-                : args.protocol === MUTMEM_V2_S7_PROTOCOL
-                  ? 'mutmem-v2-s7'
-                  : args.protocol === MUTMEM_V2_S7_NATIVE_PROTOCOL
-                    ? 'mutmem-v2-s7-current-native'
-              : 'canonical-single-query',
+                : 'canonical-single-query',
       protocol: args.protocol,
       benchmark: args.benchmark,
       scope: args.lifecycleProof
@@ -1951,11 +2312,7 @@ async function main() {
           ? `label-blind:${args.sample}-per-dataset`
           : args.protocol === TWIN_PRIME_G5_PROTOCOL
             ? 'gate10:10-questions:four-arms'
-            : args.protocol === MUTMEM_V2_S7_PROTOCOL
-              ? `${args.gate === 'b5' ? 'gate50:50' : 'gate10:10'}-utility-questions:two-arms:5-poison-targets:two-policies`
-              : args.protocol === MUTMEM_V2_S7_NATIVE_PROTOCOL
-                ? `gate50:50-current-native:5-poison-targets:source-${args.successorSourceRun ? 'bound-clone' : 'replay'}`
-          : args.full ? 'full' : (args.gate || (args.smoke ? `smoke:${args.sample}` : `sample:${args.sample}`)),
+            : args.full ? 'full' : (args.gate || (args.smoke ? `smoke:${args.sample}` : `sample:${args.sample}`)),
       recall_depth_k: args.limit,
       cognitive: args.lifecycleProof
         ? false
@@ -1971,11 +2328,9 @@ async function main() {
                 ? false
                 : args.protocol === TWIN_PRIME_G5_PROTOCOL
                   ? { generator: 'codex:gpt-5.5', generator_reasoning: 'medium', judge: 'codex:gpt-5.6-terra', judge_reasoning: 'high' }
-                  : [MUTMEM_V2_S7_PROTOCOL, MUTMEM_V2_S7_NATIVE_PROTOCOL].includes(args.protocol)
-                    ? { generator: 'codex:gpt-5.5', generator_reasoning: 'medium', judge: 'codex:gpt-5.6-terra', judge_reasoning: 'high' }
-                : { generator: 'codex:gpt-5.4', judge: 'codex:gpt-5.6-terra', judge_reasoning: 'high' },
+                  : { generator: 'codex:gpt-5.4', judge: 'codex:gpt-5.6-terra', judge_reasoning: 'high' },
       datasets,
-      successor_corpus: successorCorpus,
+      environment,
       scratch: {
         database_name: databaseName,
         port: args.port,
@@ -1990,10 +2345,11 @@ async function main() {
       retry_recovery: retryRecovery,
       health
     };
+    if (terminal) isolationProof.terminal = terminal;
     writeFileSync(path.join(outputDir, 'isolation-proof.json'), `${JSON.stringify(isolationProof, null, 2)}\n`);
-    writeFileSync(path.join(outputDir, 'benchmark-summary.json'), `${JSON.stringify({ run_id: runId, mode: isolationProof.mode, benchmark: args.benchmark, scope: isolationProof.scope, recall_depth_k: args.limit, passes }, null, 2)}\n`);
+    writeFileSync(path.join(outputDir, 'benchmark-summary.json'), `${JSON.stringify({ run_id: runId, mode: isolationProof.mode, benchmark: args.benchmark, scope: isolationProof.scope, recall_depth_k: args.limit, environment, passes, ...(terminal ? { terminal } : {}) }, null, 2)}\n`);
     writeFileSync(path.join(outputDir, 'reproduce-command.txt'),
-      `node scripts/benchmark/run-isolated.mjs${args.lifecycleProof ? ' --lifecycle-proof' : args.full ? ' --full' : args.gate ? ` --gate ${args.gate}` : ` --sample ${args.sample}`}${args.historicalV1 ? ' --historical-v1' : ''}${args.cognitive ? ' --cognitive' : ''} --benchmark ${args.benchmark} --protocol ${args.protocol} --port ${args.port} --limit ${args.limit}${args.keychainAccount ? ` --keychain-account ${args.keychainAccount}` : ''}${args.predecessorRun ? ` --predecessor-run ${args.predecessorRun}` : ''}${args.successorSourceRun ? ` --successor-source-run ${args.successorSourceRun}` : ''}${args.qualificationReceipt ? ` --qualification-receipt ${args.qualificationReceipt}` : ''}${args.keepScratchDb ? ' --keep-scratch-db' : ''}\n`);
+      `node scripts/benchmark/run-isolated.mjs${args.lifecycleProof ? ' --lifecycle-proof' : args.full ? ' --full' : args.gate ? ` --gate ${args.gate}` : ` --sample ${args.sample}`}${args.historicalV1 ? ' --historical-v1' : ''}${args.cognitive ? ' --cognitive' : ''} --benchmark ${args.benchmark} --protocol ${args.protocol} --port ${args.port} --limit ${args.limit}${args.keychainAccount ? ` --keychain-account ${args.keychainAccount}` : ''}${args.keepScratchDb ? ' --keep-scratch-db' : ''}\n`);
     writeFileSync(path.join(outputDir, 'artifact-hashes.json'), `${JSON.stringify(await artifactHashes(outputDir), null, 2)}\n`);
     writeRunStatus(outputDir, {
       run_id: runId,
@@ -2001,6 +2357,7 @@ async function main() {
       state: 'complete',
       phase: 'complete',
       resumable: false,
+      ...(terminal ? { terminal } : {}),
     });
     console.log(JSON.stringify({ output_dir: outputDir, isolation: isolationProof, passes }, null, 2));
   } catch (error) {
@@ -2037,7 +2394,7 @@ async function main() {
         message: String(error?.message || error || 'unknown_error').slice(0, 2000),
       },
       resume_command: resumable
-        ? `node scripts/benchmark/run-isolated.mjs --resume-run ${runId} ${resumeScopeArgs} --benchmark ${args.benchmark} --protocol ${args.protocol} --port ${args.port} --limit ${args.limit}${args.keychainAccount ? ` --keychain-account ${args.keychainAccount}` : ''}${args.predecessorRun ? ` --predecessor-run ${args.predecessorRun}` : ''}${args.successorSourceRun ? ` --successor-source-run ${args.successorSourceRun}` : ''}${args.qualificationReceipt ? ` --qualification-receipt ${args.qualificationReceipt}` : ''} --keep-scratch-db`
+        ? `node scripts/benchmark/run-isolated.mjs --resume-run ${runId} ${resumeScopeArgs} --benchmark ${args.benchmark} --protocol ${args.protocol} --port ${args.port} --limit ${args.limit}${args.keychainAccount ? ` --keychain-account ${args.keychainAccount}` : ''} --keep-scratch-db`
         : null,
     });
     throw error;

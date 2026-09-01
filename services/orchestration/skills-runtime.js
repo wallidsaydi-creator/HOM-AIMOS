@@ -8,6 +8,7 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { createHash } from 'node:crypto';
 import { executeTool } from './tool-registry.js';
 import { buildInactiveSkillPolicyCandidates as buildInactiveSkillPolicyCandidatesDiagnostic } from './skill-policy-diagnostics.js';
 
@@ -205,10 +206,23 @@ export function updateSkillPolicy(name, policy, { persist = true } = {}) {
   }
 
   const normalizedPolicy = normalizeFileOrganizerPolicy(policy, skill);
-  skill.policy = normalizedPolicy;
-  runtimeSkills.set(key, skill);
-  if (persist) persistSkillToDisk(skill);
-  return skill;
+  const nextSkill = { ...skill, policy: normalizedPolicy };
+  if (persist) persistSkillToDisk(nextSkill);
+  runtimeSkills.set(key, nextSkill);
+  return nextSkill;
+}
+
+export function readSkillPersistenceProjection(name) {
+  const key = String(name || '').trim();
+  const filePath = getSkillFilePath(key);
+  const bytes = fs.readFileSync(filePath);
+  const stat = fs.statSync(filePath);
+  return Object.freeze({
+    content_sha256: createHash('sha256').update(bytes).digest('hex'),
+    byte_length: bytes.length,
+    mode: stat.mode & 0o777,
+    is_file: stat.isFile(),
+  });
 }
 
 export async function executeSkill(name, parameters = {}, { executionContext = null } = {}) {

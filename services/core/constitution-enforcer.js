@@ -19,7 +19,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { readFileSync, existsSync } from 'fs';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 import { assertTeleologicalLock, classifyModification, RULE_LEVELS } from './rule-hierarchy.js';
 import { AIMOS_COMPANY_ID } from './runtime-config.js';
 
@@ -304,10 +304,9 @@ export async function storeChecks(checks, company = COMPANY) {
       const hash = btoa(check.constraint).replace(/[^a-zA-Z0-9]/g, '').slice(0, 8);
       const key = `constitution_check:${hash}`;
 
-      await persistMemory({
+      await executeHousekeeperCanonicalSave({
         company_id: company,
         agent_id: 'system',
-        mutation_authority: 'housekeeper',
         scope: 'system',
         memory_type: 'constitution_check',
         key,
@@ -318,6 +317,7 @@ export async function storeChecks(checks, company = COMPANY) {
           confidence: check.confidence,
         }),
         clearance_level: 5,
+        source: 'constitution-enforcer',
       });
 
       stored.push(key);

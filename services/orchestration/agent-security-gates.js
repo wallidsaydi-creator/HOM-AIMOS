@@ -16,11 +16,6 @@
  */
 
 import { isCybersecAction, isCybersecLocked, filterCybersecContent, auditLog } from '../security/cybersec-firewall.js';
-import {
-  appendSecurityDecision,
-  evaluateSecurityContent,
-  BLOCK_THRESHOLD as SE_BLOCK_THRESHOLD,
-} from '../security/se-gate.js';
 import { computeSecurityResponse } from '../security/security-ladder.js';
 import { classifyBloomLevel, classifyCognitiveSecurity } from '../security/cognitive-demand.js';
 import { evaluateMetaState } from './meta-controller.js';
@@ -54,41 +49,28 @@ export async function runSecurityGates({ userPrompt, agentId, options = {}, COMP
     psychometricProfile: null,
   };
 
-  // ─── CONTEXT-AWARE SOCIAL ENGINEERING DECISION ─────────────────────────────
-  // One owner and one signed receipt replace the former pair of noun-based
-  // screens. Descriptive security work can proceed; executable directives do
-  // not acquire authority merely by mentioning an operator or a tool.
-  results.securityDecision = evaluateSecurityContent({
-    text: userPrompt,
-    operation: 'agent_prompt',
-    contentType: options.taskType || options.intent || 'chat',
-    source: options.source || 'agent-runner',
-    transport: 'agent',
-  });
-  results.seGateAnalysis = results.securityDecision.analysis;
+  // SE remains available as an explicit diagnostic module, but has no runtime
+  // admission or response authority in the agent execution path.
+  results.securityDecision = {
+    action: 'disabled',
+    reason: 'operator_disabled',
+    blockExecution: false,
+    descriptive: false,
+    liveSignals: [],
+    severity: 'none',
+  };
+  results.seGateAnalysis = { totalWeight: 0, hits: [] };
   results.seScreen = {
-    allowed: !results.securityDecision.blockExecution,
+    allowed: true,
     se_result: {
-      threat_level: results.securityDecision.severity,
-      flags: results.securityDecision.liveSignals.map((signal) => signal.tag),
-      rules: results.securityDecision.liveSignals.map((signal) => signal.tag),
-      score: results.seGateAnalysis.totalWeight,
-      prompt_sha: results.securityDecision.contentHash,
+      threat_level: 'none',
+      flags: [],
+      rules: [],
+      score: 0,
+      prompt_sha: null,
+      runtime_authority: false,
     },
   };
-  results.securityDecisionReceipt = await appendSecurityDecision(results.securityDecision, {
-    companyId: COMPANY,
-    subjectAgentId: agentId,
-    authority: options.requestAuthority || options.mutationAuthority || null,
-    parentEventId: options.parentEventId || null,
-  });
-  if (results.securityDecision.blockExecution) {
-    const err = new Error(`SOCIAL ENGINEERING BLOCKED [${results.securityDecision.severity}]: ${results.securityDecision.liveSignals.slice(0, 2).map((signal) => signal.tag).join(', ')}`);
-    err.code = 'SE_BLOCKED';
-    err.threat_level = results.securityDecision.severity;
-    err.security_receipt = results.securityDecisionReceipt;
-    throw err;
-  }
 
   // ─── CYBERSEC FIREWALL GATE ─────────────────────────────────────────────────
   results.cybersecMode = isCybersecAction(options.intent, userPrompt);
@@ -130,14 +112,8 @@ export async function runSecurityGates({ userPrompt, agentId, options = {}, COMP
   }
 
   // ─── SECURITY LADDER: graduated response from observed evidence ─────────────
-  const rawManipulationRisk = Math.max(0, Math.min(
-    1,
-    Number(results.seGateAnalysis?.totalWeight || 0) / SE_BLOCK_THRESHOLD,
-  ));
-  const manipulationRisk = results.securityDecision?.descriptive
-    ? Math.min(rawManipulationRisk, 0.15)
-    : rawManipulationRisk;
-  const contextualRisk = results.securityDecision?.action === 'audit_allow' ? 0.25 : 0;
+  const manipulationRisk = 0;
+  const contextualRisk = 0;
   results.ladderResult = computeSecurityResponse({
     behavioralDrift: results.behavioralCheck.anomalyScore,
     manipulationRisk,

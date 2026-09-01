@@ -1,0 +1,49 @@
+{
+  "schema": "hom.aimos.mutmem-v2-manuscript-contract/v1",
+  "status": "MANUSCRIPT_EVIDENCE_CANDIDATE_NOT_RELEASE_BOUND",
+  "title": "MutMem V2: Cryptographically Authorized Mutation in Persistent Agent Memory",
+  "subtitle": "Portable Verification and Reproducible Evidence",
+  "author": "Walid Saidi",
+  "affiliation": "Independent researcher",
+  "repository_url": "https://github.com/wallidsaydi-creator/HOM-AIMOS",
+  "published_predecessor": "arXiv:2608.02843",
+  "evidence_source_commit": "eb0166fd45964ebb47ca053bcfeb0ab3ddc68999",
+  "publication_evidence_root_sha256": "99bed29dcf0cc5c2f597f17b69be8d6dc990bae4ae5dd30838a1d1f34d92a76b",
+  "deterministic_pdf_build": {
+    "engine": "tectonic",
+    "engine_version": "0.16.9",
+    "bundle_url": "https://relay.fullyjustified.net/default_bundle_v33.tar",
+    "bundle_content_sha256": "6ffe055852f8faf66c0acbe1a7fb27f87b869a90bad1204f3bf4d9683f597c7c",
+    "only_cached_closure_build": true,
+    "source_date_epoch": 1788258481,
+    "force_source_date": true
+  },
+  "release_binding": {
+    "immutable_tag": null,
+    "release_commit": null,
+    "source_manifest_sha256": null,
+    "archival_doi": null,
+    "publication_allowed": false,
+    "reason": "The final public release artifact, immutable tag, release commit, source manifest, and archival record have not yet been built and mutually bound."
+  },
+  "licenses": {
+    "source_code": "AGPL-3.0-or-later",
+    "aimos_authored_public_evidence": "Repository LICENSE applies to AIMOS-authored artifact files.",
+    "third_party_datasets": "Dataset text is not redistributed; downloaded materials retain their upstream licenses."
+  },
+  "entrypoints": {
+    "offline_verify": "npm run verify",
+    "evidence_regeneration": "npm run evidence:regenerate",
+    "reproduction_template": "npm run reproduce -- --installed-instance canonical --agent-id $AGENT_ID --full --benchmark both --protocol canonical-blind-v1",
+    "agent_parameter": "AGENT_ID is the ordinary agent selected and enrolled by the installer operator."
+  },
+  "provider_boundary": {
+    "historical_v1_utility_generator": "codex:gpt-5.4",
+    "historical_v1_utility_judge": "codex:gpt-5.6-terra",
+    "historical_v1_poison_generator": "codex:gpt-5.5",
+    "historical_v1_poison_judge": "codex:gpt-5.6-terra",
+    "access_mode": "Operator-authenticated Codex provider access; credentials and provider payloads are excluded."
+  },
+  "support_level": "Portable protocol and evidence independently verifiable; clean installer qualified; empirical results not independently replicated.",
+  "manuscript_contract_sha256": "f85d3ca24aeb069451a6874156961a65953fe5d945f1a0165a97e025f5c68caf"
+}

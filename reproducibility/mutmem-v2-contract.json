@@ -1,0 +1,61 @@
+{
+  "schema": "hom.aimos.mutmem-v2-reproducibility-contract/v1",
+  "status": "v2c-2-executable",
+  "entrypoints": {
+    "verify": {
+      "command": "npm run verify",
+      "network_access": false,
+      "database_access": false,
+      "keychain_access": false,
+      "private_key_access": false,
+      "provider_call": false
+    },
+    "install": {
+      "command": "./install-macos.sh",
+      "owner": "existing_public_installer",
+      "passphrase_entries": 1,
+      "creates_housekeeper": true,
+      "enrolls_operator_selected_agent": true
+    },
+    "reproduce": {
+      "command": "npm run reproduce -- --installed-instance canonical --agent-id <enrolled-agent-id> --full --benchmark both --protocol canonical-blind-v1",
+      "owner": "scripts/benchmark/run-isolated.mjs",
+      "requires_fresh_installer_state": true,
+      "save_surface": "/aimos/save",
+      "recall_surface": "/aimos/recall",
+      "second_server_owner": false,
+      "second_database_authority": false,
+      "second_identity_authority": false
+    },
+    "poisonedrag": {
+      "command": "npm run reproduce -- --installed-instance canonical --agent-id <enrolled-agent-id> --full --benchmark poisonedrag --protocol poisonedrag-n100-v1",
+      "owner": "scripts/benchmark/run-isolated.mjs",
+      "dataset_policy": "download_verify_hash_no_redistribution"
+    },
+    "poisonedrag_ablation": {
+      "command_template": "npm run reproduce:ablation -- --installed-instance canonical --agent-id <enrolled-agent-id> --source-run-id <completed-poisonedrag-run-id> --target-count 100",
+      "owner": "scripts/benchmark/run-poisonedrag-epistemic-ablation.mjs"
+    }
+  },
+  "terminal_invariant": {
+    "schema": "hom.aimos.benchmark-run-terminal/v1",
+    "complete_requires": "intended_n == selected_n == completed_n == evaluated_n && incomplete_n == 0 && failed_n == 0",
+    "selected_aggregate_path_and_hash_required": true,
+    "phase_denominators_required": true,
+    "environment_evidence_required": true,
+    "stale_predecessor_is_not_terminal": true
+  },
+  "datasets": {
+    "canonical": "eval/data/canonical/corpus-manifest.json",
+    "poisonedrag_source": "eval/poisonedrag/source-lock.json",
+    "poisonedrag_public_targets": "eval/poisonedrag/n100-public-target-lock.json"
+  },
+  "environment_contract": "reproducibility/mutmem-v2-environment-contract.json",
+  "dependency_boundary": {
+    "hidden_private_dependency": false,
+    "verify_private_dependency": false,
+    "canonical_benchmark_private_dependency": false,
+    "poisonedrag_restricted_bytes": "declared_downloader_and_hash_governed"
+  },
+  "reproducibility_contract_sha256": "b5e2b3ca5facfe94fc93304acbb61d9d9330344f45442e94caa217ed5f3f5236"
+}

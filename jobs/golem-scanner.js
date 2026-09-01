@@ -26,7 +26,8 @@ import {
   getSeverity,
   getBountyRange 
 } from '../services/security/golem-vuln-classes.js';
-import { persistMemory } from '../services/write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../services/write/canonical-save-owner.js';
+import { materialEffectOwner, materialEffectProjectionHash } from '../services/security/material-effect-owner.js';
 
 // Configuration
 const COMPANY_ID = AIMOS_COMPANY_ID;
@@ -44,8 +45,15 @@ const USER_AGENTS = [
  * Make HTTP request to target
  */
 async function makeRequest(url, payload, method = 'POST') {
+  const parsedUrl = new URL(url);
+  const effect = await materialEffectOwner.begin({
+    kind: 'external',
+    operation: 'golem_security_probe',
+    targetIdentifier: `${parsedUrl.protocol}//${parsedUrl.host}${parsedUrl.pathname}`,
+    inputProjection: { url, payload, method },
+    subjectAgentId: AGENT_ID,
+  });
   return new Promise((resolve, reject) => {
-    const parsedUrl = new URL(url);
     const isHttps = parsedUrl.protocol === 'https:';
     const lib = isHttps ? https : http;
     
@@ -69,6 +77,17 @@ async function makeRequest(url, payload, method = 'POST') {
       timeout: 30000
     };
 
+    let settled = false;
+    const terminate = async (disposition, resultProjection, resultClass, callback) => {
+      if (settled) return;
+      settled = true;
+      try {
+        await materialEffectOwner.finish({ action: effect, disposition, resultProjection, resultClass });
+        callback();
+      } catch (terminalError) {
+        reject(terminalError);
+      }
+    };
     const req = lib.request(options, (res) => {
       let data = '';
       res.setEncoding('utf8');
@@ -78,22 +97,35 @@ async function makeRequest(url, payload, method = 'POST') {
       });
       
       res.on('end', () => {
-        resolve({
+        const result = {
           statusCode: res.statusCode,
           headers: res.headers,
           body: data,
           responseTime: Date.now()
-        });
+        };
+        void terminate('SUCCEEDED', result, 'golem_probe_response', () => resolve(result));
       });
     });
 
     req.on('error', (e) => {
-      reject(new Error(`Request failed: ${e.message}`));
+      const error = new Error(`Request failed: ${e.message}`);
+      void terminate(
+        'INDETERMINATE',
+        { error_class: e?.name || 'golem_transport_error' },
+        'golem_probe_completion_not_proven',
+        () => reject(error),
+      );
     });
 
     req.on('timeout', () => {
       req.destroy();
-      reject(new Error('Request timeout (30s)'));
+      const error = new Error('Request timeout (30s)');
+      void terminate(
+        'INDETERMINATE',
+        { error_class: 'TimeoutError' },
+        'golem_probe_completion_not_proven',
+        () => reject(error),
+      );
     });
 
     req.write(payloadStr);
@@ -262,7 +294,7 @@ async function saveToAimos(scanResult) {
     summary: `Found ${vulnerabilities.length} potential vulnerabilities across ${scanResult.class_results.length} classes`
   };
   
-  const saved = await persistMemory({
+  const saved = await executeHousekeeperCanonicalSave({
     company_id: COMPANY_ID,
     agent_id: AGENT_ID,
     key: memoryContent.scan_id,
@@ -271,7 +303,6 @@ async function saveToAimos(scanResult) {
     clearance_level: 8,
     memory_type: 'security_finding',
     source: 'golem:manual-vulnerability-scan',
-    mutation_authority: 'housekeeper',
   });
   if (saved?.rejected || !saved?.id) {
     throw new Error(`native_persistence_rejected:${saved?.reason || 'missing_memory_id'}`);
@@ -400,11 +431,41 @@ Examples:
       const pocDir = path.join(path.dirname(__dirname), '..', 'pentest-reports', 'golem', 'findings');
       const pocFile = path.join(pocDir, `golem-${vulnClass}-${vectorId}-${Date.now()}.json`);
       
+      let pocEffect = null;
       try {
+        pocEffect = await materialEffectOwner.begin({
+          kind: 'filesystem',
+          operation: 'golem_poc_artifact',
+          targetIdentifier: `golem-poc:${path.basename(pocFile)}`,
+          inputProjection: poc,
+          subjectAgentId: AGENT_ID,
+        });
         fs.mkdirSync(pocDir, { recursive: true });
         fs.writeFileSync(pocFile, JSON.stringify(poc, null, 2));
+        const readback = fs.readFileSync(pocFile, 'utf8');
+        await materialEffectOwner.finish({
+          action: pocEffect,
+          disposition: 'SUCCEEDED',
+          resultProjection: {
+            content_sha256: materialEffectProjectionHash(readback),
+            byte_length: Buffer.byteLength(readback),
+          },
+          resultClass: 'golem_poc_readback_verified',
+        });
         console.log(`\n✅ PoC saved to: ${pocFile}`);
       } catch (error) {
+        if (pocEffect) {
+          try {
+            await materialEffectOwner.finish({
+              action: pocEffect,
+              disposition: 'INDETERMINATE',
+              resultProjection: { error_class: error?.name || 'golem_poc_file_error' },
+              resultClass: 'golem_poc_file_state_not_proven',
+            });
+          } catch (terminalError) {
+            error.materialEffectTerminalError = terminalError?.message || String(terminalError);
+          }
+        }
         console.error(`❌ Failed to save PoC: ${error.message}`);
       }
     }

@@ -1,6 +1,8 @@
 /**
  * Native EMBER retained-evidence recall operator from:
  * - EMBER.pdf
+ * Status: Native structural response-budget diagnostic in canonical
+ * /aimos/recall. It has no learned retention-writer or rank authority.
  *
  * Implemented formulas / techniques:
  * - Budgeted Pre-Query Retention `B_ret`

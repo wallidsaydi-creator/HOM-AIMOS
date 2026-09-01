@@ -85,7 +85,7 @@ function verifyComplete(directory, phase) {
   return complete;
 }
 
-function completedAttempt(runDir, unitId, phase) {
+function completedAttempt(runDir, unitId, phase, { installedService = false } = {}) {
   const root = path.join(runDir, 'questions', unitId, phase);
   if (!fs.existsSync(root) || fs.lstatSync(root).isSymbolicLink()) {
     throw new Error(`attempt_missing:${phase}`);
@@ -99,7 +99,20 @@ function completedAttempt(runDir, unitId, phase) {
         ? { directory, complete: verifyComplete(directory, phase) }
         : null;
     })
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((attempt) => {
+      if (!installedService || phase !== 'recall') return true;
+      const response = readJson(path.join(attempt.directory, 'recall-response.json'));
+      const receipt = response?.recall_receipt;
+      return Boolean(
+        receipt?.request_receipt_id
+        && /^[0-9a-f]{64}$/.test(String(receipt.request_receipt_mutation_hash || ''))
+        && receipt.request_admission_event_id
+        && /^[0-9a-f]{64}$/.test(String(receipt.request_admission_mutation_hash || ''))
+        && receipt.request_admission_authority_kind === 'housekeeper_observation_of_verified_request'
+        && receipt.event_receipt?.signed_body?.parent_event_id === receipt.request_admission_event_id
+      );
+    });
   if (complete.length !== 1) throw new Error(`successful_attempt_count_invalid:${phase}:${complete.length}`);
   return complete[0];
 }
@@ -235,6 +248,8 @@ function summarizeRows(rows) {
 }
 
 function aggregate(args) {
+  const runManifest = readJson(path.join(args.runDir, 'run-manifest.json'));
+  const installedService = runManifest?.configuration?.execution_mode === 'installed-service';
   const selection = readJson(args.selectionFile);
   if (selection?.schema !== 'hom.canonical-query-selection/v1'
     || selection.run_id !== args.runId
@@ -255,9 +270,9 @@ function aggregate(args) {
       if (canonicalSha256(input) !== entry.input_sha256 || canonicalSha256(gold) !== entry.gold_sha256) {
         throw new Error('query_or_gold_hash_mismatch');
       }
-      const recall = completedAttempt(args.runDir, entry.unit_id, 'recall');
-      const generate = completedAttempt(args.runDir, entry.unit_id, 'generate');
-      const judge = completedAttempt(args.runDir, entry.unit_id, 'judge');
+      const recall = completedAttempt(args.runDir, entry.unit_id, 'recall', { installedService });
+      const generate = completedAttempt(args.runDir, entry.unit_id, 'generate', { installedService });
+      const judge = completedAttempt(args.runDir, entry.unit_id, 'judge', { installedService });
       const recallRequest = readJson(path.join(recall.directory, 'recall-request.json'));
       const recallResponse = readJson(path.join(recall.directory, 'recall-response.json'));
       const requestBody = { ...recallRequest.body };
@@ -354,7 +369,16 @@ function aggregate(args) {
     categories[category] = summarizeRows(rows.filter((row) => row.category === category));
   }
   const rowsText = `${rows.map((row) => JSON.stringify(row)).join('\n')}\n`;
-  const rowsFile = path.join(args.runDir, `canonical-rows-${args.benchmark}.jsonl`);
+  const fixedRowsFile = path.join(args.runDir, `canonical-rows-${args.benchmark}.jsonl`);
+  const fixedSummaryFile = path.join(args.runDir, `canonical-summary-${args.benchmark}.json`);
+  const fixedAggregateConflicts = fs.existsSync(fixedRowsFile)
+    && (fs.lstatSync(fixedRowsFile).isSymbolicLink()
+      || fs.readFileSync(fixedRowsFile, 'utf8') !== rowsText);
+  const aggregateRoot = fixedAggregateConflicts
+    ? path.join(args.runDir, 'aggregate-successors', args.benchmark, sha256(rowsText))
+    : args.runDir;
+  fs.mkdirSync(aggregateRoot, { recursive: true, mode: 0o700 });
+  const rowsFile = path.join(aggregateRoot, `canonical-rows-${args.benchmark}.jsonl`);
   const completeRows = rows.filter((row) => row.status === 'complete');
   const retrievalKValues = [...new Set(completeRows.map((row) => row.retrieval_k))];
   if (retrievalKValues.length > 1) throw new Error('aggregate_retrieval_k_drift');
@@ -372,13 +396,15 @@ function aggregate(args) {
       returned_evidence_metric: 'all_native_returned_evidence_after_output_calibration',
       note: 'The primary at-k metric slices the cryptographically receipted native returned order. The returned-evidence metric is reported separately and is never labeled at-k.',
     },
-    rows_file: path.basename(rowsFile),
+    rows_file: path.relative(args.runDir, rowsFile),
     rows_sha256: sha256(rowsText),
     metrics: summarizeRows(rows),
     by_category: categories,
   };
   summary.summary_sha256 = selfHash(summary, 'summary_sha256');
-  const summaryFile = path.join(args.runDir, `canonical-summary-${args.benchmark}.json`);
+  const summaryFile = fixedAggregateConflicts
+    ? path.join(aggregateRoot, `canonical-summary-${args.benchmark}.json`)
+    : fixedSummaryFile;
   for (const [file, text] of [
     [rowsFile, rowsText],
     [summaryFile, `${JSON.stringify(summary, null, 2)}\n`],

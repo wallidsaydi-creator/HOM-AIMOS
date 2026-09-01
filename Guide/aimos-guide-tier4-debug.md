@@ -4,22 +4,37 @@
 
 ## Pipeline Manifest
 
-**Single source of truth:** `services/pipeline-manifest.js` — 153 declared service connections across 6 pipelines, validated at boot.
+**Single source of truth:** `services/pipeline-manifest.js` — 116 declared service connections across 6 pipelines, validated at boot.
 
 | Pipeline | Entry | Declared service modules |
 |----------|-------|-------------------------:|
-| Save | `routes/aimos.js` | 13 |
-| Recall | `services/retrieval/native-recall-pipeline.js` | 75 |
+| Save | `services/write/canonical-save-owner.js` | 15 |
+| Recall | `services/retrieval/native-recall-pipeline.js` | 34 |
 | Agent Run | `services/orchestration/agent-runner.js` | 34 |
-| Dream | `jobs/nightly-dream.js` | 20 |
+| Dream | `jobs/nightly-dream.js` | 22 |
 | Heartbeat | `jobs/heartbeat.js` | 1 |
 | Governance | `services/orchestration/governance-resolver.js` | 10 |
 
 Validate: `node -e "import('./services/pipeline-manifest.js').then(m => m.validatePipelines()).then(r => console.log(r.valid ? 'ALL OK' : 'BROKEN', r.ok + '/' + r.total))"`
 
+SAVE authority has two typed entrypoints in the same owner: verified
+request/tool calls use `executeCanonicalSave`; autonomous services use
+`executeHousekeeperCanonicalSave`, which signs and verifies the exact action
+commitment first. A route importing the autonomous entrypoint or any runtime
+literal `mutation_authority: 'housekeeper'` is an authority regression.
+
+RECALL has one production entrypoint: `executeCanonicalRecall`. It opens one
+restricted repeatable-read request session, resolves signed authority inside
+that session, and injects its read/admission interface into every retrieval
+gear. Production callers must not compose `resolveNativeRecallAuthority` with
+`executeNativeRecall`; those lower-level exports are compatibility/test
+surfaces. Optional SQL reads use owner-controlled serialized savepoints in the
+same snapshot. Admission, provenance, authority and topology errors are never
+downgraded to best-effort misses.
+
 ## Service Annotation Format
 
-The manifest currently binds 300 service files. Paper-backed mathematical services carry source and pipeline annotations; infrastructure files carry their native ownership/connection contract.
+The manifest currently binds 295 service files. Paper-backed mathematical services carry source and pipeline annotations; infrastructure files carry their native ownership/connection contract.
 
 **Block 1 — Source & Compliance:**
 ```javascript
@@ -74,7 +89,7 @@ The manifest currently binds 300 service files. Paper-backed mathematical servic
 | `retrieval/` | 68 | HippoRAG, Adaptive RAG, QuIM-RAG, OrgForge RRF |
 | `learning/` | 23 | STDP, SPICED, SM-2, Prospect Theory, R-MDP |
 | `orchestration/` | 43 | DISARM, HVR-Met, DIG, ContextCov, Constitutional |
-| `security/` | 48 | OWASP, Mitnick, Cialdini, Refusal Bias, P2P Trust |
+| `security/` | 49 | OWASP, Mitnick, Cialdini, Refusal Bias, P2P Trust |
 | `dream/` | 5 | SPICED, ThaCo, Sleep Homeostatic, MemGPT |
 | `write/` | 13 | Aladdin, Sutton&Barto RPE, Channel Separation |
 | `observe/` | 22 | OpenTelemetry, Senge, Moltbook, SVDD |

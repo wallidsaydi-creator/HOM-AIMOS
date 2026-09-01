@@ -1,0 +1,32 @@
+{
+  "schema": "hom.aimos.mutmem-v2-publication-metric-contract/v1",
+  "status": "FROZEN_BEFORE_V2_PUBLICATION_OUTPUT",
+  "estimators": {
+    "binary_rate": "x/n with integer x and n",
+    "wilson_95": {
+      "z": 1.959963984540054,
+      "formula": "(p+z^2/(2n) +/- z*sqrt(p(1-p)/n+z^2/(4n^2)))/(1+z^2/n)"
+    },
+    "paired_binary": "exact two-sided McNemar using discordant counts b and c",
+    "multiple_comparisons": "Holm-Bonferroni independently within each declared four-contrast family",
+    "agreement": "Cohen kappa from public n, agreements, and positive marginals",
+    "historical_continuous_metrics": "copied only from the self-hashed V1 aggregate; no row-level recomputation claim"
+  },
+  "numerical_tolerances": {
+    "integer_counts_and_hashes": 0,
+    "derived_binary_rates_wilson_mcnemar_holm_kappa": 1e-12,
+    "canary_rounded_wilson_bounds": 5e-9,
+    "provider_generated_outputs": null
+  },
+  "exclusions": {
+    "v1_bootstrap_intervals": "omitted_from_v2_generated_tables_because_private_rows_are_unavailable",
+    "saber_operational_numbers": "omitted_until_the_exact_private_artifact_is_recovered_and_independently_verified",
+    "september_installed_service_attempts": "retained_in_attempt_ledger_but_forbidden_from_result_tables"
+  },
+  "denominator_rule": "intended_n_equals_terminal_n; failures and exclusions remain explicit and cannot count as defenses",
+  "rerun_authorized": false,
+  "database_access": false,
+  "network_access": false,
+  "provider_call": false,
+  "metric_contract_sha256": "5a5e2eba2395abb3e88ebcad22bb591e0393b298e2bdd2eb4125f8b576667a41"
+}

@@ -13,13 +13,14 @@ import { enforceAimosOperatorBrainLink } from '../core/brain-contract.js';
 import { designTaskGraph } from './graph-designer.js';
 import { resolveFallback, isOrchestrationExhausted, getExhaustionReason } from './fallback-resolver.js';
 import { createRoutingCounter, incrementRouting, shouldTriggerFallback } from '../observe/routing-monitor.js';
-import { routeTask as trustRouteTask, recordSuccess as trustRecordSuccess, recordFailure as trustRecordFailure } from './trust-router.js';
+import { routeTask as trustRouteTask } from './trust-router.js';
 import { estimateStateUpdateDepth, observeCapabilityGate } from './capability-probe.js';
 import { confidenceWeightedVote, triggerDebate } from './decentralized-consensus.js';
 import { runInvestigationLoop } from './explore-exploit-loop.js';
 import { observeHVRDiagnostic } from './hypothesis-verifier.js';
 import { logAIDecision } from '../observe/architecture-registry.js';
 import { generateExplanation } from '../observe/explainer.js';
+import { getModelPreference, getModelPreferences } from './model-preferences.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 const SEMANTIC_ROUTING_MIN_PROMPT_CHARS = 24;
@@ -148,7 +149,6 @@ function findRequestedModelCandidate(candidates, requestedModel) {
 export async function ensureGovernanceSchema() {
   const requiredRelations = [
     'agent_profiles',
-    'agent_model_policy',
     'agent_routing_policy',
     'session_lanes',
     'directive_claims',
@@ -168,27 +168,13 @@ export async function ensureGovernanceSchema() {
   }
 }
 
-async function getPrimaryModels(companyId) {
-  const result = await query(
-    `SELECT DISTINCT ON (agent_id) agent_id, model_id
-     FROM agent_model_policy
-     WHERE company_id = $1 AND enabled = true
-     ORDER BY agent_id, is_primary DESC, priority ASC`,
-    [companyId]
-  );
-  const map = new Map();
-  for (const row of result.rows) map.set(row.agent_id, row.model_id);
-  return map;
-}
-
 export async function hydrateAgentStoreFromGovernance(companyId = COMPANY) {
-  const [profilesRes, primaryModelMap] = await Promise.all([
-    query(`SELECT * FROM agent_profiles WHERE company_id = $1`, [companyId]),
-    getPrimaryModels(companyId)
-  ]);
+  const profilesRes = await query(`SELECT * FROM agent_profiles WHERE company_id = $1`, [companyId]);
+  const selected = getModelPreference('chat');
+  const selectedModel = selected.authority === 'signed_task_preference' ? selected.model : '';
   const hydrated = [];
   for (const row of profilesRes.rows) {
-    const modelId = primaryModelMap.get(row.agent_id) || '';
+    const modelId = selectedModel;
     if (!modelId) continue;
     const agent = ensureAgent(row.agent_id, {
       name: row.name, tier: row.tier, model: modelId,
@@ -202,14 +188,10 @@ export async function hydrateAgentStoreFromGovernance(companyId = COMPANY) {
 }
 
 export async function getAgentModelCandidates(companyId, agentId) {
-  const res = await query(
-    `SELECT model_id FROM agent_model_policy
-     WHERE company_id = $1 AND agent_id = $2 AND enabled = true
-     ORDER BY is_primary DESC, priority ASC, model_id ASC`,
-    [companyId, agentId]
-  );
-  const dbCandidates = res.rows.map((row) => row.model_id);
-  return dbCandidates;
+  if (String(companyId || '') !== COMPANY || !String(agentId || '').trim()) return [];
+  return [...new Set(Object.values(getModelPreferences())
+    .filter((preference) => preference.authority === 'signed_task_preference' && preference.model)
+    .map((preference) => preference.model))];
 }
 
 async function getProfile(companyId, agentId) {
@@ -327,12 +309,19 @@ export async function resolveExecutionContext({
 }
 
 export async function getGovernanceStats(companyId = COMPANY) {
-  const [p, m, r] = await Promise.all([
+  const [p, r] = await Promise.all([
     query(`SELECT COUNT(*)::int AS total FROM agent_profiles WHERE company_id = $1`, [companyId]),
-    query(`SELECT COUNT(*)::int AS total FROM agent_model_policy WHERE company_id = $1 AND enabled = true`, [companyId]),
     query(`SELECT COUNT(*)::int AS total FROM agent_routing_policy WHERE company_id = $1 AND enabled = true`, [companyId])
   ]);
-  return { companyId, profileCount: p.rows[0].total, modelPolicyCount: m.rows[0].total, routingRuleCount: r.rows[0].total };
+  const modelPolicyCount = Object.values(getModelPreferences())
+    .filter((preference) => preference.authority === 'signed_task_preference').length;
+  return {
+    companyId,
+    profileCount: p.rows[0].total,
+    modelPolicyCount,
+    modelPolicyAuthority: 'master_signed_system_config',
+    routingRuleCount: r.rows[0].total,
+  };
 }
 
 export async function ensureGovernanceReady(companyId = COMPANY, opts = {}) {

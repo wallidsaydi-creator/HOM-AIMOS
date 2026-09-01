@@ -1,6 +1,8 @@
 /**
  * Native temporal merge/closure operator from:
  * - TempEval-3.pdf
+ * Status: Native structural projection in canonical /aimos/recall with zero
+ * rank influence; learned/ensemble weights remain inactive.
  *
  * Implemented formulas / techniques:
  * - TIPSem / TIPSemB / TRIOS merge strategy
@@ -10,7 +12,7 @@
  * - relation task order: extract entities/timexes, decide links, type links
  *
  * Aimos adaptation:
- * - creates bounded relation/closure evidence scores in native recall
+ * - creates bounded relation/closure structure in native recall
  * - does not prune, decay, delete, or inject answers
  */
 

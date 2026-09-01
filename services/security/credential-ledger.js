@@ -24,7 +24,7 @@ import {
 } from './agent-identity.js';
 import { agentPool as defaultPool } from '../../db/connection.js';
 import { signAsHousekeeper } from './housekeeper-signer.js';
-import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
+import { AIMOS_COMPANY_ID, AIMOS_RUNTIME_CREDENTIAL_SERVICE } from '../core/runtime-config.js';
 import { logEvent, readVerifiedEventById } from '../observe/event-ledger.js';
 import { readVerifiedRequestReceiptById } from './request-receipt-ledger.js';
 
@@ -39,6 +39,7 @@ const ALLOWED_EVENT_TYPES = Object.freeze([
   'USE_FAILED',
 ]);
 const USE_TERMINAL_TYPES = new Set(['USE_COMPLETED', 'USE_FAILED']);
+const MAX_RECOVERY_SLOTS = 10_000;
 
 function tsBuf(ts) { return Buffer.from(String(ts), 'utf8'); }
 function nonceBuf(nonce) { return Buffer.from(String(nonce), 'utf8'); }
@@ -138,6 +139,45 @@ export function verifyMutationHash(contentHashBuf, prevMutationHashBuf, nonce, t
 
 export function credentialUseEvidenceHash(value) {
   return createHash('sha256').update(canonicalJson(value), 'utf8').digest('hex');
+}
+
+export async function reconcileCredentialUseReservations(openReservations = [], {
+  finalizeFn,
+  reloadFn,
+} = {}) {
+  if (typeof finalizeFn !== 'function' || typeof reloadFn !== 'function') {
+    throw new Error('credential_use_recovery_dependencies_required');
+  }
+  const ordered = [...openReservations]
+    .sort((left, right) => String(left.useId).localeCompare(String(right.useId)));
+  const reconciled = [];
+  for (const reservation of ordered) {
+    const terminal = await finalizeFn({
+      reservation,
+      outcome: 'indeterminate',
+      outcomeClass: 'process_restart_orphan',
+      errorClass: 'external_completion_not_proven_after_restart',
+      outcomeHash: credentialUseEvidenceHash({
+        use_id: reservation.useId,
+        reservation_mutation_hash: reservation.reservationMutationHash,
+        external_effect_replayed: false,
+      }),
+    });
+    reconciled.push(Object.freeze({ useId: reservation.useId, terminal }));
+  }
+  const remaining = await reloadFn();
+  return Object.freeze({
+    scanned: ordered.length,
+    reconciled: Object.freeze(reconciled),
+    remainingOpen: remaining.length,
+    externalEffectsReplayed: 0,
+    timeComplexity: 'O(n)',
+    spaceComplexity: 'O(n)',
+  });
+}
+
+function custodyVersionSlotHash(versionSlot) {
+  return createHash('sha256').update(String(versionSlot || ''), 'utf8').digest('hex');
 }
 
 export function verifyCredentialLifecycleChain(rows = [], masterPubkey = null) {
@@ -264,12 +304,18 @@ export function verifyCredentialLifecycleChain(rows = [], masterPubkey = null) {
       });
     } else if (USE_TERMINAL_TYPES.has(row.event_type)) {
       const reservation = reservations.get(body.use_id);
+      const disposition = body.disposition == null
+        ? (row.event_type === 'USE_COMPLETED' ? 'SUCCEEDED' : 'FAILED')
+        : String(body.disposition);
       if (
         !reservation
         || terminalUseIds.has(body.use_id)
         || body.reservation_provenance_id !== String(reservation.row.provenance_id)
         || body.reservation_mutation_hash !== reservation.mutationHash
         || body.credential_hash !== bodyOf(reservation.row)?.credential_hash
+        || !['SUCCEEDED', 'FAILED', 'INDETERMINATE'].includes(disposition)
+        || (row.event_type === 'USE_COMPLETED' && disposition !== 'SUCCEEDED')
+        || (row.event_type === 'USE_FAILED' && disposition === 'SUCCEEDED')
       ) {
         throw new Error('credential_use_terminal_without_reservation');
       }
@@ -303,6 +349,205 @@ export function createCredentialLedger(deps = {}) {
   const verifyRequestAuthority = deps.verifyRequestAuthorityFn || readVerifiedRequestReceiptById;
   const verifyAutonomousEvent = deps.verifyAutonomousEventFn || readVerifiedEventById;
   const appendAutonomousAuthority = deps.appendAutonomousAuthorityFn || logEvent;
+
+  async function beginCredentialCustodyMutation({
+    serviceName,
+    value,
+    eventType,
+    subjectAgentId = 'housekeeper',
+    authority = null,
+    reason = 'credential_lifecycle_mutation',
+  }) {
+    const operation = String(eventType || '').trim().toUpperCase();
+    if (!['STORE', 'ROTATE', 'REVOKE'].includes(operation)) {
+      throw new Error('credential_custody_operation_invalid');
+    }
+    const service = String(serviceName || '').trim().toLowerCase();
+    if (!service || (operation !== 'REVOKE' && (value == null || value === ''))) {
+      throw new Error('credential_custody_input_invalid');
+    }
+    const storeModule = deps.credentialStore || await import('./credential-store.js');
+    const {
+      credentialSlotId,
+      computeCredentialHash,
+      storeCredential,
+      readCredential,
+      revokeCredential,
+    } = storeModule;
+    const slotId = credentialSlotId(service);
+    const before = operation === 'REVOKE' ? await readCredential(service) : null;
+    if (operation === 'REVOKE' && !before) throw new Error('credential_custody_revoke_missing');
+    const materialCommitment = operation === 'REVOKE' ? before.hash : computeCredentialHash(value);
+    const actionId = randomUUID();
+    const started = await appendAutonomousAuthority(
+      AIMOS_COMPANY_ID,
+      String(subjectAgentId || 'housekeeper'),
+      'credential_custody_started',
+      actionId,
+      {
+        schema: 'hom.aimos.credential-custody-start/v1',
+        custody_action_id: actionId,
+        lifecycle_event_type: operation,
+        service_name: service,
+        slot_id: slotId,
+        material_commitment_sha256: materialCommitment,
+        subject_agent_id: String(subjectAgentId || 'housekeeper'),
+        reasoning: String(reason || 'credential_lifecycle_mutation'),
+      },
+      authority?.requestAdmissionEventId || null,
+      { returnReceipt: true, authority },
+    );
+    if (!started?.event_id || !/^[0-9a-f]{64}$/.test(String(started.mutation_hash || ''))) {
+      throw new Error('credential_custody_start_unavailable');
+    }
+    try {
+      const stored = operation === 'REVOKE'
+        ? { ...(await revokeCredential(service)), versionSlot: before.versionSlot, hash: before.hash }
+        : await storeCredential(service, value);
+      const readback = await readCredential(service);
+      const verified = operation === 'REVOKE'
+        ? stored.revoked === true && readback === null
+        : readback
+          && readback.slot === stored.slot
+          && readback.versionSlot === stored.versionSlot
+          && readback.hash === materialCommitment;
+      if (!verified) {
+        throw new Error('credential_custody_readback_mismatch');
+      }
+      const versionSlotSha256 = custodyVersionSlotHash(stored.versionSlot);
+      const readbackReceipt = await appendAutonomousAuthority(
+        AIMOS_COMPANY_ID,
+        String(subjectAgentId || 'housekeeper'),
+        'credential_custody_readback_verified',
+        actionId,
+        {
+          schema: 'hom.aimos.credential-custody-readback/v1',
+          custody_action_id: actionId,
+          start_event_id: started.event_id,
+          start_mutation_hash: started.mutation_hash,
+          lifecycle_event_type: operation,
+          service_name: service,
+          slot_id: slotId,
+          version_slot_sha256: versionSlotSha256,
+          material_commitment_sha256: materialCommitment,
+          readback_verified: true,
+          reasoning: 'The active logical Keychain slot resolved to the exact content-addressed version and material commitment.',
+        },
+        started.event_id,
+        { returnReceipt: true },
+      );
+      if (!readbackReceipt?.event_id
+          || !/^[0-9a-f]{64}$/.test(String(readbackReceipt.mutation_hash || ''))) {
+        throw new Error('credential_custody_readback_receipt_unavailable');
+      }
+      return Object.freeze({
+        ...stored,
+        custodyTrace: Object.freeze({
+          actionId,
+          startEventId: started.event_id,
+          startMutationHash: started.mutation_hash,
+          readbackEventId: readbackReceipt.event_id,
+          readbackMutationHash: readbackReceipt.mutation_hash,
+          eventType: operation,
+          serviceName: service,
+          slotId,
+          versionSlotSha256,
+          materialCommitmentSha256: materialCommitment,
+          subjectAgentId: String(subjectAgentId || 'housekeeper'),
+        }),
+      });
+    } catch (error) {
+      await appendAutonomousAuthority(
+        AIMOS_COMPANY_ID,
+        String(subjectAgentId || 'housekeeper'),
+        'credential_custody_indeterminate',
+        actionId,
+        {
+          schema: 'hom.aimos.credential-custody-terminal/v1',
+          custody_action_id: actionId,
+          start_event_id: started.event_id,
+          start_mutation_hash: started.mutation_hash,
+          lifecycle_event_type: operation,
+          service_name: service,
+          slot_id: slotId,
+          material_commitment_sha256: materialCommitment,
+          disposition: 'INDETERMINATE',
+          error_class: error?.name || 'credential_custody_failure',
+          reasoning: 'Keychain completion could not be proven; no success terminal was emitted.',
+        },
+        started.event_id,
+        { returnReceipt: true },
+      );
+      throw error;
+    }
+  }
+
+  async function commitCredentialCustodyTerminal(trace, lifecycleCommit, {
+    client = null,
+    disposition = 'SUCCESS',
+  } = {}) {
+    if (!trace?.actionId || !trace?.startEventId
+        || !/^[0-9a-f]{64}$/.test(String(trace.startMutationHash || ''))
+        || !lifecycleCommit?.provenanceId
+        || !Buffer.from(lifecycleCommit.mutationHash || []).length) {
+      throw new Error('credential_custody_terminal_input_invalid');
+    }
+    const terminal = await appendAutonomousAuthority(
+      AIMOS_COMPANY_ID,
+      trace.subjectAgentId,
+      'credential_custody_committed',
+      trace.actionId,
+      {
+        schema: 'hom.aimos.credential-custody-terminal/v1',
+        custody_action_id: trace.actionId,
+        start_event_id: trace.startEventId,
+        start_mutation_hash: trace.startMutationHash,
+        readback_event_id: trace.readbackEventId,
+        readback_mutation_hash: trace.readbackMutationHash,
+        lifecycle_event_type: trace.eventType,
+        service_name: trace.serviceName,
+        slot_id: trace.slotId,
+        version_slot_sha256: trace.versionSlotSha256,
+        material_commitment_sha256: trace.materialCommitmentSha256,
+        lifecycle_provenance_id: String(lifecycleCommit.provenanceId),
+        lifecycle_mutation_hash: Buffer.from(lifecycleCommit.mutationHash).toString('hex'),
+        disposition: String(disposition),
+        reasoning: 'The exact Keychain readback and signed lifecycle head were verified before this terminal co-committed.',
+      },
+      trace.startEventId,
+      { returnReceipt: true, client },
+    );
+    if (!terminal?.event_id || !/^[0-9a-f]{64}$/.test(String(terminal.mutation_hash || ''))) {
+      throw new Error('credential_custody_terminal_unavailable');
+    }
+    return terminal;
+  }
+
+  async function markCredentialCustodyIndeterminate(trace, error) {
+    if (!trace?.actionId || !trace?.startEventId) return null;
+    return appendAutonomousAuthority(
+      AIMOS_COMPANY_ID,
+      trace.subjectAgentId,
+      'credential_custody_indeterminate',
+      trace.actionId,
+      {
+        schema: 'hom.aimos.credential-custody-terminal/v1',
+        custody_action_id: trace.actionId,
+        start_event_id: trace.startEventId,
+        start_mutation_hash: trace.startMutationHash,
+        lifecycle_event_type: trace.eventType,
+        service_name: trace.serviceName,
+        slot_id: trace.slotId,
+        version_slot_sha256: trace.versionSlotSha256,
+        material_commitment_sha256: trace.materialCommitmentSha256,
+        disposition: 'INDETERMINATE',
+        error_class: error?.name || 'credential_lifecycle_failure',
+        reasoning: 'Keychain readback succeeded but the signed lifecycle terminal did not commit.',
+      },
+      trace.startEventId,
+      { returnReceipt: true },
+    );
+  }
 
   function runner(client) {
     return client ? client.query.bind(client) : queryFn;
@@ -451,6 +696,16 @@ export function createCredentialLedger(deps = {}) {
   }
 
   function validateAppendAgainstChain(body, eventType, verified) {
+    if (['STORE', 'ROTATE', 'REVOKE'].includes(eventType) && body.genesis_root !== true) {
+      if (!body.custody_action_id
+          || !body.custody_start_event_id
+          || !/^[0-9a-f]{64}$/.test(String(body.custody_start_mutation_hash || ''))
+          || !body.custody_readback_event_id
+          || !/^[0-9a-f]{64}$/.test(String(body.custody_readback_mutation_hash || ''))
+          || !/^[0-9a-f]{64}$/.test(String(body.custody_version_slot_sha256 || ''))) {
+        return 'credential_custody_start_binding_missing';
+      }
+    }
     if (eventType === 'USE_RESERVED') {
       const effective = verified.effectiveStore;
       const effectiveBody = effective ? bodyOf(effective) : null;
@@ -498,6 +753,51 @@ export function createCredentialLedger(deps = {}) {
       );
       const { prevMutationHash, isGenesis, verified } = await getLatestMutationHash(slotId, conn);
       if (isGenesis && eventType !== 'STORE') throw new Error('credential_genesis_must_store');
+      if (body.genesis_root === true && (
+        !isGenesis
+        || eventType !== 'STORE'
+        || serviceName !== AIMOS_RUNTIME_CREDENTIAL_SERVICE
+        || slotId !== `com.aimos.credentials.${AIMOS_RUNTIME_CREDENTIAL_SERVICE}`
+        || body.reason !== 'genesis_runtime_database_role'
+        || body.operator !== 'housekeeper'
+        || body.signer_agent_id !== 'housekeeper'
+      )) {
+        throw new Error('credential_genesis_root_invalid');
+      }
+      if (!isGenesis && eventType === 'STORE') throw new Error('credential_successor_must_rotate');
+      if (['STORE', 'ROTATE', 'REVOKE'].includes(eventType) && body.genesis_root !== true) {
+        const start = await verifyAutonomousEvent(body.custody_start_event_id, AIMOS_COMPANY_ID, { client: conn });
+        const metadata = typeof start.metadata === 'string' ? JSON.parse(start.metadata) : start.metadata;
+        if (start.operation !== 'credential_custody_started'
+            || String(start.key) !== String(body.custody_action_id)
+            || Buffer.from(start.mutation_hash || []).toString('hex') !== body.custody_start_mutation_hash
+            || metadata?.schema !== 'hom.aimos.credential-custody-start/v1'
+            || metadata?.custody_action_id !== body.custody_action_id
+            || metadata?.lifecycle_event_type !== eventType
+            || metadata?.service_name !== serviceName
+            || metadata?.slot_id !== slotId
+            || metadata?.material_commitment_sha256 !== body.credential_hash) {
+          throw new Error('credential_custody_start_binding_invalid');
+        }
+        const readback = await verifyAutonomousEvent(body.custody_readback_event_id, AIMOS_COMPANY_ID, { client: conn });
+        const readbackMetadata = typeof readback.metadata === 'string' ? JSON.parse(readback.metadata) : readback.metadata;
+        if (readback.operation !== 'credential_custody_readback_verified'
+            || String(readback.key) !== String(body.custody_action_id)
+            || String(readback.parent_event_id) !== String(body.custody_start_event_id)
+            || Buffer.from(readback.mutation_hash || []).toString('hex') !== body.custody_readback_mutation_hash
+            || readbackMetadata?.schema !== 'hom.aimos.credential-custody-readback/v1'
+            || readbackMetadata?.custody_action_id !== body.custody_action_id
+            || readbackMetadata?.start_event_id !== body.custody_start_event_id
+            || readbackMetadata?.start_mutation_hash !== body.custody_start_mutation_hash
+            || readbackMetadata?.lifecycle_event_type !== eventType
+            || readbackMetadata?.service_name !== serviceName
+            || readbackMetadata?.slot_id !== slotId
+            || readbackMetadata?.version_slot_sha256 !== body.custody_version_slot_sha256
+            || readbackMetadata?.material_commitment_sha256 !== body.credential_hash
+            || readbackMetadata?.readback_verified !== true) {
+          throw new Error('credential_custody_readback_binding_invalid');
+        }
+      }
       const chainMismatch = validateAppendAgainstChain(body, eventType, verified);
       if (chainMismatch) throw new Error(chainMismatch);
       const cHash = contentHash(body);
@@ -752,10 +1052,13 @@ export function createCredentialLedger(deps = {}) {
     outcomeClass = null,
     errorClass = null,
   }) {
-    if (!reservation?.useId || !['completed', 'failed'].includes(outcome)) {
+    if (!reservation?.useId || !['completed', 'failed', 'indeterminate'].includes(outcome)) {
       throw new Error('credential_use_terminal_malformed');
     }
     const eventType = outcome === 'completed' ? 'USE_COMPLETED' : 'USE_FAILED';
+    const disposition = outcome === 'completed'
+      ? 'SUCCEEDED'
+      : outcome === 'indeterminate' ? 'INDETERMINATE' : 'FAILED';
     const body = {
       event_type: eventType,
       service: reservation.serviceName,
@@ -767,7 +1070,8 @@ export function createCredentialLedger(deps = {}) {
       reservation_mutation_hash: reservation.reservationMutationHash,
       outcome_hash: outcomeHash,
       outcome_class: String(outcomeClass || (outcome === 'completed' ? 'completed' : 'failed')),
-      error_class: outcome === 'failed' ? String(errorClass || 'external_operation_failed') : null,
+      disposition,
+      error_class: outcome === 'completed' ? null : String(errorClass || 'external_operation_failed'),
       subject_agent_id: reservation.subjectAgentId,
       signer_agent_id: 'housekeeper',
     };
@@ -790,6 +1094,7 @@ export function createCredentialLedger(deps = {}) {
         || existingBody?.reservation_mutation_hash !== reservation.reservationMutationHash
         || existingBody?.outcome_hash !== outcomeHash
         || existingBody?.outcome_class !== body.outcome_class
+        || (existingBody?.disposition || (existing.event_type === 'USE_COMPLETED' ? 'SUCCEEDED' : 'FAILED')) !== body.disposition
         || existingBody?.error_class !== body.error_class
         || existingBody?.subject_agent_id !== reservation.subjectAgentId
       ) {
@@ -829,13 +1134,56 @@ export function createCredentialLedger(deps = {}) {
     return Object.freeze({
       useId: reservation.useId,
       outcome,
+      disposition,
       terminalProvenanceId: committed.provenanceId,
       terminalMutationHash: committed.mutationHash.toString('hex'),
     });
   }
 
+  async function findOpenCredentialUses() {
+    const slots = await queryFn(
+      `SELECT DISTINCT slot_id
+         FROM aimos_credential_lifecycle
+        WHERE event_type = 'USE_RESERVED'
+        ORDER BY slot_id
+        LIMIT 10001`,
+      [],
+    );
+    if ((slots.rows || []).length > MAX_RECOVERY_SLOTS) throw new Error('credential_use_recovery_limit');
+    const open = [];
+    for (const row of slots.rows || []) {
+      const verified = await readVerifiedSlotChain(row.slot_id);
+      for (const reservation of verified.openCredentialUses) {
+        const body = bodyOf(reservation);
+        open.push(Object.freeze({
+          slotId: row.slot_id,
+          useId: body?.use_id,
+          useGroupId: body?.use_group_id || null,
+          serviceName: reservation.service_name,
+          credentialHash: body?.credential_hash,
+          subjectAgentId: body?.subject_agent_id || 'housekeeper',
+          reservationProvenanceId: String(reservation.provenance_id),
+          reservationMutationHash: Buffer.from(reservation.mutation_hash).toString('hex'),
+        }));
+      }
+    }
+    open.sort((left, right) => String(left.useId).localeCompare(String(right.useId)));
+    return Object.freeze(open);
+  }
+
+  async function reconcileOpenCredentialUses() {
+    const before = await findOpenCredentialUses();
+    return reconcileCredentialUseReservations(before, {
+      finalizeFn: finalizeCredentialUse,
+      reloadFn: findOpenCredentialUses,
+    });
+  }
+
   return {
     commitCredentialLifecycle,
+    beginCredentialCustodyMutation,
+    commitCredentialCustodyTerminal,
+    markCredentialCustodyIndeterminate,
     verifyCredentialLifecycle,
     readVerifiedSlotChain,
     getLifecycleRow,
@@ -844,6 +1192,8 @@ export function createCredentialLedger(deps = {}) {
     getLatestMutationHash,
     reserveCredentialUse,
     finalizeCredentialUse,
+    findOpenCredentialUses,
+    reconcileOpenCredentialUses,
   };
 }
 

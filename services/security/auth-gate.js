@@ -16,9 +16,8 @@
  *
  * Auth paths (in order):
  *   1. Open paths (/health, /healthz, /) → pass through
- *   2. First-run Aimos identity enrollment paths → pass through
- *   3. Cryptographic envelope → verified by auth-tier, sets req.identityAuthenticatedBy
- *   4. Neither → 401 "Unauthorized — cryptographic envelope required"
+ *   2. Cryptographic envelope → verified by auth-tier, sets req.identityAuthenticatedBy
+ *   3. Neither → 401 "Unauthorized — cryptographic envelope required"
  *
  * Sets on req:
  *   req.identityTier          — 'T0'|'T1'|'T2'|'T3'
@@ -38,21 +37,12 @@ import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { reserveVerifiedRequest } from './request-receipt-ledger.js';
 import { logEvent } from '../observe/event-ledger.js';
 
-// R1 Step 5: the blanket '/setup/aimos/identity/' open prefix is REMOVED. It
-// exposed GET /setup/aimos/identity/agents (enumerate every enrolled agent id,
-// pubkey fingerprint, validity window, and key-presence) with no auth. Only the
-// specific first-run WRITE endpoints that genuinely predate an envelope stay
-// open; the list endpoint now falls through to the gate and requires a verified
-// cert + admin_override capability (enforced in routes/setup.js).
+// Fresh-install master and first-agent enrollment is the local Genesis Part-B
+// ceremony. No HTTP identity endpoint predates the envelope. Runtime enrollment,
+// connect, select, and list operations all fall through this gate and then
+// require admin_override in routes/setup.js.
 const OPEN_PATHS = new Set([
-  '/', '/healthz', '/health',
-  // First-run identity bootstrap — no agent envelope exists yet. These create
-  // or select the envelope identity used for every subsequent request. enroll
-  // additionally requires the master passphrase (knowledge factor) and is rate
-  // limited + backoff-capped in routes/setup.js.
-  '/setup/aimos/identity/enroll',
-  '/setup/aimos/identity/connect',
-  '/setup/aimos/identity/select'
+  '/', '/healthz', '/health'
 ]);
 // T1_SYSTEM_SELF route allow-list — the housekeeper-self tier may only write
 // to system routes (genesis saves, heartbeats, event log, reasoning state,
@@ -72,6 +62,55 @@ const SYSTEM_SELF_ALLOW = new Set([
 ]);
 
 /**
+ * Project the already-verified Express request into the exact canonical SAVE
+ * authority shape. This function does not authenticate; createAuthGate has
+ * already done that and durably admitted the request. It fails closed if a
+ * route tries to manufacture authority from an incomplete request object.
+ */
+export function verifiedRequestAuthorityFromRequest(req) {
+  const context = req?.executionContext;
+  const agentId = req?.identityCert?.agent_id;
+  const complete = req?.identityAuthenticatedBy === 'envelope'
+    && context?.authSource === 'envelope'
+    && agentId
+    && context.actorAgentId === agentId
+    && context.actorValidFromIso
+    && context.companyId
+    && req.identityCertString
+    && Buffer.isBuffer(req.identitySigBytes)
+    && req.identityNonce
+    && Number.isInteger(req.identitySignedTs)
+    && req.identitySignedMethod
+    && req.identitySignedPath
+    && context.requestReceiptId
+    && context.requestReceiptMutationHash
+    && context.requestAdmissionEventId
+    && context.requestAdmissionMutationHash;
+  if (!complete) throw new Error('verified_request_authority_incomplete');
+  return Object.freeze({
+    kind: 'verified_request',
+    body: req.body || {},
+    agentId,
+    validFromIso: context.actorValidFromIso,
+    certString: req.identityCertString,
+    signedTs: req.identitySignedTs,
+    nonce: req.identityNonce,
+    sigBytes: req.identitySigBytes,
+    identityTier: req.identityTier,
+    claimedPrev: req.prevChainHash || null,
+    requestSigForm: req.identityRequestSigForm,
+    signedMethod: req.identitySignedMethod,
+    signedPath: req.identitySignedPath,
+    signedClaims: req.identitySignedClaims,
+    requestReceiptId: context.requestReceiptId,
+    requestReceiptMutationHash: context.requestReceiptMutationHash,
+    requestAdmissionEventId: context.requestAdmissionEventId,
+    requestAdmissionMutationHash: context.requestAdmissionMutationHash,
+    companyId: context.companyId,
+  });
+}
+
+/**
  * Create an Express middleware that enforces auth as a single authority.
  *
  * @param {Object} [deps] - Dependency injection for testing
@@ -88,7 +127,7 @@ export function createAuthGate(deps = {}) {
     : OPEN_PATHS;
 
   return async function authGate(req, res, next) {
-    // Open paths — health checks and first-run identity bootstrap only.
+    // Open paths — liveness only. Identity bootstrap is a local ceremony.
     if (openPaths.has(req.path)) {
       return next();
     }
@@ -171,7 +210,23 @@ export function createAuthGate(deps = {}) {
               reasoning: 'The housekeeper observed and retained the exact durable admission receipt after certificate-envelope verification and before route execution.',
             },
             null,
-            { returnReceipt: true },
+            {
+              authority: {
+                actorAgentId: result.cert.agent_id,
+                actorValidFromIso: result.validFromIso,
+                certString: result.certString,
+                signedTs: result.signedTs,
+                nonce: result.nonce,
+                sigBytes: result.sigBytes,
+                requestSigForm: result.requestSigForm,
+                signedMethod: result.signedMethod,
+                signedPath: result.signedPath,
+                signedClaims: result.signedClaims || null,
+                requestReceiptId: String(requestReceipt.request_receipt_id),
+                requestReceiptMutationHash: Buffer.from(requestReceipt.mutation_hash).toString('hex'),
+              },
+              returnReceipt: true,
+            },
           );
           if (!requestAdmission?.event_id || !requestAdmission?.mutation_hash) {
             throw new Error('request_admission_event_unavailable');
@@ -201,6 +256,7 @@ export function createAuthGate(deps = {}) {
             : null,
           requestAdmissionEventId: requestAdmission?.event_id || null,
           requestAdmissionMutationHash: requestAdmission?.mutation_hash || null,
+          requestAdmissionAuthorityKind: requestAdmission?.signed_body?.authority_kind || null,
           internalService: null,
         });
         return next();

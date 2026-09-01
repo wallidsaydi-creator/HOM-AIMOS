@@ -15,15 +15,17 @@
 
 import { query, pool } from '../db/connection.js';
 import { logEvent } from '../services/observe/event-ledger.js';
-import { persistMemory } from '../services/write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../services/write/canonical-save-owner.js';
 import { auditAladdinCompliance } from '../services/governance/aladdin-compliance.js';
 import { AIMOS_COMPANY_ID } from '../services/core/runtime-config.js';
+import { getSessionRunnerStats } from '../services/orchestration/session-runner.js';
 
 export const HEARTBEAT_INTERVAL_CRON = '*/30 * * * *';
 const COMPANY = AIMOS_COMPANY_ID;
 
 /**
- * Run a single heartbeat check. Fast (< 5 seconds), never throws.
+ * Run a single heartbeat check. Fast (< 5 seconds). Individual observations
+ * degrade into warnings, but required signed event/SAVE ownership fails closed.
  *
  * @param {string} companyId
  * @returns {Promise<{status: string, timestamp: string, uptimeSec: number, checks: Object, warnings: string[]}>}
@@ -85,13 +87,10 @@ export async function runHeartbeat(companyId = COMPANY) {
 
   // ─── CHECK 4: Stuck session lanes ──────────────────────────────────────
   try {
-    const [stuckRes, runRes] = await Promise.all([
-      query(`SELECT COUNT(*) AS cnt FROM session_lanes WHERE company_id = $1 AND run_status = 'stuck'`, [companyId]),
-      query(`SELECT COUNT(*) AS cnt FROM session_lanes WHERE company_id = $1 AND run_status = 'running'`, [companyId]),
-    ]);
+    const lanes = await getSessionRunnerStats(companyId);
     checks.lanes = {
-      stuck: parseInt(stuckRes.rows[0]?.cnt || '0', 10),
-      running: parseInt(runRes.rows[0]?.cnt || '0', 10),
+      stuck: 0,
+      running: Number(lanes.runningSessionLanes || 0),
     };
     if (checks.lanes.stuck > 0) warnings.push(`${checks.lanes.stuck} stuck lane(s)`);
   } catch {
@@ -141,8 +140,7 @@ export async function runHeartbeat(companyId = COMPANY) {
   const result = { status, timestamp, uptimeSec: Math.round(process.uptime()), checks, warnings };
 
   // ─── SAVE: event (time series) ─────────────────────────────────────────
-  try {
-    await logEvent(companyId, 'system', 'heartbeat', 'heartbeat:pulse', {
+  await logEvent(companyId, 'housekeeper', 'heartbeat', 'heartbeat:pulse', {
       status,
       uptimeSec: result.uptimeSec,
       memoryTotal: checks.memory?.totalRetained ?? -1,
@@ -156,16 +154,13 @@ export async function runHeartbeat(companyId = COMPANY) {
       warnings: warnings.slice(0, 5),
       reasoning: `System heartbeat pulse. Status: ${status}. ${warnings.length} warnings.`,
     });
-  } catch (err) {
-    console.warn('[heartbeat] Failed to log event:', err.message);
-  }
 
   // ─── SAVE: snapshot (latest state, upserted) ──────────────────────────
   // Fail-closed: persistMemory + commitProvenance are atomic. If the
   // ledger commit fails, the heartbeat throws — the cron runner surfaces it.
   const heartbeatKey = 'heartbeat:latest';
   const heartbeatValue = JSON.stringify(result);
-  const saved = await persistMemory({
+  const saved = await executeHousekeeperCanonicalSave({
     company_id: companyId,
     agent_id: 'housekeeper',
     key: heartbeatKey,
@@ -173,7 +168,6 @@ export async function runHeartbeat(companyId = COMPANY) {
     scope: 'system',
     memory_type: 'event_log',
     source: 'heartbeat',
-    mutation_authority: 'housekeeper',
   });
 
   console.log(`[heartbeat] ${status} | uptime=${result.uptimeSec}s | memories=${checks.memory?.totalRetained ?? '?'} | events/hr=${checks.events?.lastHour ?? '?'} | aimos=${checks.aimos?.latencyMs ?? '?'}ms | heap=${checks.process?.heapUsedMB ?? '?'}MB | warnings=${warnings.length}`);

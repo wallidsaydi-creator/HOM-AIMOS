@@ -123,17 +123,17 @@ export async function buildPositiveSecurityModel(companyId = COMPANY) {
     // provide cryptographic execution truth.
     const result = await query(`
       SELECT
-        key AS tool_name,
+        metadata->>'tool' AS tool_name,
         metadata->>'args_sha256' AS params,
         COUNT(*) as frequency
       FROM aimos_events
       WHERE company_id = $1
-        AND operation = 'tool_execution_succeeded'
+        AND operation IN ('tool_execution_succeeded','tool_execution_terminal')
         AND proof_required = TRUE
         AND ledger_version = 1
         AND metadata->>'outcome' = 'succeeded'
         AND ts > NOW() - INTERVAL '30 days'
-      GROUP BY key, metadata->>'args_sha256'
+      GROUP BY metadata->>'tool', metadata->>'args_sha256'
       ORDER BY frequency DESC
       LIMIT 1000
     `, [companyId]);

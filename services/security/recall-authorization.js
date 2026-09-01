@@ -9,6 +9,7 @@ import { pool as defaultPool } from '../../db/connection.js';
 import { canonicalJson, signPayload, verifyStoredPayloadSig } from './agent-identity.js';
 
 export const RECALL_AUTHORIZATION_SCHEMA = 'hom.aimos.recall-authorization/v1';
+export const RECALL_AUTHORIZATION_MUTATION_SCOPE = 'offline_maintenance_only';
 const RECALL_AUTHORIZATION_DOMAIN = Buffer.from('aimos-recall-authorization-v1\0', 'utf8');
 const DATA_CLASS_ORDER = Object.freeze(['public', 'internal', 'confidential', 'restricted']);
 

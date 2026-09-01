@@ -183,6 +183,108 @@ test('SAVE intent remains valid when the native writer reclassifies canonical fi
   );
 });
 
+test('ordinary-agent session finalization verifies derived exchange and manifest SAVE intents', () => {
+  const sessionId = 'bench:lme:proof:session_1';
+  const sourceIds = [randomUUID(), randomUUID()];
+  const user = 'The user retained an exact benchmark observation.';
+  const assistant = 'The assistant retained the corresponding response.';
+  const sourceHashes = [user, assistant]
+    .map((value) => createHash('sha256').update(Buffer.from(value, 'utf8')).digest('hex'));
+  const sourceBinding = {
+    schema: 'aimos.session-exchange/v1',
+    session_id: sessionId,
+    user_sequence: 1,
+    assistant_sequence: 2,
+    source_memory_ids: sourceIds,
+    source_content_sha256: sourceHashes,
+  };
+  const exchangeHash = createHash('sha256')
+    .update(Buffer.from(canonicalJson(sourceBinding), 'utf8')).digest('hex');
+  const exchangeValue = canonicalJson({
+    ...sourceBinding,
+    valid_from: '2026-01-01T00:00:00.000Z',
+    valid_until: '2026-01-01T00:00:01.000Z',
+    user,
+    assistant,
+  });
+  const expectedTurnHashes = 'ab'.repeat(32);
+  const finalizeBody = {
+    company_id: 'hom',
+    agent_id: 'proof-agent',
+    session_id: sessionId,
+    source: `benchmark:${sessionId}`,
+    clearance_level: 1,
+    expected_turn_count: 2,
+    expected_turn_id_hashes_sha256: expectedTurnHashes,
+  };
+  const { row: base } = fixture(3, {
+    outerBody: finalizeBody,
+    signedPath: '/aimos/session/finalize',
+  });
+  const asLiveRow = (fields) => {
+    const liveHash = computeLiveRowContentHash(fields);
+    return {
+      ...base,
+      ...Object.fromEntries(Object.entries(fields).map(([key, value]) => [`live_${key}`, value])),
+      live_content_hash: liveHash,
+      snapshot_live_content_hash: liveHash,
+    };
+  };
+  const exchangeRow = asLiveRow({
+    key: `sess:${sessionId}:exchange:000000000001-000000000002:${exchangeHash}`,
+    value: exchangeValue,
+    scope: 'global',
+    memory_type: 'session_exchange',
+    clearance_level: 1,
+    data_class: 'public',
+    source: `benchmark:${sessionId}`,
+  });
+  assert.equal(verifyRecallEvidenceRow(exchangeRow).valid, true);
+  const tamperedExchange = JSON.parse(exchangeValue);
+  tamperedExchange.assistant = 'tampered';
+  const tamperedRow = asLiveRow({
+    key: exchangeRow.live_key,
+    value: canonicalJson(tamperedExchange),
+    scope: 'global',
+    memory_type: 'session_exchange',
+    clearance_level: 1,
+    data_class: 'public',
+    source: `benchmark:${sessionId}`,
+  });
+  assert.equal(
+    verifyRecallEvidenceRow(tamperedRow).reason,
+    'signed_save_intent_missing_or_ambiguous',
+  );
+
+  const sessionRoot = 'cd'.repeat(32);
+  const manifestValue = canonicalJson({
+    schema: 'aimos.session-finalization/v1',
+    session_id: sessionId,
+    state: 'finalized',
+    turn_count: 2,
+    turn_id_hashes_sha256: expectedTurnHashes,
+    valid_from: '2026-01-01T00:00:00.000Z',
+    valid_until: '2026-01-01T00:00:01.000Z',
+    subject_agent_ids: ['proof-agent'],
+    session_merkle_algorithm: 'RFC6962_SHA256_DOMAIN_SEPARATED',
+    session_merkle_root: sessionRoot,
+    exchange_count: 1,
+    exchange_merkle_root: 'ef'.repeat(32),
+    turns: [{ ordinal: 1 }, { ordinal: 2 }],
+    exchanges: [{ ordinal: 1 }],
+  });
+  const manifestRow = asLiveRow({
+    key: `sess:${sessionId}:final:${sessionRoot}`,
+    value: manifestValue,
+    scope: 'global',
+    memory_type: 'session_manifest',
+    clearance_level: 1,
+    data_class: 'public',
+    source: `benchmark:${sessionId}`,
+  });
+  assert.equal(verifyRecallEvidenceRow(manifestRow).valid, true);
+});
+
 test('streamable MCP SAVE verifies the exact signed nested intent', () => {
   const intent = {
     key: 'proof:recall:evidence',

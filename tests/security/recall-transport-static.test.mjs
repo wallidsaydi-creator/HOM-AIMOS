@@ -11,13 +11,13 @@ test('REST and MCP recall transports converge on the native pipeline', () => {
   const native = read('services/retrieval/native-recall.js');
   const pipeline = read('services/retrieval/native-recall-pipeline.js');
 
-  assert.match(rest, /import \{ executeNativeRecall \} from '..\/services\/retrieval\/native-recall-pipeline\.js'/);
+  assert.match(rest, /import \{ executeCanonicalRecall \} from '..\/services\/retrieval\/native-recall-pipeline\.js'/);
   assert.doesNotMatch(rest, /async function executeAimosRecall/);
   assert.match(rest, /router\.get\('\/recall',[\s\S]*signed_post_recall_required/);
   assert.match(rest, /router\.all\('\/recall\/demo',[\s\S]*demo_recall_moved_to_signed_post/);
 
-  assert.match(mcp, /resolveNativeRecallAuthority/);
-  assert.match(mcp, /executeNativeRecall\(authContext\.request, recallAuthority\)/);
+  assert.match(mcp, /executeCanonicalRecall\(\{/);
+  assert.doesNotMatch(mcp, /resolveNativeRecallAuthority|executeNativeRecall\(/);
   assert.match(mcp, /rpcId: transportBinding\?\.rpcId/);
   assert.match(mcp, /batchIndex: transportBinding\?\.batchIndex/);
   assert.doesNotMatch(mcp, /adaptiveRecall|vector_fallback/);

@@ -3,7 +3,6 @@
 
 
 import { query } from '../db/connection.js';
-import { getEmbedding } from '../services/core/embeddings.js';
 
 export async function backfillSkillEmbeddings() {
   const result = await query(
@@ -17,30 +16,14 @@ export async function backfillSkillEmbeddings() {
     return { backfilled: 0, failed: 0, total: 0 };
   }
 
-  console.log(`[backfill] Found ${result.rows.length} skills without embeddings`);
-  let success = 0;
-  let failed = 0;
-
-  for (const skill of result.rows) {
-    const desc = `${skill.skill_name}: ${skill.trigger_pattern || 'general'} task. ${skill.expected_outcome || ''}`.trim();
-    try {
-      const embedding = await getEmbedding(desc);
-      if (embedding) {
-        await query(
-          `UPDATE procedural_skills SET skill_embedding = $1::vector WHERE id = $2`,
-          [JSON.stringify(embedding), skill.id]
-        );
-        success++;
-        console.log(`  + ${skill.skill_name}`);
-      }
-    } catch (err) {
-      failed++;
-      console.warn(`  x ${skill.skill_name}: ${err.message}`);
-    }
-  }
-
-  console.log(`[backfill] Done: ${success} embedded, ${failed} failed out of ${result.rows.length}`);
-  return { backfilled: success, failed, total: result.rows.length };
+  console.log(`[backfill] ${result.rows.length} retained legacy skills require canonical procedural-memory re-save`);
+  return {
+    backfilled: 0,
+    failed: 0,
+    total: result.rows.length,
+    mutation_performed: false,
+    disposition: 'LEGACY_READ_ONLY_REQUIRES_CANONICAL_RESAVE',
+  };
 }
 
 // Direct invocation

@@ -18,14 +18,17 @@
  *
  * SERVICE CONNECTION GUIDE:
  * 1. <- Called by session-runner.js and signed /aimos/session routes.
- * 2. -> Calls persist-memory.js, memory-provenance.js, and event-ledger.js.
+ * 2. -> Calls canonical-save-owner.js, memory-provenance.js, and event-ledger.js.
  * 3. -> Reads only its `sess:<session_id>:` conversation_feed/manifest rows.
  * Pipeline: SESSION | Position: native durable session owner
  */
 
 import { createHash } from 'node:crypto';
 import { withTransaction } from '../../db/connection.js';
-import { persistMemory } from '../write/persist-memory.js';
+import {
+  executeCanonicalSave,
+  executeHousekeeperCanonicalSave,
+} from '../write/canonical-save-owner.js';
 import { memoryProvenanceLedger } from '../security/memory-provenance.js';
 import { canonicalJson } from '../security/agent-identity.js';
 import { logEvent } from '../observe/event-ledger.js';
@@ -202,16 +205,17 @@ export function sessionMerkleRoot(entries = []) {
     Buffer.from(canonicalJson(entry), 'utf8'),
   ])).digest());
   if (!leaves.length) return createHash('sha256').update(Buffer.alloc(0)).digest();
-  const tree = (nodes) => {
-    if (nodes.length === 1) return nodes[0];
-    const split = largestPowerOfTwoBelow(nodes.length);
+  const tree = (start, end) => {
+    const length = end - start;
+    if (length === 1) return leaves[start];
+    const split = largestPowerOfTwoBelow(length);
     return createHash('sha256').update(Buffer.concat([
       Buffer.from([0x01]),
-      tree(nodes.slice(0, split)),
-      tree(nodes.slice(split)),
+      tree(start, start + split),
+      tree(start + split, end),
     ])).digest();
   };
-  return tree(leaves);
+  return tree(0, leaves.length);
 }
 
 function ledgerHash(result, key) {
@@ -377,10 +381,27 @@ function ensureEvidenceVerified(evidence, memoryIds) {
 
 export function createSessionMemoryOwner(deps = {}) {
   const withTransactionFn = deps.withTransaction || withTransaction;
-  const persistMemoryFn = deps.persistMemory || persistMemory;
+  const executeSaveFn = deps.executeCanonicalSave || executeCanonicalSave;
+  const executeHousekeeperSaveFn = deps.executeHousekeeperCanonicalSave
+    || executeHousekeeperCanonicalSave;
   const logEventFn = deps.logEvent || logEvent;
   const verifyEvidenceFn = deps.verifyEvidence
     || ((args) => memoryProvenanceLedger.verifyRecallEvidence(args));
+
+  async function saveSessionMemory(spec, context) {
+    const requestAuthority = context.requestAuthority || context.mutationAuthority || null;
+    const autonomousHousekeeper = context.autonomousHousekeeper === true;
+    if (requestAuthority && autonomousHousekeeper) {
+      throw new Error('session_authority_ambiguous');
+    }
+    if (requestAuthority) {
+      return executeSaveFn({ ...spec, mutation_authority: requestAuthority });
+    }
+    if (autonomousHousekeeper) {
+      return executeHousekeeperSaveFn(spec);
+    }
+    throw new Error('session_save_authority_required');
+  }
 
   async function appendTurn(input = {}, context = {}) {
     const sessionId = normalizeSessionId(input.session_id ?? input.sessionId);
@@ -518,7 +539,7 @@ export function createSessionMemoryOwner(deps = {}) {
         ...(imageContext.length ? { image_context: imageContext } : {}),
       };
       const value = canonicalJson(record);
-      const saved = await persistMemoryFn({
+      const saved = await saveSessionMemory({
         company_id: companyId,
         agent_id: agentId,
         key,
@@ -529,9 +550,7 @@ export function createSessionMemoryOwner(deps = {}) {
         source,
         valid_from: observedAt,
         session_id: sessionId,
-        mutation_authority: context.mutationAuthority || context.requestAuthority || 'housekeeper',
-        client,
-      });
+      }, context);
       if (saved?.rejected || !saved?.id) {
         const error = new Error(`session_turn_persist_failed:${saved?.reason || 'memory_id_missing'}`);
         error.persistResult = saved;
@@ -685,7 +704,7 @@ export function createSessionMemoryOwner(deps = {}) {
           continue;
         }
         if (existing.rows[0]) throw new Error('session_exchange_missing_after_finalization');
-        const savedExchange = await persistMemoryFn({
+        const savedExchange = await saveSessionMemory({
           company_id: companyId,
           agent_id: agentId,
           key: spec.key,
@@ -698,9 +717,7 @@ export function createSessionMemoryOwner(deps = {}) {
           valid_until: spec.record.valid_until,
           session_id: sessionId,
           compression_ratio: 1,
-          mutation_authority: 'housekeeper',
-          client,
-        });
+        }, context);
         if (savedExchange?.rejected || !savedExchange?.id) {
           const error = new Error(`session_exchange_persist_failed:${savedExchange?.reason || 'memory_id_missing'}`);
           error.persistResult = savedExchange;
@@ -795,7 +812,7 @@ export function createSessionMemoryOwner(deps = {}) {
           retained_retry_copy_memory_ids: canonicalized.duplicates.map((turn) => String(turn.row.id)),
         } : {}),
       };
-      const saved = await persistMemoryFn({
+      const saved = await saveSessionMemory({
         company_id: companyId,
         agent_id: agentId,
         key,
@@ -808,9 +825,7 @@ export function createSessionMemoryOwner(deps = {}) {
         valid_until: observedTimes.at(-1),
         session_id: sessionId,
         compression_ratio: 1,
-        mutation_authority: 'housekeeper',
-        client,
-      });
+      }, context);
       if (saved?.rejected || !saved?.id) {
         const error = new Error(`session_finalization_persist_failed:${saved?.reason || 'memory_id_missing'}`);
         error.persistResult = saved;

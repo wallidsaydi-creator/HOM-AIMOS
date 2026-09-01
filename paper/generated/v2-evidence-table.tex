@@ -1,0 +1,17 @@
+\begin{table*}[t]
+\centering
+\caption{Current MutMem V2 reproducibility and conformance evidence. Counts are verification units, not benchmark accuracy.}
+\label{tab:v2-evidence}
+\small
+\begin{tabular}{@{}>{\raggedright\arraybackslash}p{0.25\textwidth}>{\raggedright\arraybackslash}p{0.31\textwidth}>{\raggedright\arraybackslash}p{0.32\textwidth}@{}}
+\toprule
+Evidence family & Verified result & Interpretation \\
+\midrule
+Portable protocol & \MutMemProtocolSchemaCount\ schemas; \MutMemRecallStructuralVectorCount\ recall vectors; \MutMemMutationStructuralVectorCount\ mutation vectors; \MutMemFailureCodeCount\ recall failure codes & Versioned bytes, membership, predicates, and terminal vocabulary \\
+Independent Node/Python verifier & \MutMemCrossLanguageTerminalCount/\MutMemCrossLanguageTerminalCount\ exact verdict and reason terminals; \MutMemVerifierExitPassed/\MutMemVerifierExitTotal\ exit criteria & Verifier portability, not empirical utility \\
+Production conformance corpus & \MutMemConformanceCount/\MutMemConformanceCount\ cases across \MutMemConformanceClassCount\ required classes & Production/independent parity \\
+Canary explicit-marker lane & marked \MutMemCanaryMarkedDetected/\MutMemCanaryMarkedTotal; clean flags \MutMemCanaryCleanFlagged/\MutMemCanaryCleanTotal & Explicit marker traversal only \\
+Clean installer qualification & Node \MutMemInstallerNodeVersion; first boot, restart, and scheduler ready; \MutMemInstallerExperimentalCount\ experimental memories & One same-user installed system; no benchmark result \\
+\bottomrule
+\end{tabular}
+\end{table*}

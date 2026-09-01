@@ -1,0 +1,30 @@
+\scriptsize
+\begin{longtable}{@{}>{\raggedright\arraybackslash}p{0.16\linewidth}>{\raggedright\arraybackslash}p{0.12\linewidth}>{\raggedright\arraybackslash}p{0.14\linewidth}>{\raggedright\arraybackslash}p{0.42\linewidth}@{}}
+\caption{Complete manuscript claim-to-evidence disposition.}\label{tab:claim-map}\\
+\toprule
+Claim identifier & Disposition & Denominator & Limitation \\
+\midrule
+\endfirsthead
+\toprule
+Claim identifier & Disposition & Denominator & Limitation \\
+\midrule
+\endhead
+V1-\allowbreak{}LONGMEMEVAL-\allowbreak{}UTILITY & HISTORICAL V1 & 459/500 & Historical V1 result; model-judged and not a current-source V2 benchmark. \\
+V1-\allowbreak{}LOCOMO-\allowbreak{}JUDGED & HISTORICAL V1 & 1472/1986 & Historical V1 judged accuracy; never merged with token F1. \\
+V1-\allowbreak{}LOCOMO-\allowbreak{}F1 & HISTORICAL V1 & 1986 & Point estimate remains in the V1 aggregate; bootstrap interval omitted because private rows are unavailable. \\
+V1-\allowbreak{}POISONEDRAG & HISTORICAL V1 & 100 targets & Adapted bounded N=100 protocol; no universal or unseen-attack claim. \\
+V1-\allowbreak{}EPISTEMIC-\allowbreak{}ABLATION & HISTORICAL V1 & 100 paired targets per arm & Fixed-corpus causal evidence; query-local contribution was null and withholding was not exercised. \\
+V1-\allowbreak{}MUTATION-\allowbreak{}INTEGRITY & HISTORICAL V1 & 20 transitions & Historical retained-memory transition evidence under the V1 threat model. \\
+V1-\allowbreak{}MUTATION-\allowbreak{}LATENCY-\allowbreak{}STORAGE & HISTORICAL V1 & 20 transitions & Single-machine descriptive values; row-level inputs are unavailable for independent recomputation. \\
+V1-\allowbreak{}HUMAN-\allowbreak{}AGREEMENT & HISTORICAL V1 & 200 answers & System-author diagnostic, not independent human validation; bootstrap interval omitted. \\
+V2-\allowbreak{}PORTABLE-\allowbreak{}PROTOCOL & CURRENT V2 & 39+15 vectors & Portable verification protocol, not another memory engine or producer. \\
+V2-\allowbreak{}INDEPENDENT-\allowbreak{}VERIFIER & CURRENT V2 & 72 terminal verdicts & Cross-language verdict/reason parity proves verifier portability, not empirical utility. \\
+V2-\allowbreak{}PRODUCTION-\allowbreak{}CONFORMANCE & CURRENT V2 & 42/42 & Conformance corpus, not benchmark efficacy. \\
+V2-\allowbreak{}CANARY & CURRENT V2 & 120/120 & Explicit marker traversal only; not arbitrary poison, prompt-injection, or semantic social-engineering detection. \\
+V2-\allowbreak{}CLEAN-\allowbreak{}INSTALLER & CURRENT V2 & one qualified installation and restart & Reproducibility evidence only; not benchmark evidence. \\
+SABER-\allowbreak{}OPERATIONAL-\allowbreak{}NUMBERS & OMITTED & No numerical claim & Exact private artifact is not in verified custody; no numerical V2 claim is permitted. \\
+CONTENT-\allowbreak{}TRUTH & PROHIBITED & No numerical claim & Integrity, provenance, authorization, and agreement do not establish semantic truth. \\
+UNIVERSAL-\allowbreak{}DEFENSE & PROHIBITED & No numerical claim & Fixed marker and N=100 evidence do not establish universal robustness. \\
+INDEPENDENT-\allowbreak{}REPLICATION & PROHIBITED & No numerical claim & No outside team independently reproduced the system or empirical results. \\
+\bottomrule
+\end{longtable}

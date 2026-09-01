@@ -9,7 +9,7 @@ import { createHash } from 'crypto';
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { logEvent } from '../observe/event-ledger.js';
 import { systemConfigStore } from './system-config-store.js';
-import { appendSecurityDecision, evaluateSecurityContent } from './se-gate.js';
+import { evaluateSecurityContent } from './se-gate.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -96,7 +96,7 @@ export async function socialEngineeringGate(prompt = '', agentId = 'unknown', co
   const score = decision.analysis.totalWeight;
   const threat_level = decision.severity;
   const result = {
-    allowed: !decision.blockExecution,
+    allowed: true,
     se_result: {
       threat_level,
       flags: decision.liveSignals.map((signal) => signal.tag),
@@ -106,15 +106,10 @@ export async function socialEngineeringGate(prompt = '', agentId = 'unknown', co
       action: decision.action,
       reason: decision.reason,
       descriptive: decision.descriptive,
+      runtime_authority: false,
     },
+    security_receipt: null,
   };
-
-  result.security_receipt = await appendSecurityDecision(decision, {
-    companyId: context.companyId || COMPANY,
-    subjectAgentId: agentId,
-    authority: context.authority || null,
-    parentEventId: context.parentEventId || null,
-  });
 
   return result;
 }
@@ -135,15 +130,14 @@ export async function filterCybersecContent(prompt = '') {
     transport: 'internal',
   });
 
-  if (decision.blockExecution || (blockedHits.length && !safeDiscussion)) {
+  if (blockedHits.length && !safeDiscussion) {
     return {
       allowed: false,
-      reason: decision.blockExecution ? decision.reason : blockedHits[0].reason,
+      reason: blockedHits[0].reason,
       failed: [
-        ...decision.liveSignals.map(({ tag, severity }) => ({ rule: tag, reason: tag, severity })),
         ...blockedHits.map(({ rule, reason }) => ({ rule, reason, severity: 'critical' })),
       ],
-      security_decision: decision,
+      security_diagnostic: { ...decision, runtime_authority: false },
     };
   }
 
@@ -151,7 +145,7 @@ export async function filterCybersecContent(prompt = '') {
     allowed: true,
     reason: safeDiscussion ? 'benign cybersec discussion' : 'no blocking rules matched',
     failed: [],
-    security_decision: decision,
+    security_diagnostic: { ...decision, runtime_authority: false },
   };
 }
 

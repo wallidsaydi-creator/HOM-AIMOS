@@ -51,7 +51,8 @@ test('live dream path contains no age-based weight mutation or global downscale 
   assert.doesNotMatch(spiced, /last_accessed_at\s*<\s*NOW\(\)|EXTRACT\(EPOCH FROM \(NOW\(\) - COALESCE/);
   assert.doesNotMatch(stdp, /export async function homeostaticRescale\b/);
   assert.doesNotMatch(nightly, /pheromoneResult|forgettingCurveResult/);
-  assert.equal((nightly.match(/mutation_authority: 'housekeeper'/g) || []).length, 3);
+  assert.equal((nightly.match(/executeHousekeeperCanonicalSave\(\{/g) || []).length, 3);
+  assert.doesNotMatch(nightly, /mutation_authority: 'housekeeper'/);
   assert.doesNotMatch(nightly, /signAsHousekeeper|memoryProvenanceLedger|commitProvenance/);
   assert.doesNotMatch(dreamE2e, /\brenormalize\b|\bsleepDecay\b/);
   // Monotone SPICED promotion (never lowers, capped at CONSOLIDATION_CAP). The

@@ -12,6 +12,7 @@ const context = Object.freeze({
 
 test('promoted master-signed T1 housekeeper retains intrinsic system write authority', async () => {
   let grantRead = false;
+  const ledgerEvents = [];
   const result = await checkWritePermission('housekeeper', 'guide:housekeeper:test', {
     identityTier: 'T1',
     verifiedAgentId: 'housekeeper',
@@ -25,10 +26,13 @@ test('promoted master-signed T1 housekeeper retains intrinsic system write autho
       grantRead = true;
       return null;
     },
+    logEvent: async (...args) => ledgerEvents.push(args),
   });
   assert.equal(result.permitted, true);
   assert.equal(result.systemSelf, true);
   assert.equal(grantRead, false, 'housekeeper system authority must not use the ordinary-agent grant path');
+  assert.equal(ledgerEvents.length, 1);
+  assert.equal(ledgerEvents[0][2], 'system_self_write_authorized');
 });
 
 test('T1 alone never grants intrinsic write authority to a non-housekeeper', async () => {

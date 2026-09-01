@@ -1,0 +1,8 @@
+{
+  "schema": "hom.aimos.mutmem-v2-publication-figure-registry/v1",
+  "figures": [],
+  "figure_count": 0,
+  "reason": "V2C3_precedes_manuscript_layout_and_the_V1_manuscript_contains_no_figure_environment",
+  "rule": "Any figure introduced in V2C4 must be generated from the table registry and reopens V2C3 regeneration.",
+  "figure_registry_sha256": "9721d3e6aa03765daed83d4a6dc15b1c2d714e7af423f02619cdc6bbfa06be43"
+}

@@ -25,7 +25,7 @@ import {
   verifyPayloadSigWithEnvelopeClaims,
   verifyPayloadSigWithContext
 } from '../../services/security/agent-identity.js';
-import { createAuthTier } from '../../services/security/auth-tier.js';
+import { createAuthTier, extractEnvelope, parseEnvelope } from '../../services/security/auth-tier.js';
 import { createNonceWindow } from '../../services/security/nonce-window.js';
 import { requireCapability } from '../../services/security/require-capability.js';
 
@@ -104,6 +104,24 @@ function envelopeHeaders(sig, nonce, ts, sigForm, claims = {}) {
 
 async function main() {
   console.log('═══ R1 Identity Binding gate tests ═══');
+
+  await run('protected requests accept only the four certificate-envelope headers', async () => {
+    const bodyOnly = extractEnvelope({
+      headers: {},
+      body: { envelope: { cert: CERT, sig: 'forged', nonce: 'body-nonce', signedTs: nowSec } },
+    });
+    const incomplete = parseEnvelope({ 'aimos-agent-cert': CERT });
+    const malformedTimestamp = parseEnvelope({
+      'aimos-agent-cert': CERT,
+      'aimos-agent-signature': 'forged',
+      'aimos-agent-nonce': 'nonce',
+      'aimos-agent-timestamp': '-1',
+    });
+    assert.equal(bodyOnly, null, 'body-carried envelope is not an admission surface');
+    assert.deepEqual(incomplete, { incomplete: true });
+    assert.deepEqual(malformedTimestamp, { incomplete: true });
+    diskArtifact('header-only-envelope', { bodyOnly, incomplete, malformedTimestamp });
+  });
 
   // ── GATE #1 — capability gate trusts the cert, not the x-agent-id header ──
   console.log('\n[GATE 1] Header spoofing rejected — identity is req.agentId only');
@@ -273,6 +291,22 @@ async function main() {
     assert.strictEqual(result.error, 'agent_revoked', 'error is agent_revoked');
     diskArtifact('gate4', { tier: result.tier, error: result.error, mutableBypass: false });
     assert.ok(result.error.length > 0, 'non-empty error');
+  });
+
+  await run('a valid certificate for an unregistered epoch is rejected before signature admission', async () => {
+    const deps = makeCaches();
+    deps.agentRevocationCache = { lookup: async () => ({ found: false, revoked: false }) };
+    const at = createAuthTier(deps);
+    const nonce = 'nonce-unregistered-epoch';
+    const ts = Math.floor(Date.now() / 1000);
+    const body = { epoch: 'not-enrolled' };
+    const sig = signPayloadWithContext(agent.privkey, body, 'POST', '/aimos/save', nonce, ts);
+    const result = await at.deriveTier({
+      headers: envelopeHeaders(sig, nonce, ts, 3), body, method: 'POST', originalUrl: '/aimos/save',
+    });
+    assert.equal(result.tier, 'T0');
+    assert.equal(result.error, 'agent_not_enrolled');
+    diskArtifact('unregistered-epoch', { tier: result.tier, error: result.error });
   });
 
   // ── GATE #5 — nonce replay rejected without bypass ───────────────────────

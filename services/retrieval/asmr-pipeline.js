@@ -24,7 +24,7 @@ import { createHash } from 'node:crypto';
 
 import { runIngestion } from '../ingestion/ingestion-orchestrator.js';
 import { runEnsemble } from '../answering/ensemble-engine.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeCanonicalSave } from '../write/canonical-save-owner.js';
 import { canonicalJson } from '../security/agent-identity.js';
 import { logEvent } from '../observe/event-ledger.js';
 import { beginToolAction, finishToolAction } from '../orchestration/tool-action-ledger.js';
@@ -187,7 +187,7 @@ async function persistDerivedFacet(spec, { executionContext, parentEventId }) {
     parentEventId,
   });
   try {
-    const saved = await persistMemory({
+    const saved = await executeCanonicalSave({
       ...spec,
       mutation_authority: action.authority,
     });

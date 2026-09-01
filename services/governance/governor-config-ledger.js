@@ -79,14 +79,14 @@ export const GOVERNOR_CONFIG_CONSTANTS = Object.freeze({
     // docs/security/backfill-ceremony-design.md.
     'BACKFILL_CEREMONY_LEDGER',
     // Relational (Hebbian) consensus consolidation — the nightly-dream Stage 20
-    // sleep pass (services/dream/hebbian-consensus.js). When ON, supported hubs
-    // are elevated and divergent members attenuated through the signed cognitive-
-    // weight chain; when OFF (default), the pass is a no-op. Shadow-first: the
-    // toggle is cert-enveloped + hash-chained. The Hebbian consensus record
-    // binds the complete signed configuration.
+    // sleep pass (services/dream/hebbian-consensus.js). When ON, only supported
+    // recall co-activation hubs may receive a bounded positive transition
+    // through the signed cognitive-weight chain; all other retained states stay
+    // unchanged. The toggle is cert-enveloped and hash-chained.
     'HEBBIAN_CONSENSUS'
   ])
 });
+export const GOVERNOR_CONFIG_MUTATION_SCOPE = 'offline_maintenance_only';
 
 const DEFAULT_TTL_MS = GOVERNOR_CONFIG_CONSTANTS.CACHE_TTL_MS;
 
@@ -297,7 +297,7 @@ export function createGovernorConfigLedger(deps = {}) {
    * Shadow-first default: no row → false (governor OFF).
    * Fail-closed: DB error → logEvent + return false.
    */
-  async function readFlag(configKey) {
+  async function readFlag(configKey, { strict = false } = {}) {
     if (!_validateConfigKey(configKey)) return false;
     const cached = _cacheGet(configKey, nowFn);
     if (cached !== undefined) return cached;
@@ -308,10 +308,21 @@ export function createGovernorConfigLedger(deps = {}) {
       _cacheSet(configKey, enabled, nowFn);
       return enabled;
     } catch (err) {
-      await logEvent(COMPANY, 'governor_config', 'read_failed', configKey, {
-        error: String(err?.message || err),
-        config_key: configKey
-      }).catch(() => {});
+      try {
+        await logEvent(COMPANY, 'governor_config', 'read_failed', configKey, {
+          error: String(err?.message || err),
+          config_key: configKey,
+          reasoning: 'A signed governor activation chain could not be verified; no mutation authority was published.',
+        });
+      } catch (ledgerError) {
+        if (strict) {
+          throw new AggregateError(
+            [err, ledgerError],
+            'governor_config_read_and_failure_ledger_unavailable',
+          );
+        }
+      }
+      if (strict) throw err;
       return false; // fail-closed → shadow-first
     }
   }

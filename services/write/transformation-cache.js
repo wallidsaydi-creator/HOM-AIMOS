@@ -12,11 +12,11 @@
 // Uses SHA-256 hashing to create deterministic cache keys from input/output schemas.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
-import { query } from '../../db/connection.js';
 import { createHash } from 'crypto';
 
-const COMPANY = AIMOS_COMPANY_ID;
+const CACHE_LIMIT = 1024;
+const cache = new Map();
+let totalHits = 0;
 
 /**
  * Compute SHA-256 hash of a schema object.
@@ -37,36 +37,12 @@ export function computeSchemaHash(schema) {
  * @returns {Promise<Object|null>} - Cached result or null if not found
  */
 export async function getCachedTransformation(inputSchemaHash, outputSchemaHash) {
-  try {
-    const cacheKey = createHash('sha256')
-      .update(`${inputSchemaHash}:${outputSchemaHash}`)
-      .digest('hex');
-
-    const result = await query(
-      `SELECT result FROM transformation_cache
-       WHERE company_id = $1
-         AND cache_key = $2`,
-      [COMPANY, cacheKey]
-    );
-
-    if (result.rows.length === 0) {
-      return null;
-    }
-
-    // Record hit
-    await query(
-      `UPDATE transformation_cache
-       SET hit_count = hit_count + 1, last_hit_at = NOW()
-       WHERE company_id = $1
-         AND cache_key = $2`,
-      [COMPANY, cacheKey]
-    ).catch(() => {}); // Silent fail on update
-
-    return result.rows[0].result;
-  } catch (err) {
-    console.error('[transformation-cache] getCachedTransformation error:', err.message);
-    return null;
-  }
+  const cacheKey = createHash('sha256')
+    .update(`${inputSchemaHash}:${outputSchemaHash}`)
+    .digest('hex');
+  if (!cache.has(cacheKey)) return null;
+  totalHits += 1;
+  return structuredClone(cache.get(cacheKey));
 }
 
 /**
@@ -78,37 +54,12 @@ export async function getCachedTransformation(inputSchemaHash, outputSchemaHash)
  * @returns {Promise<boolean>} - true on success
  */
 export async function cacheTransformation(inputSchemaHash, outputSchemaHash, result) {
-  try {
-    const cacheKey = createHash('sha256')
-      .update(`${inputSchemaHash}:${outputSchemaHash}`)
-      .digest('hex');
-
-    await query(
-      `INSERT INTO transformation_cache (
-         cache_key,
-         company_id,
-         input_schema_hash,
-         output_schema_hash,
-         result,
-         hit_count,
-         created_at,
-         last_hit_at
-       )
-       VALUES ($1, $2, $3, $4, $5::jsonb, 1, NOW(), NOW())
-       ON CONFLICT (company_id, cache_key) DO UPDATE
-       SET result = $5::jsonb,
-           hit_count = 1,
-           input_schema_hash = $3,
-           output_schema_hash = $4,
-           last_hit_at = NOW()`,
-      [cacheKey, COMPANY, inputSchemaHash, outputSchemaHash, JSON.stringify(result)]
-    );
-
-    return true;
-  } catch (err) {
-    console.error('[transformation-cache] cacheTransformation error:', err.message);
-    return false;
-  }
+  const cacheKey = createHash('sha256')
+    .update(`${inputSchemaHash}:${outputSchemaHash}`)
+    .digest('hex');
+  cache.set(cacheKey, structuredClone(result));
+  if (cache.size > CACHE_LIMIT) cache.delete(cache.keys().next().value);
+  return true;
 }
 
 /**
@@ -117,27 +68,5 @@ export async function cacheTransformation(inputSchemaHash, outputSchemaHash, res
  * @returns {Promise<{hits: number, misses: number, entries: number}>}
  */
 export async function getCacheStats() {
-  try {
-    const result = await query(
-      `SELECT
-        COALESCE(SUM(hit_count), 0) as total_hits,
-        COUNT(*) as total_entries
-       FROM transformation_cache
-       WHERE company_id = $1`,
-      [COMPANY]
-    );
-
-    const row = result.rows[0] || { total_hits: 0, total_entries: 0 };
-    const hits = parseInt(row.total_hits, 10) || 0;
-    const entries = parseInt(row.total_entries, 10) || 0;
-
-    return {
-      hits,
-      misses: Math.max(0, entries - hits),
-      entries
-    };
-  } catch (err) {
-    console.error('[transformation-cache] getCacheStats error:', err.message);
-    return { hits: 0, misses: 0, entries: 0 };
-  }
+  return { hits: totalHits, misses: 0, entries: cache.size };
 }

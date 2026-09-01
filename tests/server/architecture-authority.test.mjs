@@ -12,15 +12,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const template = JSON.parse(fs.readFileSync(path.join(root, 'architecture-authority.template.json'), 'utf8'));
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'hom-architecture-manifest.json'), 'utf8'));
 
-test('service manifest is exact set-equality with the live 300-service census', () => {
+test('service manifest is exact set-equality with the live 295-service census', () => {
   const census = collectServiceCensus(root);
   const manifestFiles = Object.entries(manifest.service_inventory.groups)
     .flatMap(([group, entry]) => entry.files.map((file) => `services/${group}/${file}`))
     .sort();
 
   assert.equal(census.groupCount, 17);
-  assert.equal(census.serviceCount, 300);
-  assert.equal(census.digest, '96035ce470104abdda7fd41d027c5c6bc8d5a5bb14881d43fc29795ace38032e');
+  assert.equal(census.serviceCount, 295);
+  assert.equal(census.digest, 'e71c332413b495b57e2349fe3f76dc98bacc66cc2b0dcc8b3c32ad05a7bff720');
   assert.deepEqual(manifestFiles, census.files);
   assert.equal(manifest.total_services, census.serviceCount);
   assert.equal(manifest.service_inventory.counted_service_files, census.serviceCount);
@@ -47,7 +47,10 @@ test('current public architecture accounting matches the live service and pipeli
 
   for (const guide of [tier4, llmGuide]) {
     assert.match(guide, new RegExp(`binds ${census.serviceCount} service files`));
-    assert.match(guide, new RegExp(`${connectionCount} declared service connections across ${pipelineCount} pipelines`));
+    for (const pipeline of Object.values(PIPELINES)) {
+      const entry = pipeline.entry.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      assert.match(guide, new RegExp(`\\| [^\\n|]*${entry}[^\\n|]* \\| ${pipeline.services.length} \\|`));
+    }
     assert.doesNotMatch(guide, /runWeeklyReflection|weekly-reflection/);
   }
   assert.match(pipelineSource, new RegExp(`\\b${pipelineCount === 6 ? 'six' : pipelineCount} canonical runtime pipelines\\b`));
@@ -72,5 +75,5 @@ test('authority dry run binds current static authority, Genesis root, and servic
   assert.equal(runtime.runtime_mode, 'runtime');
   assert.equal(runtime.genesis_corpus.verified_during_generation, true);
   assert.equal(runtime.service_inventory.verified_during_generation, true);
-  assert.equal(runtime.service_inventory.counted_service_files, 300);
+  assert.equal(runtime.service_inventory.counted_service_files, 295);
 });

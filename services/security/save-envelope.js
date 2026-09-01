@@ -29,7 +29,7 @@ import {
   detectForkAdvanced,
   detectForkInitial
 } from './identity-chain.js';
-import { pool as defaultPool } from '../../db/connection.js';
+import { agentPool as defaultPool } from '../../db/connection.js';
 
 const HASH_BYTES = 32;
 

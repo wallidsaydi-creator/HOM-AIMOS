@@ -1,0 +1,58 @@
+{
+  "schema": "hom.aimos.mutmem-p2-import-census/v1",
+  "source_commit": "d6b99324f0df07449d1271f0c880f15545e9cc32",
+  "source_file_count": 706,
+  "counting_method": "resolved_relative_static_and_dynamic_import_reverse_bfs_v1",
+  "targets": [
+    {
+      "path": "verifiers/mutmem-v2/node/crypto-kernel.mjs",
+      "source_sha256": "d9423f66bad3eb8a690d86375c0e3b85ca50fbc6e8dde2699badf297fd072351",
+      "direct_importer_count": 4,
+      "transitive_importer_count": 8,
+      "production_runtime_direct_importers": [],
+      "production_runtime_transitive_importers": []
+    },
+    {
+      "path": "verifiers/mutmem-v2/node/recall-verifier.mjs",
+      "source_sha256": "420791813394fbbfcea8cc547264edf3201d5ec8d5362d0ee9fae77225382e29",
+      "direct_importer_count": 5,
+      "transitive_importer_count": 5,
+      "production_runtime_direct_importers": [],
+      "production_runtime_transitive_importers": []
+    },
+    {
+      "path": "verifiers/mutmem-v2/node/mutation-verifier.mjs",
+      "source_sha256": "17dc4c4a8d793d2926c2f62dbf80bb0068ff15f4a20e9839414005aff77971d1",
+      "direct_importer_count": 4,
+      "transitive_importer_count": 4,
+      "production_runtime_direct_importers": [],
+      "production_runtime_transitive_importers": []
+    },
+    {
+      "path": "verifiers/mutmem-v2/python/crypto_kernel.py",
+      "source_sha256": "e414e14b01d9758cd9af6616d748b038968c6351a00730e9c3f98dd89f30d175",
+      "direct_importer_count": 3,
+      "transitive_importer_count": 4,
+      "production_runtime_direct_importers": [],
+      "production_runtime_transitive_importers": []
+    },
+    {
+      "path": "verifiers/mutmem-v2/python/recall_verifier.py",
+      "source_sha256": "37d93d5362c20f6c15a7848a443a23a5567f18a1291d7f524e369ad450b62944",
+      "direct_importer_count": 2,
+      "transitive_importer_count": 2,
+      "production_runtime_direct_importers": [],
+      "production_runtime_transitive_importers": []
+    },
+    {
+      "path": "verifiers/mutmem-v2/python/mutation_verifier.py",
+      "source_sha256": "986f83a0068d596f7b2fa6cd8c57e4fe5049a5c5e217ff27df73cbf75dafdb1d",
+      "direct_importer_count": 1,
+      "transitive_importer_count": 1,
+      "production_runtime_direct_importers": [],
+      "production_runtime_transitive_importers": []
+    }
+  ],
+  "zero_production_runtime_importers": true,
+  "census_sha256": "f18361d42175fae88103f75b58161a65dab6e9bf011f11b5b796b20319a0bc77"
+}

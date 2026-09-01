@@ -1,6 +1,8 @@
 /**
  * Native temporal normalization operator from:
  * - TempCourt.pdf
+ * Status: Native structural projection in canonical /aimos/recall with zero
+ * rank influence pending calibration.
  *
  * Implemented formulas / techniques:
  * - PRESENT_REF / PAST_REF / FUTURE_REF normalization tokens
@@ -11,7 +13,7 @@
  * - multiclass temporal reference classification
  *
  * Aimos adaptation:
- * - contributes bounded recall evidence scores only
+ * - contributes normalized structural receipt evidence only
  * - no pruning, no decay, no deletion, no answer injection
  */
 

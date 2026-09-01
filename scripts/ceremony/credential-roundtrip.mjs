@@ -9,8 +9,7 @@ import { credentialLedger } from '../../services/security/credential-ledger.js';
 import {
   computeCredentialHash,
   credentialSlotId,
-  readCredential,
-  storeCredential
+  readCredential
 } from '../../services/security/credential-store.js';
 import { signAsHousekeeper } from '../../services/security/housekeeper-signer.js';
 import { verifyPayloadSig } from '../../services/security/agent-identity.js';
@@ -18,32 +17,55 @@ import { verifyPayloadSig } from '../../services/security/agent-identity.js';
 const service = 'ceremony_probe';
 const slotId = credentialSlotId(service);
 
-async function commit(eventType, body) {
+async function commit(eventType, body, { custodyTrace = null } = {}) {
   const signed = await signAsHousekeeper(body);
-  const result = await credentialLedger.commitCredentialLifecycle({
-    serviceName: service,
-    slotId,
-    body: signed.body,
-    agentId: signed.agentId,
-    validFromIso: signed.validFromIso,
-    certString: signed.certString,
-    signedTs: signed.signedTs,
-    nonce: signed.nonce,
-    sigBytes: signed.sigBytes,
-    identityTier: signed.identityTier,
-    eventType,
-    bodyJson: signed.body
-  });
-  if (!result.ok) throw new Error(`${eventType} ledger commit failed: ${result.reason}`);
-  return result;
+  const client = custodyTrace ? await pool.connect() : null;
+  try {
+    if (client) await client.query('BEGIN');
+    const result = await credentialLedger.commitCredentialLifecycle({
+      serviceName: service,
+      slotId,
+      body: signed.body,
+      agentId: signed.agentId,
+      validFromIso: signed.validFromIso,
+      certString: signed.certString,
+      signedTs: signed.signedTs,
+      nonce: signed.nonce,
+      sigBytes: signed.sigBytes,
+      identityTier: signed.identityTier,
+      eventType,
+      bodyJson: signed.body,
+      client,
+    });
+    if (!result.ok) throw new Error(`${eventType} ledger commit failed: ${result.reason}`);
+    if (client) {
+      await credentialLedger.commitCredentialCustodyTerminal(custodyTrace, result, { client });
+      await client.query('COMMIT');
+    }
+    return result;
+  } catch (error) {
+    if (client) {
+      try { await client.query('ROLLBACK'); } catch { /* connection may be gone */ }
+      try { await credentialLedger.markCredentialCustodyIndeterminate(custodyTrace, error); } catch { /* retained open start */ }
+    }
+    throw error;
+  } finally {
+    client?.release();
+  }
 }
 
 try {
   const prior = await credentialLedger.getLatestStoreForSlot(slotId);
   const plaintext = randomBytes(48).toString('base64url');
   const expectedHash = computeCredentialHash(plaintext);
-  const stored = await storeCredential(service, plaintext);
   const eventType = prior ? 'ROTATE' : 'STORE';
+  const stored = await credentialLedger.beginCredentialCustodyMutation({
+    serviceName: service,
+    value: plaintext,
+    eventType,
+    subjectAgentId: 'housekeeper',
+    reason: 'release_credential_roundtrip_ceremony',
+  });
 
   const lifecycle = await commit(eventType, {
     event_type: eventType,
@@ -56,8 +78,14 @@ try {
     rotated_from_hash: prior?.body_json?.credential_hash || null,
     reason: 'release_credential_roundtrip_ceremony',
     operator: 'housekeeper',
-    signer_agent_id: 'housekeeper'
-  });
+    signer_agent_id: 'housekeeper',
+    custody_action_id: stored.custodyTrace.actionId,
+    custody_start_event_id: stored.custodyTrace.startEventId,
+    custody_start_mutation_hash: stored.custodyTrace.startMutationHash,
+    custody_readback_event_id: stored.custodyTrace.readbackEventId,
+    custody_readback_mutation_hash: stored.custodyTrace.readbackMutationHash,
+    custody_version_slot_sha256: stored.custodyTrace.versionSlotSha256,
+  }, { custodyTrace: stored.custodyTrace });
 
   const recalled = await readCredential(service);
   const recalledHash = recalled ? computeCredentialHash(recalled.value) : null;

@@ -8,6 +8,8 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { randomBytes } from 'node:crypto';
+import path from 'node:path';
+import { AIMOS_AGENT_KEY_ROOT } from '../core/runtime-config.js';
 import {
   signPayload,
   signPayloadWithContext,
@@ -33,20 +35,20 @@ export const OUTBOUND_SIG_FORM = 3;
  *
  * @param {string} agentId  the signing agent (its private key must be on disk)
  * @param {string} method   HTTP method the request will use (bound in sig-form 3)
- * @param {string} path     request pathname, query stripped (bound in sig-form 3)
+ * @param {string} requestPath request pathname, query stripped (bound in sig-form 3)
  * @param {object} body     the JSON body that will be sent (signed)
  * @returns {Promise<Record<string,string>>} header map incl. X-Aimos-Sig-Form
  */
-export async function buildEnvelopeHeaders(agentId, method, path, body, claims = {}) {
+export async function buildEnvelopeHeaders(agentId, method, requestPath, body, claims = {}) {
   const id = String(agentId || '').trim();
   if (!id) throw new Error('buildEnvelopeHeaders: agentId is required (no env default — env identity bypasses the cert envelope)');
   const payload = body || {};
-  const privkey = loadAgentPrivkey(`~/.aimos/agents/${id}.key`);
+  const privkey = loadAgentPrivkey(path.join(AIMOS_AGENT_KEY_ROOT, `${id}.key`));
   const cert = await getAgentCert(id);
   const nonce = randomBytes(16).toString('base64url');
   const ts = Math.floor(Date.now() / 1000);
 
-  const normPath = String(path || '').split('?')[0];
+  const normPath = String(requestPath || '').split('?')[0];
   const prevChainHash = claims.prevChainHash ?? claims.prev_chain_hash ?? null;
   const deviceFp = claims.deviceFp ?? claims.device_fp ?? null;
   if (deviceFp && !prevChainHash) {

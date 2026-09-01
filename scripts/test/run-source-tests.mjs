@@ -21,6 +21,9 @@ const LIVE_FIRE_OWNERS = new Map([
   ['tests/security/event-ledger-db.test.mjs', ISOLATED_SECURITY_OWNER],
   ['tests/security/hebbian-consensus-db.test.mjs', ISOLATED_SECURITY_OWNER],
   ['tests/security/native-persistence-atomicity.test.mjs', ISOLATED_SECURITY_OWNER],
+  ['tests/security/canonical-save-owner-db.test.mjs', ISOLATED_SECURITY_OWNER],
+  ['tests/security/cr5-session-convergence-db.test.mjs', ISOLATED_SECURITY_OWNER],
+  ['tests/security/cr7-r2-database-local-closure-db.test.mjs', ISOLATED_SECURITY_OWNER],
   ['tests/security/native-tool-action-db.test.mjs', ISOLATED_SECURITY_OWNER],
   // S5 has stricter lifecycle ownership: a purpose-named Genesis brain,
   // retained custody evidence, and an explicit master-signed purge. It must

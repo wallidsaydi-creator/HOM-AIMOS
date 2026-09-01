@@ -11,14 +11,14 @@ import {
   lstatSync,
   readFileSync,
 } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { AIMOS_STATE_ROOT } from '../../services/core/runtime-config.js';
 
 const SECURITY = '/usr/bin/security';
 const LEGACY_V1_SOURCE = fileURLToPath(new URL('./keychain-set.c', import.meta.url));
 const LEGACY_V1_MANIFEST = fileURLToPath(new URL('./keychain-helper-manifest.json', import.meta.url));
-const LEGACY_V1_HELPER = path.join(os.homedir(), '.aimos', 'bin', 'aimos-keychain-credential-v1');
+const LEGACY_V1_HELPER = path.join(AIMOS_STATE_ROOT, 'bin', 'aimos-keychain-credential-v1');
 const LEGACY_V1_SOURCE_HASH = `${LEGACY_V1_HELPER}.sha256`;
 
 function validateIdentifier(value, label) {

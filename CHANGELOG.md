@@ -5,6 +5,8 @@ versioning after the first signed release.
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-09-01
+
 ### Added
 
 - Canonical single-query LoCoMo, LongMemEval, and PoisonedRAG benchmark harness.
@@ -12,6 +14,11 @@ versioning after the first signed release.
 - Public deployment, contribution, security, threat-model, and agent guidance.
 - Clean-macOS prerequisite preflight and reviewed Homebrew/Genesis installer.
 - SHA-256, CycloneDX SBOM, and GitHub keyless release-provenance workflow.
+- Same-user, application-local public installer with Housekeeper-first Genesis,
+  ordinary-agent onboarding, and persistent user-service ownership.
+- MutMem V2 portable Node/Python verification, reproducibility contracts,
+  sanitized evidence, generated TeX tables, and the evidence-audited manuscript
+  source.
 - Master-signed MAGMA candidate selection with principal-scoped native graph
   reads, downstream epistemic/Canary/retention closure, and signed recall
   evidence.
@@ -36,8 +43,3 @@ versioning after the first signed release.
   caller-supplied security aggregates are rejected.
 - Explicit Canary traversal boundaries are documented separately from
   unmarked-poison epistemic classification.
-
-## [1.0.0] - Pending
-
-The release date, benchmark evidence links, and attested GitHub release are
-added only after the three canonical benchmark runs complete.

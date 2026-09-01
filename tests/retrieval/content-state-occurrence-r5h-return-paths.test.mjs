@@ -42,7 +42,12 @@ function memory(id, liveContentHash, overrides = {}) {
 }
 
 test('R5H semantic cache retains state references only in HOT and WARM tiers', async () => {
-  const cache = new SemanticCache({ maxSize: 4, compressedMaxSize: 4 });
+  const ledgerEvents = [];
+  const cache = new SemanticCache({
+    maxSize: 4,
+    compressedMaxSize: 4,
+    logEvent: async (...args) => ledgerEvents.push(args),
+  });
   const source = memory('11111111-1111-4111-8111-111111111111', HASH_A);
   const stored = cache.set([1, 0], 'state reference query', { memories: [source] }, {
     companyId: 'hom',
@@ -69,6 +74,7 @@ test('R5H semantic cache retains state references only in HOT and WARM tiers', a
   assert.equal(hot.state_references[0].memory_id, source.id);
   assert.equal(Object.hasOwn(hot, 'memories'), false);
   assert.equal(JSON.stringify(hot).includes(source.value), false);
+  assert.equal(ledgerEvents.some((event) => event[2] === 'cache_hit'), true);
 
   cache._cache.clear();
   cache._accessOrder = [];
@@ -104,7 +110,7 @@ test('R5H cache hydration is one bounded ordered query and missing identities fa
     companyId: 'hom',
     queryFn: async (sql, params) => {
       calls.push({ sql, params });
-      return { rows: ids.map((id) => ({ id, key: `memory:${id}`, value: 'retained' })) };
+      return { rows: ids.map((id) => ({ id, key: `memory:${id}`, value: 'retained', embedding: '[0,1]' })) };
     },
   });
   assert.equal(result.valid, true);
@@ -112,6 +118,8 @@ test('R5H cache hydration is one bounded ordered query and missing identities fa
   assert.equal(calls.length, SEMANTIC_CACHE_HYDRATION_CONTRACT.database_round_trips);
   assert.match(calls[0].sql, /id = ANY\(\$2::uuid\[\]\)/);
   assert.match(calls[0].sql, /array_position\(\$2::uuid\[\], id\)/);
+  assert.match(calls[0].sql, /embedding::text AS embedding/);
+  assert.equal(result.memories.every((memory) => memory.embedding === '[0,1]'), true);
   assert.deepEqual(calls[0].params, ['hom', ids]);
 
   const missing = await hydrateSemanticCacheStateReferences({

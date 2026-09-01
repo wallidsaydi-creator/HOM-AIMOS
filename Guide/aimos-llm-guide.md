@@ -198,32 +198,24 @@ Content-Type: application/json
 }
 ```
 
-### Save Pipeline (10 stages)
+### Save Pipeline (15 fixed stages)
 
 ```
-Request
-  │
-  ├─ 1. Envelope Authority ─ verifies signed identity, company, request receipt, and grants
-  ├─ 2. Sudo Guard ─────── clearance 12+ memories need sudo to overwrite
-  ├─ 3. Write Validator ── structural validation (exempt: event_log, dream_summary, etc.)
-  ├─ 4. RPE Gate ────────── Reward Prediction Error — routes processing depth
-  ├─ 5. Sensible Screen ── monitors RPE gate quality over time
-  ├─ 6. Transform Cache ── checks if this schema transform was seen before
-  ├─ 7. Mnemonic Encoder ─ tags encoding style (visual_hook, narrative, etc.)
-  ├─ 8. persistMemory() ── canonical write:
-  │     ├─ Quality Gate (3 walls — see below)
-  │     ├─ Secret Redaction (API keys, tokens auto-stripped)
-  │     ├─ Quarantine Check (prompt injection detection)
-  │     ├─ Embedding (768d all-mpnet-base-v2 ONNX)
-  │     ├─ Cross-Reference (A-MEM Zettelkasten linking)
-  │     ├─ Entity Extraction (HippoRAG: names, dates, amounts)
-  │     ├─ Aladdin Compliance check
-  │     ├─ Data Classification (public/internal/confidential/restricted)
-  │     ├─ Medallion Layer assignment (bronze/silver/gold)
-  │     └─ DB INSERT + trigger evaluation
-  ├─ 9. Cache Invalidate ─ semantic cache cleared on new memory
-  └─ 10. Response
+AUTH → RECEIPT → CANARY → SE → ALADDIN → VALIDATOR → QUALITY
+→ SECRET_BOUNDARY → EMBEDDING → PERSISTENCE → PROVENANCE → LINEAGE
+→ GRAPH → EPISTEMIC → TERMINAL
 ```
+
+`services/write/canonical-save-owner.js` owns this order, the restricted
+transaction and the signed terminal. RPE, sensible-screening,
+transformation-cache and mnemonic encoding are bound diagnostics, not
+authorization gates.
+
+Signed requests and tool actions keep their exact authority. Autonomous work
+uses the typed Housekeeper SAVE entrypoint, which commits the exact action
+projection before the same pipeline runs. Request bodies cannot select
+Housekeeper authority, and session finalization cannot replace its initiating
+request with Housekeeper authority.
 
 ### Quality Gate — Three Walls
 
@@ -366,7 +358,13 @@ Content-Type: application/json
 }
 ```
 
-**Two Recall Modes:**
+**One canonical owner, two ordering modes:**
+
+REST, MCP, V1, and native-tool recall all enter `executeCanonicalRecall`.
+Signed-command resolution, active actor/grant locking, candidate reads, and
+provenance admission share one restricted repeatable-read snapshot. Every
+bounded proposal lane must admit its complete set or fail; only admitted rows
+may enter shared ranking, graph, context, or cache state.
 
 | Mode | Trigger | Result Order |
 |------|---------|-------------|
@@ -442,8 +440,9 @@ Query arrives
 ### Post-Recall Side Effects
 
 - **Signed recall evidence:** request admission, recall event, provenance, and returned Merkle evidence are ledgered.
-- **Access observations:** frequency metadata may be appended or projected, but it cannot decay, delete, deactivate, or suppress canonical memory.
-- **Cache fill:** result stored in semantic cache for future similar queries
+- **Read-only online adaptation:** similarity statistics and pheromone projections are not mutated by recall; future durable adaptation requires a separately signed action owner.
+- **Access observations:** response-local frequency metadata cannot decay, delete, deactivate, or suppress canonical memory.
+- **Cache fill:** only post-admission state references and commitments may enter the ephemeral semantic cache; each hit is reverified in a fresh request snapshot.
 - **Event log:** recall event recorded for audit
 
 ---
@@ -541,7 +540,7 @@ The former route-level Knowledge Gate is retired. Paper-backed mathematical serv
 
 ## 9. Paper Provenance & Service Annotations
 
-The manifest currently binds 300 service files. Mathematical, graph, temporal, retrieval, and cognitive services trace their techniques to the cited local papers; infrastructure services instead declare their native ownership and connection contract.
+The manifest currently binds 295 service files. Mathematical, graph, temporal, retrieval, and cognitive services trace their techniques to the cited local papers; infrastructure services instead declare their native ownership and connection contract.
 
 ### How Paper Provenance Works
 
@@ -605,7 +604,7 @@ Every service has two annotation blocks:
 | `retrieval/` | 68 | HippoRAG, Adaptive RAG, QuIM-RAG, OrgForge RRF, GroupRAG |
 | `learning/` | 23 | STDP (SynForceNet), SPICED, SM-2, Prospect Theory, R-MDP |
 | `orchestration/` | 43 | DISARM, HVR-Met, DIG, ContextCov, Constitutional Monitoring |
-| `security/` | 48 | OWASP, Mitnick, Cialdini, Defensive Refusal Bias, Agentic P2P |
+| `security/` | 49 | OWASP, Mitnick, Cialdini, Defensive Refusal Bias, Agentic P2P |
 | `dream/` | 5 | SPICED (NeurIPS 2025), ThaCo, Sleep Homeostatic, MemGPT |
 | `write/` | 13 | Aladdin Law, Sutton&Barto RPE, Channel Separation |
 | `observe/` | 22 | OpenTelemetry, Senge, Moltbook, SVDD Anomaly |
@@ -639,16 +638,16 @@ Every service file contains a standardized header:
 // ─────────────────────────────────────────────────────────────────────────────
 ```
 
-**Pipeline Manifest:** `services/pipeline-manifest.js` — 153 declared service connections across 6 pipelines, validated at boot.
+**Pipeline Manifest:** `services/pipeline-manifest.js` — 116 declared service connections across 6 pipelines, validated at boot.
 
 **The 6 Pipelines:**
 
 | Pipeline | Entry | Declared service modules |
 |----------|-------|-------------------------:|
-| Save | `routes/aimos.js` | 13 |
-| Recall | `services/retrieval/native-recall-pipeline.js` | 75 |
+| Save | `services/write/canonical-save-owner.js` | 15 |
+| Recall | `services/retrieval/native-recall-pipeline.js` | 34 |
 | Agent Run | `services/orchestration/agent-runner.js` | 34 |
-| Dream | `jobs/nightly-dream.js` | 20 |
+| Dream | `jobs/nightly-dream.js` | 22 |
 | Heartbeat | `jobs/heartbeat.js` | 1 |
 | Governance | `services/orchestration/governance-resolver.js` | 10 |
 

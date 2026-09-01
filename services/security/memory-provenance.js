@@ -81,13 +81,14 @@ import {
   computeOccurrenceCommitmentV3,
   verifyOccurrenceSignatureV3,
 } from './protocol/content-state-occurrence-v3.js';
+import { verifyOccurrenceSessionBindingV1 } from './protocol/occurrence-session-binding-v1.js';
 import { readVerifiedRequestReceiptByMutationHash } from './request-receipt-ledger.js';
 import { readVerifiedEventById } from '../observe/event-ledger.js';
 export {
   retainedProvenanceLeafHash,
   retainedProvenanceMerkleRoot,
 } from './protocol/mutmem-protocol.js';
-import { pool as defaultPool } from '../../db/connection.js';
+import { agentPool as defaultPool } from '../../db/connection.js';
 
 const HASH_BYTES = 32;
 
@@ -563,10 +564,107 @@ function signedSessionTurnIntent(body, row) {
   };
 }
 
+function signedSessionFinalizeIntent(body, row) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const sessionId = String(body.session_id ?? '').trim();
+  const expectedTurnCount = Number(body.expected_turn_count);
+  const expectedTurnHashes = String(body.expected_turn_id_hashes_sha256 || '').toLowerCase();
+  const clearanceLevel = Number(body.clearance_level ?? 1);
+  const companyId = String(body.company_id ?? 'hom');
+  const claimedAgentId = body.agent_id == null || body.agent_id === ''
+    ? String(row.provenance_agent_id || '')
+    : String(body.agent_id);
+  if (!sessionId || !Number.isSafeInteger(expectedTurnCount) || expectedTurnCount < 1
+    || !/^[0-9a-f]{64}$/.test(expectedTurnHashes)
+    || !Number.isInteger(clearanceLevel) || clearanceLevel < 1 || clearanceLevel > 12
+    || String(row.live_company_id ?? '') !== companyId
+    || String(row.live_agent_id ?? '') !== claimedAgentId
+    || String(row.provenance_agent_id ?? '') !== claimedAgentId
+    || Number(row.live_clearance_level) !== clearanceLevel) {
+    return null;
+  }
+  const prefix = `sess:${sessionId}:`;
+  const liveKey = String(row.live_key || '');
+  if (!liveKey.startsWith(prefix)) return null;
+  const record = parseJsonObject(row.live_value);
+  if (!record || record.session_id !== sessionId) return null;
+
+  if (liveKey.startsWith(`${prefix}exchange:`)) {
+    const sourceIds = Array.isArray(record.source_memory_ids) ? record.source_memory_ids.map(String) : [];
+    const sourceHashes = Array.isArray(record.source_content_sha256)
+      ? record.source_content_sha256.map((value) => String(value).toLowerCase())
+      : [];
+    if (![1, 2].includes(sourceIds.length) || sourceHashes.length !== sourceIds.length
+      || new Set(sourceIds).size !== sourceIds.length
+      || sourceIds.some((id) => !/^[0-9a-f-]{36}$/i.test(id))
+      || sourceHashes.some((hash) => !/^[0-9a-f]{64}$/.test(hash))) return null;
+    let sourceBinding;
+    let contentHashes;
+    let firstSequence;
+    let lastSequence;
+    if (record.schema === 'aimos.session-exchange/v1') {
+      firstSequence = Number(record.user_sequence);
+      lastSequence = Number(record.assistant_sequence);
+      contentHashes = [record.user, record.assistant]
+        .map((value) => createHash('sha256').update(Buffer.from(String(value ?? ''), 'utf8')).digest('hex'));
+      sourceBinding = {
+        schema: record.schema,
+        session_id: sessionId,
+        user_sequence: firstSequence,
+        assistant_sequence: lastSequence,
+        source_memory_ids: sourceIds,
+        source_content_sha256: sourceHashes,
+      };
+    } else if (record.schema === 'aimos.session-exchange/v2') {
+      const turns = Array.isArray(record.turns) ? record.turns : [];
+      const sequences = Array.isArray(record.turn_sequences) ? record.turn_sequences.map(Number) : [];
+      if (turns.length !== sourceIds.length || sequences.length !== sourceIds.length
+        || turns.some((turn, index) => Number(turn?.sequence) !== sequences[index])) return null;
+      firstSequence = sequences[0];
+      lastSequence = sequences.at(-1);
+      contentHashes = turns.map((turn) => createHash('sha256')
+        .update(Buffer.from(String(turn?.content ?? ''), 'utf8')).digest('hex'));
+      sourceBinding = {
+        schema: record.schema,
+        session_id: sessionId,
+        turn_sequences: sequences,
+        source_memory_ids: sourceIds,
+        source_content_sha256: sourceHashes,
+      };
+    } else return null;
+    if (!Number.isSafeInteger(firstSequence) || !Number.isSafeInteger(lastSequence)
+      || firstSequence < 1 || lastSequence < firstSequence
+      || contentHashes.some((hash, index) => hash !== sourceHashes[index])) return null;
+    const exchangeHash = createHash('sha256')
+      .update(Buffer.from(canonicalJson(sourceBinding), 'utf8')).digest('hex');
+    const expectedKey = `${prefix}exchange:${String(firstSequence).padStart(12, '0')}-${String(lastSequence).padStart(12, '0')}:${exchangeHash}`;
+    if (liveKey !== expectedKey) return null;
+  } else if (liveKey.startsWith(`${prefix}final:`)) {
+    if (record.schema !== 'aimos.session-finalization/v1'
+      || record.state !== 'finalized'
+      || Number(record.turn_count) !== expectedTurnCount
+      || record.turn_id_hashes_sha256 !== expectedTurnHashes
+      || !/^[0-9a-f]{64}$/.test(String(record.session_merkle_root || ''))
+      || !/^[0-9a-f]{64}$/.test(String(record.exchange_merkle_root || ''))
+      || liveKey !== `${prefix}final:${record.session_merkle_root}`
+      || !Array.isArray(record.turns) || record.turns.length !== expectedTurnCount
+      || !Array.isArray(record.exchanges)
+      || Number(record.exchange_count) !== record.exchanges.length) return null;
+  } else return null;
+
+  return {
+    company_id: companyId,
+    agent_id: claimedAgentId,
+    key: liveKey,
+    value: String(row.live_value ?? ''),
+  };
+}
+
 function signedSaveIntent(body, row) {
   const signedPath = String(row.signed_path || '');
   if (signedPath === '/aimos/save' || !signedPath) return body;
   if (signedPath === '/aimos/session/turn') return signedSessionTurnIntent(body, row);
+  if (signedPath === '/aimos/session/finalize') return signedSessionFinalizeIntent(body, row);
   if (signedPath === '/aimos/mcp/tools/call') {
     return body?.name === 'aimos_save' ? parseJsonObject(body.arguments) : null;
   }
@@ -1708,6 +1806,46 @@ export function createMemoryProvenanceLedger(deps = {}) {
         })
       : await run(recallEvidenceSql, [uniqueIds]);
 
+    const requestOccurrenceIds = new Set();
+    const evidenceCompanies = new Set();
+    for (const row of result.rows || []) {
+      evidenceCompanies.add(String(row.live_company_id || ''));
+      const body = parseJsonObject(row.body_json);
+      if (Number(row.sig_form_version || 1) === 3
+          && Number(body?.request_receipt_present) === 1
+          && body?.occurrence_event_id) {
+        requestOccurrenceIds.add(String(body.occurrence_event_id).toLowerCase());
+      }
+    }
+    const occurrenceSessionEvents = new Map();
+    if (requestOccurrenceIds.size && evidenceCompanies.size === 1) {
+      const companyId = [...evidenceCompanies][0];
+      const queryOccurrenceEvents = `SELECT id::text,
+          metadata #>> '{occurrence_session_binding,occurrence_event_id}' AS occurrence_event_id
+        FROM aimos_events
+       WHERE company_id=$1
+         AND operation='content_state_occurrence_reasserted'
+         AND metadata #>> '{occurrence_session_binding,occurrence_event_id}' = ANY($2::text[])
+       ORDER BY id`;
+      const links = client
+        ? await client.query(queryOccurrenceEvents, [companyId, [...requestOccurrenceIds]])
+        : await run(queryOccurrenceEvents, [companyId, [...requestOccurrenceIds]]);
+      for (const row of links.rows || []) {
+        const occurrenceId = String(row.occurrence_event_id || '').toLowerCase();
+        const eventId = String(row.id || '').toLowerCase();
+        if (!requestOccurrenceIds.has(occurrenceId)
+            || occurrenceSessionEvents.has(occurrenceId)) {
+          throw new Error('occurrence_session_binding_event_fork');
+        }
+        const event = await readVerifiedEventById(
+          eventId,
+          companyId,
+          client ? { client } : {},
+        );
+        occurrenceSessionEvents.set(occurrenceId, event);
+      }
+    }
+
     const rowsById = new Map();
     for (const row of result.rows || []) {
       if (!rowsById.has(row.memory_id)) rowsById.set(row.memory_id, []);
@@ -1858,7 +1996,37 @@ export function createMemoryProvenanceLedger(deps = {}) {
               nodeFailure = 'occurrence_v3_authorization_binding_invalid';
               break;
             }
-            v3AuthorityByProvenance.set(String(row.provenance_id), requestAuthority);
+            let sessionBinding = null;
+            const bindingEvent = occurrenceSessionEvents.get(
+              String(record.occurrence_event_id).toLowerCase(),
+            ) || null;
+            if (bindingEvent) {
+              const eventMetadata = parseJsonObject(bindingEvent.metadata);
+              const bindingVerification = verifyOccurrenceSessionBindingV1(
+                eventMetadata?.occurrence_session_binding,
+              );
+              if (!bindingVerification.valid
+                  || bindingEvent.operation !== 'content_state_occurrence_reasserted'
+                  || bindingEvent.key !== base.live_key
+                  || bindingEvent.agent_id !== base.live_agent_id
+                  || String(bindingEvent.parent_event_id || '') !== record.authorization_event_id
+                  || bindingVerification.binding.company_id !== base.live_company_id
+                  || bindingVerification.binding.memory_id !== memoryId
+                  || bindingVerification.binding.occurrence_event_id !== record.occurrence_event_id
+                  || bindingVerification.binding.occurrence_commitment
+                    !== Buffer.from(row.mutation_hash).toString('hex')
+                  || bindingVerification.binding.request_body_sha256
+                    !== record.request_body_hash_hex) {
+                nodeFailure = 'occurrence_session_binding_invalid';
+                break;
+              }
+              sessionBinding = bindingVerification.binding;
+            }
+            v3AuthorityByProvenance.set(String(row.provenance_id), {
+              ...requestAuthority,
+              kind: 'verified_request',
+              sessionBinding,
+            });
             continue;
           }
           const structural = verifyRetainedMutationNode(row);
@@ -2014,14 +2182,24 @@ export function createMemoryProvenanceLedger(deps = {}) {
       );
       const occurrenceRow = successorOccurrences.at(-1) || saveRow || retainedAttestRow || bindingRow;
       const occurrenceAuthority = v3AuthorityByProvenance.get(String(occurrenceRow.provenance_id)) || null;
+      const occurrenceSignedSessionId = occurrenceAuthority?.kind === 'verified_request'
+        ? occurrenceAuthority.sessionBinding?.session_id
+        : null;
+      const signedSessionId = occurrenceSignedSessionId == null
+        ? signedSaveIntent?.session_id
+        : occurrenceSignedSessionId;
       const proof = {
         ...bindingVerification.proof,
         company_id: base.live_company_id,
         subject_agent_id: base.live_agent_id,
         key: base.live_key,
-        session_id: signedSaveIntent?.session_id == null
+        session_id: signedSessionId == null
           ? null
-          : String(signedSaveIntent.session_id),
+          : String(signedSessionId),
+        source_dataset_sha256: occurrenceAuthority?.sessionBinding?.source_dataset_sha256 || null,
+        source_session_sha256: occurrenceAuthority?.sessionBinding?.source_session_sha256 || null,
+        source_session_ordinal: occurrenceAuthority?.sessionBinding?.source_session_ordinal ?? null,
+        occurrence_session_binding_sha256: occurrenceAuthority?.sessionBinding?.binding_sha256 || null,
         scope: base.live_scope,
         cube_scope: base.live_cube_scope,
         memory_type: base.live_memory_type,

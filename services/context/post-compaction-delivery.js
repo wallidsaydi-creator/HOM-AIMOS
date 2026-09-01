@@ -2,7 +2,7 @@
  * post-compaction-delivery.js — Native Aimos post-compaction lane
  *
  * Builds a concise continuity handoff from a saved compaction record, then
- * persists the handoff artifact through persistMemory() when the app asks
+ * persists the handoff artifact through executeCanonicalSave() when the app asks
  * Aimos to record post-compaction state.
  *
  * Sources: docs/compaction-post-compaction-corpus.md
@@ -12,7 +12,7 @@
 
 import { createHash } from 'node:crypto';
 import { query } from '../../db/connection.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeCanonicalSave } from '../write/canonical-save-owner.js';
 import { logEvent } from '../observe/event-ledger.js';
 
 const SESSION_DEBRIEF_COMPRESSION_RATIO = 0.20;
@@ -424,7 +424,7 @@ export function buildPostCompactionSummaryPayload(input = {}) {
 }
 
 export function createPostCompactionDeliveryService(deps = {}) {
-  const persistFn = deps.persistMemory || persistMemory;
+  const saveFn = deps.executeCanonicalSave || deps.persistMemory || executeCanonicalSave;
   const logEventFn = deps.logEvent || logEvent;
   const queryFn = deps.query || query;
 
@@ -470,7 +470,7 @@ export function createPostCompactionDeliveryService(deps = {}) {
       };
     }
 
-    const saved = await persistFn({
+    const saved = await saveFn({
       company_id: companyId,
       agent_id: agentId,
       key: payload.key,
@@ -497,7 +497,7 @@ export function createPostCompactionDeliveryService(deps = {}) {
         status: 'rejected',
         error_code: saved.reason,
         quality_score: saved.quality_score,
-        reasoning: `Post-compaction delivery was rejected by persistMemory quality gate: ${saved.reason}.`,
+        reasoning: `Post-compaction delivery was rejected by the canonical SAVE owner: ${saved.reason}.`,
         source_knowledge: 'persist-memory.js + post-compaction-delivery.js',
       });
       return {

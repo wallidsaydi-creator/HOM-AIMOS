@@ -4,7 +4,6 @@ import { refreshCachedCredential } from '../security/credential-cache.js';
 import {
   credentialSlotId,
   readCredential,
-  storeCredential,
 } from '../security/credential-store.js';
 import { signAsHousekeeper } from '../security/housekeeper-signer.js';
 import { canonicalJson } from '../security/agent-identity.js';
@@ -202,7 +201,14 @@ export function computeMysoreMvs(markovMse, humanMse) {
 async function prepareToken(provider, kind, value) {
   if (value == null || value === '') return null;
   const service = tokenService(provider, kind);
-  const stored = await storeCredential(service, value);
+  const existing = await credentialLedger.readVerifiedSlotChain(credentialSlotId(service));
+  const stored = await credentialLedger.beginCredentialCustodyMutation({
+    serviceName: service,
+    value,
+    eventType: existing.rowCount > 0 ? 'ROTATE' : 'STORE',
+    subjectAgentId: 'housekeeper',
+    reason: 'identity_vault_oauth_exchange',
+  });
   return { service, ...stored };
 }
 
@@ -276,6 +282,12 @@ async function commitTokenLifecycle(client, prepared, provider, kind, companyId,
     },
     ts_created: Math.floor(Date.now() / 1000),
     ts_saved: Math.floor(Date.now() / 1000),
+    custody_action_id: prepared.custodyTrace.actionId,
+    custody_start_event_id: prepared.custodyTrace.startEventId,
+    custody_start_mutation_hash: prepared.custodyTrace.startMutationHash,
+    custody_readback_event_id: prepared.custodyTrace.readbackEventId,
+    custody_readback_mutation_hash: prepared.custodyTrace.readbackMutationHash,
+    custody_version_slot_sha256: prepared.custodyTrace.versionSlotSha256,
   };
   const signed = await signAsHousekeeper(body);
   const committed = await credentialLedger.commitCredentialLifecycle({
@@ -348,6 +360,17 @@ export async function appendIntegrationToken({
     await client.query('SELECT set_config($1,$2,true)', ['app.current_agent_id', 'housekeeper']);
     const accessLifecycle = await commitTokenLifecycle(client, access, normalizedProvider, 'access', companyId, vaultBinding);
     const refreshLifecycle = await commitTokenLifecycle(client, refresh, normalizedProvider, 'refresh', companyId, vaultBinding);
+    const custodyTerminals = [];
+    if (access) custodyTerminals.push(await credentialLedger.commitCredentialCustodyTerminal(
+      access.custodyTrace,
+      accessLifecycle,
+      { client, disposition: accessLifecycle?.existing ? 'NO_OP' : 'SUCCESS' },
+    ));
+    if (refresh) custodyTerminals.push(await credentialLedger.commitCredentialCustodyTerminal(
+      refresh.custodyTrace,
+      refreshLifecycle,
+      { client, disposition: refreshLifecycle?.existing ? 'NO_OP' : 'SUCCESS' },
+    ));
     await client.query('COMMIT');
     await Promise.all([
       access ? refreshCachedCredential(access.service) : null,
@@ -368,11 +391,21 @@ export async function appendIntegrationToken({
       refresh_lifecycle_mutation_hash: refreshLifecycle?.mutationHash
         ? Buffer.from(refreshLifecycle.mutationHash).toString('hex')
         : null,
+      custody_terminal_event_ids: custodyTerminals.map((entry) => entry.event_id),
     };
   } catch (error) {
     if (client) {
       try { await client.query('ROLLBACK'); } catch { /* connection may be gone */ }
     }
+    const traceErrors = [];
+    for (const prepared of [access, refresh].filter(Boolean)) {
+      try {
+        await credentialLedger.markCredentialCustodyIndeterminate(prepared.custodyTrace, error);
+      } catch (traceError) {
+        traceErrors.push(traceError?.message || String(traceError));
+      }
+    }
+    if (traceErrors.length) error.credential_custody_terminal_errors = traceErrors;
     error.keychain_reconciliation = {
       provider: normalizedProvider,
       access_slot: access?.slot || null,

@@ -25,7 +25,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { query } from '../../db/connection.js';
+import { query, withTransaction } from '../../db/connection.js';
+import { logEvent, readVerifiedEventById } from './event-ledger.js';
 
 export const FORGETTING_BOUND_MONITOR_SOURCE = 'Data-Dependent & Aimos Bounds on Forgetting';
 export const FORGETTING_PREVALENCE_MONITOR_SOURCE = 'Forgetting Is Everywhere';
@@ -409,15 +410,22 @@ async function getMemoryCounts(companyId) {
 }
 
 async function getPreviousSnapshot(companyId) {
-  const result = await query(
-    `SELECT *
-       FROM aimos_retrieval_drift_snapshots
-      WHERE company_id = $1
-      ORDER BY created_at DESC
-      LIMIT 1`,
-    [companyId]
-  );
-  return result.rows[0] || null;
+  return withTransaction(async (client) => {
+    const result = await client.query(
+      `SELECT id FROM aimos_events
+        WHERE company_id = $1 AND operation = 'retrieval_drift_snapshot_committed'
+          AND ledger_version = 1 ORDER BY ts DESC, signer_valid_from DESC, ledger_seq DESC LIMIT 1`,
+      [companyId],
+    );
+    if (!result.rows[0]) return null;
+    const event = await readVerifiedEventById(result.rows[0].id, companyId, { client });
+    const snapshot = typeof event.metadata === 'string' ? JSON.parse(event.metadata) : event.metadata;
+    return {
+      benchmark_accuracy: snapshot.benchmarkAccuracy,
+      zero_evidence_rate: snapshot.zeroEvidenceRate,
+      hom_active_memory_count: snapshot.homActiveMemoryCount,
+    };
+  }, { restricted: true, client_id: companyId, agent_id: 'housekeeper' });
 }
 
 export function classifyRetrievalDrift({ benchmark, memoryCounts, previousSnapshot = null }) {
@@ -838,62 +846,11 @@ export async function recordRetrievalDriftSnapshot(companyId = 'hom', options = 
     reasons: drift.reasons,
   };
 
-  await query(
-    `INSERT INTO aimos_retrieval_drift_snapshots (
-       company_id,
-       benchmark_name,
-       benchmark_path,
-       benchmark_exists,
-       benchmark_mtime,
-       benchmark_age_hours,
-       benchmark_run_id,
-       benchmark_accuracy,
-       benchmark_correct,
-       benchmark_total_questions,
-       avg_evidence_count,
-       zero_evidence_rate,
-       not_found_rate,
-       avg_latency_ms,
-       hom_active_memory_count,
-       total_active_memory_count,
-       benchmark_memory_count_hom_active,
-       benchmark_memory_count_total_active,
-       memory_growth_since_benchmark,
-       memory_growth_since_benchmark_ratio,
-       accuracy_delta_from_previous,
-       zero_evidence_delta_from_previous,
-       status,
-       reasons
-     ) VALUES (
-       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24::jsonb
-     )`,
-    [
-      companyId,
-      snapshot.benchmarkName,
-      snapshot.benchmarkPath,
-      snapshot.benchmarkExists,
-      snapshot.benchmarkMtime,
-      snapshot.benchmarkAgeHours,
-      snapshot.benchmarkRunId,
-      snapshot.benchmarkAccuracy,
-      snapshot.benchmarkCorrect,
-      snapshot.benchmarkTotalQuestions,
-      snapshot.avgEvidenceCount,
-      snapshot.zeroEvidenceRate,
-      snapshot.notFoundRate,
-      snapshot.avgLatencyMs,
-      snapshot.homActiveMemoryCount,
-      snapshot.totalActiveMemoryCount,
-      snapshot.benchmarkMemoryCountHomActive,
-      snapshot.benchmarkMemoryCountTotalActive,
-      snapshot.memoryGrowthSinceBenchmark,
-      snapshot.memoryGrowthSinceBenchmarkRatio,
-      snapshot.accuracyDeltaFromPrevious,
-      snapshot.zeroEvidenceDeltaFromPrevious,
-      snapshot.status,
-      JSON.stringify(snapshot.reasons),
-    ]
-  );
+  await logEvent(companyId, 'housekeeper', 'retrieval_drift_snapshot_committed', `retrieval-drift:${Date.now()}`, {
+    schema: 'hom.aimos.retrieval-drift-snapshot/v1',
+    ...snapshot,
+    reasoning: 'The Housekeeper retained the complete retrieval-drift diagnostic projection without mutating retrieval authority.',
+  }, null, { returnReceipt: true });
 
   return snapshot;
 }

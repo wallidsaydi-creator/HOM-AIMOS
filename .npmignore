@@ -5,6 +5,8 @@ plans/
 remediation/
 scratchpad/
 research/
+engineering/
+baselines/
 RELEASE-IMPROVEMENT-PLAN.md
 REMEDIATION-INDEX.md
 architecture-authority.json
@@ -12,7 +14,8 @@ services/.cache/
 **/__pycache__/
 **/*.pyc
 state/
-eval/data/canonical/
+eval/data/canonical/*
+!eval/data/canonical/corpus-manifest.json
 eval/data/private/
 eval/data/twin-prime-g1p-canonical/
 eval/data/twin-prime-g1p-canonical-v2/
@@ -96,6 +99,10 @@ artifacts/
 /release/
 db/backups/
 docs/security/*.pdf
+paper/*.pdf
+paper/*.aux
+paper/*.out
+paper/*.log
 *.app/
 *.asar
 *.bak

@@ -110,7 +110,8 @@ export async function commitGovernorMutation({
   } catch (err) {
     await logEvent(COMPANY, 'governor_provenance', 'sign_failed_skip', memoryId, {
       error: String(err?.message || err),
-      governor_flag: governorFlag
+      governor_flag: governorFlag,
+      reasoning: 'Housekeeper could not sign the proposed cognitive transition, so no provenance or retrieval-weight mutation was admitted.',
     }).catch(() => {});
     return { ok: false, reason: 'sign_failed' };
   }
@@ -134,7 +135,8 @@ export async function commitGovernorMutation({
     if (!result?.ok) {
       await logEvent(COMPANY, 'governor_provenance', 'commit_failed', memoryId, {
         reason: result?.reason,
-        governor_flag: governorFlag
+        governor_flag: governorFlag,
+        reasoning: 'The native provenance ledger rejected the signed cognitive transition; the owning transaction must roll back without changing retrieval weight.',
       }).catch(() => {});
       return { ok: false, reason: result?.reason || 'commit_failed' };
     }
@@ -165,7 +167,8 @@ export async function commitGovernorMutation({
     await logEvent(COMPANY, 'governor_provenance', 'commit_error', memoryId, {
       error: String(err?.message || err),
       stack: err?.stack,
-      governor_flag: governorFlag
+      governor_flag: governorFlag,
+      reasoning: 'The native provenance commit raised an infrastructure or relational error; the owning transaction must roll back without changing retrieval weight.',
     }).catch(() => {});
     return { ok: false, reason: 'commit_error', detail: String(err?.message || err) };
   }

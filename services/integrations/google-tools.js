@@ -83,14 +83,14 @@ async function refreshGoogleAccessToken(row, useContext = {}) {
       await Promise.all([
         credentialLedger.finalizeCredentialUse({
           reservation: refreshReservation,
-          outcome: 'failed',
+          outcome: res ? 'failed' : 'indeterminate',
           outcomeClass: 'google_oauth_rejected',
           errorClass: String(data.error || `http_${res.status}`),
           outcomeHash,
         }),
         credentialLedger.finalizeCredentialUse({
           reservation: clientSecretReservation,
-          outcome: 'failed',
+          outcome: res ? 'failed' : 'indeterminate',
           outcomeClass: 'google_oauth_rejected',
           errorClass: String(data.error || `http_${res.status}`),
           outcomeHash,
@@ -239,7 +239,6 @@ async function gFetch(path, options = {}, useContext = {}, responseMode = 'json'
         }
       }, GOOGLE_REQUEST_TIMEOUT_MS);
       if (res.status === 401 && attempt === 0 && row.refresh_token_checkout?.value) {
-        terminalRecorded = true;
         await credentialLedger.finalizeCredentialUse({
           reservation,
           outcome: 'failed',
@@ -247,12 +246,12 @@ async function gFetch(path, options = {}, useContext = {}, responseMode = 'json'
           errorClass: 'http_401',
           outcomeHash: credentialUseEvidenceHash({ status: res.status, attempt }),
         });
+        terminalRecorded = true;
         row = await forceRefreshGoogleToken(row, useContext);
         continue;
       }
       if (!res.ok) {
         const err = await res.text();
-        terminalRecorded = true;
         await credentialLedger.finalizeCredentialUse({
           reservation,
           outcome: 'failed',
@@ -263,10 +262,10 @@ async function gFetch(path, options = {}, useContext = {}, responseMode = 'json'
             responseHash: credentialUseEvidenceHash(err),
           }),
         });
+        terminalRecorded = true;
         throw new Error(`Google API error (${res.status}): ${err}`);
       }
       const result = responseMode === 'text' ? await res.text() : await res.json();
-      terminalRecorded = true;
       await credentialLedger.finalizeCredentialUse({
         reservation,
         outcome: 'completed',
@@ -276,12 +275,13 @@ async function gFetch(path, options = {}, useContext = {}, responseMode = 'json'
           responseHash: credentialUseEvidenceHash(result),
         }),
       });
+      terminalRecorded = true;
       return result;
     } catch (error) {
       if (!terminalRecorded) {
         await credentialLedger.finalizeCredentialUse({
           reservation,
-          outcome: 'failed',
+          outcome: res ? 'failed' : 'indeterminate',
           outcomeClass: res ? 'google_api_response_invalid' : 'google_api_transport_failed',
           errorClass: error?.name || 'google_api_failed',
           outcomeHash: credentialUseEvidenceHash({

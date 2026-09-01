@@ -106,33 +106,13 @@ export function parseEnvelope(headers) {
   };
 }
 
-// Phase 11.8 — additive: envelope may travel via req.body.envelope for
-// inline callers (attack-constructors, smoke harnesses, MCP tools). Header
-// wins when both are present; body fallback is fail-open for the envelope
-// shape, fail-closed for everything else (cert chain verify, sig verify,
-// nonce replay, revocation — unchanged).
+// Protected requests have one transport contract: the four Aimos-Agent-*
+// headers. Native/internal callers pass already-verified authority objects to
+// canonical owners; they do not create a second HTTP envelope representation.
+// A body-carried envelope would be a parallel admission surface and would also
+// create a circular signature problem because req.body is itself signed.
 export function extractEnvelope(req) {
-  let env = parseEnvelope(req && req.headers ? req.headers : {});
-  if (env !== null) return env;
-  const bodyEnv = req && req.body && typeof req.body === 'object' ? req.body.envelope : null;
-  if (!bodyEnv || typeof bodyEnv !== 'object') return null;
-  const cert = bodyEnv.cert || null;
-  const sig = bodyEnv.sig || null;
-  const nonce = bodyEnv.nonce || null;
-  const tsRaw = bodyEnv.signedTs ?? bodyEnv.ts ?? null;
-  const prevChainHash = bodyEnv.prevChainHash ?? null;
-  const deviceFp = bodyEnv.deviceFp ?? null;
-  if (!cert || !sig || !nonce || !tsRaw) return { incomplete: true };
-  const tsInt = parseInt(String(tsRaw), 10);
-  if (!Number.isInteger(tsInt) || tsInt < 0) return { incomplete: true };
-  return {
-    cert: String(cert),
-    sig: String(sig),
-    nonce: String(nonce),
-    ts: tsInt,
-    prevChainHash: prevChainHash ? String(prevChainHash) : null,
-    deviceFp: deviceFp ? String(deviceFp) : null
-  };
+  return parseEnvelope(req && req.headers ? req.headers : {});
 }
 
 export function createAuthTier(deps = {}) {

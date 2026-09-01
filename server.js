@@ -23,6 +23,8 @@ const DATABASE_NAME = resolveAimosDatabaseName();
 let backgroundBootPromise = null;
 let backgroundReady = false;
 let backgroundBootError = null;
+let cr7BootRecoveryComplete = false;
+let schedulerStatus = Object.freeze({ ready: false, state: 'not_started', required_jobs: 5 });
 
 app.use(cors({ origin: /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/ }));
 app.use(express.json({ limit: '1mb' }));
@@ -166,8 +168,11 @@ function buildHealthPayload() {
   return {
     service: 'FORGE Memory Aimos',
     version: '1.0.0',
-    ready: backgroundReady,
+    ready: backgroundReady && schedulerStatus.ready === true,
     bootError: backgroundBootError,
+    readiness: {
+      scheduler: schedulerStatus,
+    },
     uptimeSec: Math.round(process.uptime()),
     runtime: {
       company_id: AIMOS_COMPANY_ID,
@@ -230,7 +235,7 @@ async function startBackgroundServices() {
     const companyId = 'hom';
     const { ensureGovernanceReady } = await import('./services/orchestration/governance-resolver.js');
     const skillsRuntime = await import('./services/orchestration/skills-runtime.js');
-    const { startScheduler } = await import('./services/orchestration/scheduler.js');
+    const { startScheduler, getSchedulerReadiness } = await import('./services/orchestration/scheduler.js');
     await ensureGovernanceReady(companyId);
 
     // ─── Wire #30: HNSW Optimizer — startup pg_prewarm + index verify ────────
@@ -266,9 +271,12 @@ async function startBackgroundServices() {
     const embeddingReadiness = await prewarmEmbeddingRuntime();
     console.log(`[embeddings] Runtime ready: ${embeddingReadiness.dimension}d in ${embeddingReadiness.runtime_ms}ms`);
 
-    await startScheduler();
-    backgroundReady = true;
-    backgroundBootError = null;
+    try {
+      schedulerStatus = await startScheduler({ bootRecoveryComplete: cr7BootRecoveryComplete });
+    } catch (error) {
+      schedulerStatus = getSchedulerReadiness();
+      throw error;
+    }
 
     // ─── BOOT: run pending outcome scoring (don't wait for nightly dream) ─────
     import('./services/agent-learning.js').then(({ scoreDueRecommendations }) => {
@@ -285,6 +293,11 @@ async function startBackgroundServices() {
       console.warn('[BOOT-INTEGRITY] Check failed (non-fatal):', intErr.message);
     }
 
+    // Readiness means the complete background boot has reached a terminal
+    // state, including integrity inspection. Advertising ready before this
+    // point lets a controlled restart terminate the process mid-audit.
+    backgroundReady = true;
+    backgroundBootError = null;
     console.log('🧩 Background services ready');
   })().catch((error) => {
     backgroundReady = false;
@@ -293,6 +306,38 @@ async function startBackgroundServices() {
   });
 
   return backgroundBootPromise;
+}
+
+async function reconcileCr7OpenActionsAtBoot() {
+  const { readVerifiedEventHistory } = await import('./services/observe/event-ledger.js');
+  const { materialEffectOwner, reconstructMaterialEffectTraces } = await import('./services/security/material-effect-owner.js');
+  const { reconcileOpenToolActions, reconstructToolActionTraces } = await import('./services/orchestration/tool-action-ledger.js');
+  const { credentialLedger } = await import('./services/security/credential-ledger.js');
+  const { reconcileOpenCanonicalSaveActions, reconstructCanonicalSaveActionTraces } = await import('./services/write/canonical-save-owner.js');
+  const { reconcileOpenRuns, reconstructRunTraces } = await import('./services/orchestration/run-metadata.js');
+  const { reconcileOpenSessionLanes, reconstructSessionLaneTraces } = await import('./services/orchestration/session-runner.js');
+  const events = await readVerifiedEventHistory(AIMOS_COMPANY_ID, { signerAgentId: 'housekeeper' });
+  const noOpen = () => Object.freeze({ scanned: events.length, reconciled: Object.freeze([]), remainingOpen: 0 });
+  const results = [];
+  results.push(['material_effect', reconstructMaterialEffectTraces(events).open.length
+    ? await materialEffectOwner.reconcileOpen() : noOpen()]);
+  results.push(['tool_action', reconstructToolActionTraces(events).open.length
+    ? await reconcileOpenToolActions() : noOpen()]);
+  const openCredentialUses = await credentialLedger.findOpenCredentialUses();
+  results.push(['credential_use', openCredentialUses.length
+    ? await credentialLedger.reconcileOpenCredentialUses() : noOpen()]);
+  results.push(['canonical_save_action', reconstructCanonicalSaveActionTraces(events).open.length
+    ? await reconcileOpenCanonicalSaveActions() : noOpen()]);
+  results.push(['agent_run', reconstructRunTraces(events).open.length
+    ? await reconcileOpenRuns() : noOpen()]);
+  results.push(['session_lane', reconstructSessionLaneTraces(events).open.length
+    ? await reconcileOpenSessionLanes() : noOpen()]);
+  for (const [family, result] of results) {
+    if (result.remainingOpen !== 0) throw new Error(`cr7_recovery_open_actions_remain:${family}:${result.remainingOpen}`);
+  }
+  console.log('[BOOT] CR7 action recovery complete:', results.map(([family, result]) => (
+    `${family}=${result.reconciled.length}`
+  )).join(' '));
 }
 
 async function startServer() {
@@ -315,6 +360,11 @@ async function startServer() {
   } catch (err) {
     console.error('[BOOT] credentialCache loadAll failed — getCachedCredential returns null:', err?.message || String(err));
   }
+  // Reconstruct and close every retained orphan before accepting traffic.
+  // Recovery appends INDETERMINATE terminals only; it never replays SAVE,
+  // provider, tool, credential, file, process, run, response, or session work.
+  await reconcileCr7OpenActionsAtBoot();
+  cr7BootRecoveryComplete = true;
   app.listen(PORT, '127.0.0.1', () => {
     console.log(`🧠 FORGE Aimos running on 127.0.0.1:${PORT} (localhost only)`);
     // Warm heavy dependencies in the background so health/status can respond immediately.

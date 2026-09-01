@@ -1,6 +1,8 @@
 /**
  * Native temporal question interval operator from:
  * - TempQuestions.pdf
+ * Status: Native structural projection in canonical /aimos/recall with zero
+ * rank influence pending calibration.
  *
  * Implemented formulas / techniques:
  * - Allen interval relation inventory
@@ -10,7 +12,7 @@
  * - precision / recall / F-score
  *
  * Aimos adaptation:
- * - contributes bounded interval/signal recall scores only
+ * - contributes bounded interval/signal receipt structure only
  * - no pruning, no decay, no deletion, no answer injection
  */
 

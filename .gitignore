@@ -41,6 +41,9 @@ architecture-authority.json
 .cache/
 __pycache__/
 *.py[cod]
+paper/*.aux
+paper/*.log
+paper/*.out
 
 # Sensitive files (auto-detected)
 .env
@@ -71,7 +74,8 @@ housekeeper.cert-cache.json
 # hash-verification workflow, not vendored dataset bytes.
 eval/data/*.json
 eval/data/*.csv
-eval/data/canonical/
+eval/data/canonical/*
+!eval/data/canonical/corpus-manifest.json
 eval/data/private/
 eval/data/twin-prime-g1p-canonical/
 eval/data/twin-prime-g1p-canonical-v2/

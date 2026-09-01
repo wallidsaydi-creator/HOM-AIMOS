@@ -44,7 +44,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { query, agentPool } from '../../db/connection.js';
 import { getEmbedding } from '../core/embeddings.js';
-import { logEvent } from '../observe/event-ledger.js';
+import { logEvent, readVerifiedEventById } from '../observe/event-ledger.js';
 import { assessQuality } from './quality-gate.js';
 import { checkConflict } from '../dream/curator.js';
 import { computeLiveRowContentHash, memoryProvenanceLedger } from '../security/memory-provenance.js';
@@ -60,8 +60,7 @@ import { saveEnvelopeOrchestrator } from '../security/save-envelope.js';
 import { getOperatorAgentId, isOperatorAgentId, normalizeOperatorAgentId } from '../security/system-config-store.js';
 import { resolveFreshnessWriteFields } from '../temporal/freshness-metadata.js';
 import { validateAladdinCompliance } from '../governance/aladdin-compliance.js';
-import CodebookService from './codebook-service.js';
-import { buildPrfFeatureDiagnostics, getTurboQuantCapabilities } from './turboquant-compat.js';
+import { buildPrfFeatureDiagnostics } from './turboquant-compat.js';
 import { getCompressionPolicy } from './intent-classifier.js';
 import { computePredictionError } from './rpe-gate.js';
 import {
@@ -79,7 +78,10 @@ import { recallAuthorizationService } from '../security/recall-authorization.js'
 import { sessionKeyQueryScope } from '../shared/session-scope.js';
 import { classifyAndCommitRetainedMemoryGroup } from '../security/memory-epistemic-classifier.js';
 import { serializeMemoryValue } from '../security/protocol/memory-value.js';
-import { computeOccurrenceCommitmentV3 } from '../security/protocol/content-state-occurrence-v3.js';
+import {
+  computeOccurrenceCommitmentV3,
+} from '../security/protocol/content-state-occurrence-v3.js';
+import { buildOccurrenceSessionBindingV1 } from '../security/protocol/occurrence-session-binding-v1.js';
 
 // ─── AGENT ID NORMALIZATION ─────────────────────────────────────────────────
 // Operator agent + normalization come from the cert-enveloped aimos_system_config
@@ -124,12 +126,84 @@ export function redactAimosValue(text) {
 }
 
 // ─── DATA CLASSIFICATION ────────────────────────────────────────────────────
-function classifyDataSensitivity(value, clearanceLevel = 1) {
-  const text = String(value || '').toLowerCase();
+const RESTRICTED_PROVIDER_TOKEN = /(?:sk_live_|sk_test_|AIza|ghp_|xox[baprs]-)/;
+const CREDENTIAL_ASSIGNMENT_SOURCE = String.raw`\b(password|secret|private[ ._-]?key|api[ ._-]?key|token|credential)\b\s*[:=]\s*([^\s,;)}\]]{4,})`;
+
+function sensitivitySegments(value) {
+  const source = String(value || '');
+  let parsed;
+  try { parsed = JSON.parse(source); } catch { return [source]; }
+  const segments = [];
+  const pending = [parsed];
+  while (pending.length) {
+    const current = pending.pop();
+    if (typeof current === 'string') {
+      segments.push(current);
+    } else if (Array.isArray(current)) {
+      for (const item of current) pending.push(item);
+    } else if (current && typeof current === 'object') {
+      for (const [key, item] of Object.entries(current)) {
+        if (typeof item === 'string' || typeof item === 'number' || typeof item === 'boolean') {
+          segments.push(`${key}:${String(item)}`);
+        }
+        pending.push(item);
+      }
+    }
+  }
+  return segments.length ? segments : [source];
+}
+
+function normalizeCredentialCandidate(value) {
+  return String(value || '')
+    .replace(/^[\\'"`]+/, '')
+    .replace(/[\\'"`,.;:)}\]]+$/, '');
+}
+
+function isCredentialPlaceholder(value) {
+  const candidate = String(value || '');
+  return !candidate
+    || /^<[^>]+>$/.test(candidate)
+    || /^\$\{|^\$\(|^\$[A-Za-z_]|^%[^%]+%$/.test(candidate)
+    || /^(?:process|deno)\.env/i.test(candidate)
+    || /^(?:your|my|example|sample|test|dummy|placeholder|replace|insert)[_-]/i.test(candidate)
+    || /^(?:str|string|password|secret|value|key|token|api[_-]?key|credentials?|admin|none|null|blank)$/i.test(candidate);
+}
+
+function isRestrictedCredentialAssignment(keyword, rawCandidate) {
+  const candidate = normalizeCredentialCandidate(rawCandidate);
+  if (isCredentialPlaceholder(candidate)) return false;
+  const normalizedKeyword = String(keyword || '').toLowerCase().replace(/[ ._-]+/g, '');
+  const lower = /[a-z]/.test(candidate);
+  const upper = /[A-Z]/.test(candidate);
+  const digit = /[0-9]/.test(candidate);
+  const hardSymbol = /[^A-Za-z0-9_-]/.test(candidate);
+  if (['password', 'credential', 'privatekey', 'apikey'].includes(normalizedKeyword)) {
+    return candidate.length >= 8;
+  }
+  if (['secret', 'token'].includes(normalizedKeyword)) {
+    const entropyClasses = [lower, upper, digit, hardSymbol].filter(Boolean).length;
+    return candidate.length >= 20 || (candidate.length >= 12 && entropyClasses >= 3);
+  }
+  return false;
+}
+
+function containsRestrictedCredentialAssignment(segment) {
+  const pattern = new RegExp(CREDENTIAL_ASSIGNMENT_SOURCE, 'gi');
+  for (const match of String(segment || '').matchAll(pattern)) {
+    if (isRestrictedCredentialAssignment(match[1], match[2])) return true;
+  }
+  return false;
+}
+
+export function classifyDataSensitivity(value, clearanceLevel = 1) {
+  const segments = sensitivitySegments(value);
+  const text = segments.join('\n').toLowerCase();
   const cl = Number(clearanceLevel || 1);
 
-  if (/\b(password|secret|private.key|api.key|token|credential)\b/.test(text)) return 'restricted';
-  if (/sk_live|sk_test|AIza|ghp_|xox[baprs]-/.test(value || '')) return 'restricted';
+  if (segments.some((segment) => RESTRICTED_PROVIDER_TOKEN.test(segment))) return 'restricted';
+  if (segments.some(containsRestrictedCredentialAssignment)) {
+    return 'restricted';
+  }
 
   if (/\b(revenue|salary|ssn|bank.account|credit.card|social.security)\b/.test(text)) return 'confidential';
   if (/\b(strategy|acquisition|merger|valuation|term.sheet)\b/.test(text)) return 'confidential';
@@ -158,6 +232,36 @@ function mutationCommitError(kind, reason, currentHead = null) {
   return error;
 }
 
+const ENTITY_EDGE_ROW_DOMAIN = Buffer.from('HOM-AIMOS-ENTITY-EDGE-ROW-v1\0', 'utf8');
+const ENTITY_EDGE_ROOT_DOMAIN = Buffer.from('HOM-AIMOS-ENTITY-EDGE-ROOT-v1\0', 'utf8');
+
+export function buildEntityEdgeProjection(rows = []) {
+  const records = (Array.isArray(rows) ? rows : []).map((row) => {
+    const rowId = Number(row.id ?? row.row_id);
+    const companyId = String(row.company_id || '').trim();
+    const memoryId = String(row.memory_id || '').trim().toLowerCase();
+    const entity = String(row.entity || '').trim().toLowerCase();
+    const entityType = String(row.entity_type || 'unknown').trim().toLowerCase();
+    if (!Number.isSafeInteger(rowId) || rowId <= 0 || !companyId || !memoryId || !entity || !entityType) {
+      throw new Error('entity_edge_projection_row_invalid');
+    }
+    const rowBody = { row_id: rowId, company_id: companyId, memory_id: memoryId, entity, entity_type: entityType };
+    const rowSha256 = createHash('sha256')
+      .update(Buffer.concat([ENTITY_EDGE_ROW_DOMAIN, Buffer.from(canonicalJson(rowBody), 'utf8')]))
+      .digest('hex');
+    return Object.freeze({ row_id: rowId, row_sha256: rowSha256 });
+  }).sort((left, right) => left.row_id - right.row_id);
+  const root = createHash('sha256')
+    .update(Buffer.concat([ENTITY_EDGE_ROOT_DOMAIN, Buffer.from(canonicalJson(records), 'utf8')]))
+    .digest('hex');
+  return Object.freeze({
+    schema: 'hom.aimos.memory-entity-edge-projection/v1',
+    row_count: records.length,
+    records: Object.freeze(records),
+    projection_root_sha256: root,
+  });
+}
+
 const DATA_CLASS_RANK = Object.freeze({ public: 0, internal: 1, confidential: 2, restricted: 3 });
 
 export async function lockVerifiedAuthorityEpoch(client, authority, {
@@ -166,13 +270,9 @@ export async function lockVerifiedAuthorityEpoch(client, authority, {
   clearanceLevel,
   dataClass = null,
 } = {}) {
-  if (!['verified_request', 'verified_tool_action'].includes(authority?.kind)) return;
-  const agentId = authority.kind === 'verified_request'
-    ? authority.agentId
-    : authority.actorAgentId;
-  const validFromIso = authority.kind === 'verified_request'
-    ? authority.validFromIso
-    : authority.actorValidFromIso;
+  if (!['verified_request', 'verified_tool_action', 'verified_housekeeper_action'].includes(authority?.kind)) return;
+  const agentId = authority.kind === 'verified_request' ? authority.agentId : authority.actorAgentId;
+  const validFromIso = authority.kind === 'verified_request' ? authority.validFromIso : authority.actorValidFromIso;
   const authorityCompanyId = authority.kind === 'verified_request'
     ? String(companyId || '')
     : authority.companyId;
@@ -182,7 +282,9 @@ export async function lockVerifiedAuthorityEpoch(client, authority, {
   if (!agentId || !validFromIso || !authorityCompanyId) {
     throw mutationCommitError('envelope', 'agent_epoch_missing');
   }
-  if (String(agentId) !== String(subjectAgentId) || String(authorityCompanyId) !== String(companyId)) {
+  const housekeeperAction = authority.kind === 'verified_housekeeper_action';
+  if ((!housekeeperAction && String(agentId) !== String(subjectAgentId))
+      || String(authorityCompanyId) !== String(companyId)) {
     throw mutationCommitError('envelope', 'agent_epoch_scope_mismatch');
   }
   // NO KEY UPDATE remains mutually exclusive with the master-signed
@@ -209,6 +311,20 @@ export async function lockVerifiedAuthorityEpoch(client, authority, {
   if (agentId === 'housekeeper') {
     if (!['T1', 'T1_SYSTEM_SELF'].includes(String(identityTier || '').toUpperCase())) {
       throw mutationCommitError('envelope', 'housekeeper_system_tier_required');
+    }
+    if (housekeeperAction) {
+      const action = await readVerifiedEventById(authority.actionEventId, companyId, { client });
+      const metadata = typeof action.metadata === 'string' ? JSON.parse(action.metadata) : action.metadata;
+      if (action.operation !== 'canonical_save_action_started'
+          || action.signer_agent_id !== 'housekeeper'
+          || new Date(action.signer_valid_from).toISOString() !== new Date(validFromIso).toISOString()
+          || String(action.agent_id) !== String(subjectAgentId)
+          || Buffer.from(action.mutation_hash).toString('hex') !== authority.actionMutationHash
+          || metadata?.schema !== 'hom.aimos.canonical-save-action-start/v2'
+          || metadata?.action_sha256 !== authority.actionSha256
+          || metadata?.action_context_sha256 !== authority.actionContextSha256) {
+        throw mutationCommitError('envelope', 'housekeeper_action_binding_invalid');
+      }
     }
     return;
   }
@@ -306,7 +422,12 @@ export async function findCommittedExactContentState(client, {
             semantic_triples, surprise_at_save, compression_ratio,
             valid_from, valid_until, content_hash,
             current_epistemic_label, current_epistemic_confidence_milli,
-            current_epistemic_event_id
+            current_epistemic_event_id,
+            (SELECT encode(classification.classification_hash,'hex')
+               FROM aimos_memory_epistemic_classifications classification
+              WHERE classification.memory_id=aimos_memories.id
+                AND classification.authority_event_id=aimos_memories.current_epistemic_event_id
+              LIMIT 1) AS current_epistemic_classification_hash
        FROM aimos_memories
       WHERE company_id = $1 AND content_hash = $2
       ORDER BY id`,
@@ -396,7 +517,7 @@ async function commitInitialEvidence({
   supersessionEvidence,
 }) {
   let signed;
-  if (authority === 'housekeeper') {
+  if (authority?.kind === 'verified_housekeeper_action') {
     signed = await signAsHousekeeper({
       event_type: 'SAVE',
       memory_id: memoryId,
@@ -409,6 +530,10 @@ async function commitInitialEvidence({
       memory_type: memoryType,
       source,
       session_id: sessionId || null,
+      housekeeper_action_event_id: authority.actionEventId,
+      housekeeper_action_mutation_hash: authority.actionMutationHash,
+      housekeeper_action_sha256: authority.actionSha256,
+      housekeeper_action_context_sha256: authority.actionContextSha256,
     });
   } else if (authority?.kind === 'verified_tool_action') {
     const verifiedAction = await verifyToolActionAuthority(authority, {
@@ -747,6 +872,15 @@ async function persistCredentialMutation(params) {
       }
     }
 
+    const credentialCustodyTerminal = await credentialLedger.commitCredentialCustodyTerminal(
+      prepared.custody_trace,
+      lifecycleCommit,
+      {
+        client: txClient,
+        disposition: lifecycleCommit.existing ? 'NO_OP' : 'SUCCESS',
+      },
+    );
+
     if (ownsTransaction) await txClient.query('COMMIT');
     let credentialCacheRefreshed = null;
     if (ownsTransaction) {
@@ -772,13 +906,49 @@ async function persistCredentialMutation(params) {
       keychain_version_slot: prepared.keychain_version_slot,
       credential_hash: prepared.credential_hash,
       credential_ledger_commit: lifecycleCommit,
+      credential_custody_terminal: credentialCustodyTerminal,
       provider_memory_id: providerResult?.id || null,
       envelope_commit: envelopeCommit,
       credential_cache_refreshed: credentialCacheRefreshed,
+      secret_boundary: {
+        credential_lane: true,
+        redaction_applied: false,
+      },
+      embedding_disposition: referenceResult.embedding_disposition || {
+        degraded: false,
+        dimension: null,
+        retained_existing: Boolean(referenceResult.existing),
+      },
+      lineage_disposition: referenceResult.lineage_disposition || {
+        status: 'NO_OP',
+        reason: 'credential_reference_has_no_supersession',
+      },
+      graph_disposition: referenceResult.graph_disposition || {
+        status: 'NO_OP',
+        reason: 'credential_reference_graph_not_required',
+        cross_ref_edges_committed: 0,
+        entity_edges_committed: 0,
+        entity_edge_authority_event_id: null,
+        entity_edge_projection_root_sha256: null,
+        entity_edge_row_ids: [],
+      },
     };
   } catch (error) {
     if (ownsTransaction) {
       try { await txClient.query('ROLLBACK'); } catch { /* connection may be gone */ }
+    }
+    if (ownsTransaction) {
+      try {
+        await credentialLedger.markCredentialCustodyIndeterminate(prepared.custody_trace, error);
+      } catch (traceError) {
+        error.credential_custody_terminal_error = traceError?.message || String(traceError);
+      }
+    } else {
+      // The caller still owns the open transaction and may hold the universal
+      // event-stream advisory lock. A second connection must not wait on that
+      // lock before the caller can roll back. The signed start remains the
+      // exact detectable orphan consumed by CR7-R6 reconciliation.
+      error.credential_custody_open_trace = prepared.custody_trace;
     }
     error.keychain_reconciliation = {
       service: prepared.service_name,
@@ -954,7 +1124,11 @@ function inferMedallionLayer(memoryType) {
  * @param {string|null} [params.valid_until=null]
  * @param {Object|null} [params.security_disposition=null] - Signed contextual
  *   content decision produced before this write. A retain_quarantine decision
- *   forces the active 0.1 quarantine floor and is hash-bound to the value.
+ *   is hash-bound to the value and enforced by the signed epistemic projection;
+ *   it does not bypass the certified cognitive-weight baseline.
+ * @param {Object|null} [params.canary_disposition=null] - Canonical-owner-only
+ *   Canary observation and signed event receipt. The retired SE gate is not a
+ *   persistence authority.
  * @param {'housekeeper'|Object} params.mutation_authority - Explicit signer;
  *   autonomous housekeeper, immutable verified-request context, or a verified
  *   housekeeper-signed derived tool action bound to the originating actor.
@@ -987,6 +1161,7 @@ export async function persistMemory({
   session_id = null,
   account = null,
   ts_created = null,
+  canary_disposition = null,
   security_disposition = null,
   mutation_authority = null,
   client = null,
@@ -1013,6 +1188,18 @@ export async function persistMemory({
       && receiptMetadata?.content_sha256 === safeValueHash
       && receiptMetadata?.action === securityDecision.action;
     if (!decisionBound) throw new Error('security_disposition_proof_invalid');
+  }
+  const canaryDecision = canary_disposition?.decision || null;
+  const canaryReceipt = canary_disposition?.receipt || null;
+  if (canaryDecision || canaryReceipt) {
+    const canaryBound = canaryDecision
+      && canaryReceipt
+      && typeof canaryDecision.detected === 'boolean'
+      && typeof canaryDecision.quarantine === 'boolean'
+      && canaryDecision.reject === false
+      && canaryReceipt.event_id
+      && canaryReceipt.mutation_hash;
+    if (!canaryBound) throw new Error('canary_disposition_proof_invalid');
   }
 
   // ─── Credential Lane: credentials get their own path, their own storage ──
@@ -1113,11 +1300,11 @@ export async function persistMemory({
     source,
   });
   const baselineQuarantined = !publisherVerifiedGenesis && isQuarantineCandidate(safeValue);
-  const decisionQuarantined = securityDecision?.action === 'retain_quarantine';
+  const decisionQuarantined = canaryDecision?.quarantine === true;
   const correctionMode = Boolean(is_correction);
 
   // The contextual decision and Canary boundary never suppress signed content.
-  // High-risk evidence is retained, active, and recallable at the 0.1 floor.
+  // High-risk evidence is retained and governed by its signed epistemic state.
   // The baseline regex remains a second native classification net.
   const quarantined = baselineQuarantined || decisionQuarantined;
 
@@ -1127,7 +1314,7 @@ export async function persistMemory({
   const effectiveActive = true;
   // A composed session exchange must keep its structural type so native
   // session recall and restart reconciliation can still address it. Its
-  // quarantine scope and 0.1 retrieval weight remain the security boundary.
+  // quarantine scope and signed epistemic state remain the security boundary.
   const requestedType = memory_type || 'declarative';
   const effectiveType = quarantined && !QUARANTINE_STRUCTURAL_TYPES.has(requestedType)
     ? 'quarantine'
@@ -1173,22 +1360,8 @@ export async function persistMemory({
     resolvedSurpriseAtSave = rpe.prediction_error_norm;
   }
   const embeddingDegraded = Boolean(embedding?._degraded);
-  const turboQuant = await getTurboQuantCapabilities();
   if (embeddingDegraded) {
     console.warn(`[Aimos] Memory "${key}" saved with degraded (math fallback) embedding — recall will be weak until re-embedded`);
-  }
-
-  // ─── TURBOQUANT: Native Online Vector Quantization (L0) ───────────────────
-  let quant_idx = null;
-  let residual_vector = null;
-  if (turboQuant.quantColumns && embedding && !embeddingDegraded) {
-    try {
-      const qResult = await CodebookService.quantize(embedding, cid);
-      quant_idx = qResult.quant_idx;
-      residual_vector = qResult.residual;
-    } catch (_qErr) {
-      console.warn('[Aimos] Quantization failed (non-fatal):', _qErr.message);
-    }
   }
 
   const conflict = await checkConflict(cid, key, safeValue, embedding);
@@ -1356,11 +1529,23 @@ export async function persistMemory({
           exactEnvelope.currentHead || null,
         );
       }
+      const occurrenceSessionBinding = buildOccurrenceSessionBindingV1({
+        company_id: cid,
+        memory_id: exactState.id,
+        occurrence_event_id: record.occurrence_event_id,
+        occurrence_commitment: occurrenceCommitment,
+        request_body_sha256: requestBodyHash,
+        session_id: requestBody.session_id ?? null,
+        source_dataset_sha256: requestBody.source_dataset_sha256 ?? null,
+        source_session_sha256: requestBody.source_session_sha256 ?? null,
+        source_session_ordinal: requestBody.source_session_ordinal ?? null,
+      });
       const event = await logEvent(cid, aid, 'content_state_occurrence_reasserted', key, {
         memory_id: exactState.id,
         live_content_hash: liveContentHashBuf.toString('hex'),
         occurrence_event_id: record.occurrence_event_id,
         occurrence_commitment: occurrenceCommitment,
+        occurrence_session_binding: occurrenceSessionBinding,
         request_receipt_mutation_hash: verifiedRequest
           ? record.request_receipt_mutation_hash_hex
           : null,
@@ -1374,13 +1559,30 @@ export async function persistMemory({
         authority: verifiedRequest ? mutation_authority : null,
         returnReceipt: true,
       });
+      const exactEpistemic = await classifyAndCommitRetainedMemoryGroup({
+        client: txClient,
+        companyId: cid,
+        subjectAgentId: aid,
+        memoryId: exactState.id,
+        key,
+        source: effectiveSourceForHash,
+        sessionId: session_id,
+        parentEventId: canaryReceipt?.event_id || securityReceipt?.event_id || event.event_id,
+        authority: mutation_authority && typeof mutation_authority === 'object'
+          ? mutation_authority : null,
+        provenance: {
+          save_mutation_hash: Buffer.from(occurrence.mutationHash).toString('hex'),
+          binding_mutation_hash: null,
+        },
+      });
       if (ownsTransaction) await txClient.query('COMMIT');
       return {
         id: exactState.id,
         memory_tier: exactState.memory_tier,
         expires_at: exactState.expires_at,
         quarantined: effectiveScope === 'quarantine' || effectiveType === 'quarantine',
-        security_decision_event_id: securityReceipt?.event_id || null,
+        security_decision_event_id: null,
+        canary_decision_event_id: canaryReceipt?.event_id || null,
         conflict_detected: false,
         correction_applied: false,
         corrections_applied: 0,
@@ -1390,11 +1592,14 @@ export async function persistMemory({
         last_verified_at: exactState.last_verified_at,
         verified_by: exactState.verified_by,
         verification_basis: exactState.verification_basis,
-        epistemic_label: exactState.current_epistemic_label || 'unverified',
-        epistemic_confidence_milli: Number(exactState.current_epistemic_confidence_milli || 0),
-        epistemic_classification_event_id: exactState.current_epistemic_event_id || null,
-        epistemic_classification_hash: null,
-        epistemic_related_memory_ids_reclassified: [],
+        epistemic_label: exactEpistemic.classification.label,
+        epistemic_confidence_milli: Number(exactEpistemic.classification.confidence_milli || 0),
+        epistemic_classification_event_id: exactEpistemic.current_commit?.receipt?.event_id
+          || exactState.current_epistemic_event_id || null,
+        epistemic_classification_hash: exactEpistemic.current_commit?.classification_hash
+          || exactState.current_epistemic_classification_hash || null,
+        epistemic_transition_appended: Boolean(exactEpistemic.current_commit),
+        epistemic_related_memory_ids_reclassified: exactEpistemic.related_memory_ids_reclassified,
         save_feedback: {
           accepted: true,
           quality_score: qualityResult.score,
@@ -1418,6 +1623,27 @@ export async function persistMemory({
         envelope_commit: exactEnvelope,
         occurrence_reasserted: true,
         occurrence_event_receipt: event,
+        secret_boundary: {
+          credential_lane: false,
+          redaction_applied: safeValue !== securityInput,
+        },
+        embedding_disposition: {
+          degraded: embeddingDegraded,
+          dimension: Array.isArray(embedding) ? embedding.length : 0,
+        },
+        lineage_disposition: {
+          status: 'NO_OP',
+          reason: 'exact_state_reassertion',
+        },
+        graph_disposition: {
+          status: 'NO_OP',
+          reason: 'exact_state_reassertion',
+          cross_ref_edges_committed: 0,
+          entity_edges_committed: 0,
+          entity_edge_authority_event_id: null,
+          entity_edge_projection_root_sha256: null,
+          entity_edge_row_ids: [],
+        },
       };
     }
     if (key) {
@@ -1480,42 +1706,7 @@ export async function persistMemory({
       throw error;
     }
 
-    let result;
-    if (turboQuant.quantColumns) {
-      result = await execInsert(
-        `INSERT INTO aimos_memories
-         (company_id, agent_id, key, value, embedding, scope, clearance_level, memory_type, source,
-          memory_tier, decay_weight, promoted_at, expires_at, is_correction, supersedes_id, cluster_id, created_at, updated_at, is_active, data_class,
-          retrieval_weight, access_count, medallion_layer, quant_idx, residual_vector, last_verified_at, verified_by, verification_basis, freshness_state,
-          semantic_triples, surprise_at_save, compression_ratio, valid_from, valid_until, content_hash)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                 $10, $11, $12, $13, $14, $15, $16, NOW(), NOW(), $17, $18,
-                 CASE WHEN $6 = 'quarantine' OR $8 = 'quarantine' THEN 0.1 ELSE 1.0 END, 0, $19, $20, $21, $22, $23, $24, $25,
-                 $26, $27, $28, $29, $30, $31)
-         RETURNING id, created_at, memory_tier, expires_at, last_verified_at, verified_by, verification_basis, freshness_state,
-           semantic_triples, surprise_at_save, compression_ratio, valid_from, valid_until
-        `, [
-          cid, aid, key, safeValue, JSON.stringify(embedding), effectiveScope,
-          Number(clearance_level || 1), effectiveType,
-          embeddingDegraded ? `${effectiveSource}:degraded_embedding` : effectiveSource,
-          resolvedTier, 1.0, correctionMode ? new Date() : null, expiresAt, correctionMode,
-          resolvedSupersedesId, cluster_id, effectiveActive, dataClass, inferMedallionLayer(effectiveType),
-          quant_idx,
-          residual_vector ? JSON.stringify(Array.from(residual_vector)) : null,
-          freshnessEnvelope.last_verified_at,
-          freshnessEnvelope.verified_by,
-          freshnessEnvelope.verification_basis,
-          freshnessEnvelope.freshness_state,
-          semantic_triples ? JSON.stringify(semantic_triples) : null,
-          resolvedSurpriseAtSave,
-          resolvedCompressionRatio,
-          resolvedValidFrom,
-          resolvedValidUntil,
-          liveContentHashBuf,
-        ]
-      );
-    } else {
-      result = await execInsert(
+    const result = await execInsert(
         `INSERT INTO aimos_memories
          (company_id, agent_id, key, value, embedding, scope, clearance_level, memory_type, source,
           memory_tier, decay_weight, promoted_at, expires_at, is_correction, supersedes_id, cluster_id, created_at, updated_at, is_active, data_class,
@@ -1523,7 +1714,7 @@ export async function persistMemory({
           semantic_triples, surprise_at_save, compression_ratio, valid_from, valid_until, content_hash)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
                  $10, $11, $12, $13, $14, $15, $16, NOW(), NOW(), $17, $18,
-                 CASE WHEN $6 = 'quarantine' OR $8 = 'quarantine' THEN 0.1 ELSE 1.0 END, 0, $19, $20, $21, $22, $23,
+                 1.0, 0, $19, $20, $21, $22, $23,
                  $24, $25, $26, $27, $28, $29)
          RETURNING id, created_at, memory_tier, expires_at, last_verified_at, verified_by, verification_basis, freshness_state,
            semantic_triples, surprise_at_save, compression_ratio, valid_from, valid_until
@@ -1545,7 +1736,6 @@ export async function persistMemory({
           liveContentHashBuf,
         ]
       );
-    }
 
   // ─── Aladdin Law compliance check ───────────────────────────────────────
   // A violation aborts the native transaction; it is not downgraded to
@@ -1613,6 +1803,11 @@ export async function persistMemory({
   const correctionsApplied = 0;
   let nearDuplicateCount = 0;
   let nearestSimilarity = null;
+  let graphCrossRefEdges = 0;
+  let graphEntityEdges = 0;
+  let graphEventId = null;
+  let entityEdgeReceipt = null;
+  let entityEdgeProjection = null;
 
   const operation = correctionMode ? 'correction' : (quarantined ? 'quarantine' : 'save');
 
@@ -1654,14 +1849,16 @@ export async function persistMemory({
           reasoning: 'The native save transaction projected high-similarity associative edges and signed every derived pair before inserting the projection.',
           source_knowledge: 'A-MEM Zettelkasten association seeding in persist-memory.js',
         }, null, { client: txClient, returnReceipt: true });
+        graphEventId = graphEvent.event_id;
         for (const edge of graphEdges) {
-          await txClient.query(
+          const insertedEdge = await txClient.query(
             `INSERT INTO memory_cross_refs
                (company_id, source_memory_id, target_memory_id, similarity, authority_event_id)
              VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT (company_id, source_memory_id, target_memory_id) DO NOTHING`,
             [cid, edge.source_memory_id, edge.target_memory_id, edge.similarity, graphEvent.event_id]
           );
+          graphCrossRefEdges += insertedEdge.rowCount;
         }
       }
   }
@@ -1696,13 +1893,34 @@ export async function persistMemory({
   if (result.rows[0].id && !quarantined) {
       const entities = extractEntities(`${key || ''} ${safeValue}`);
       const memId = result.rows[0].id;
+      const committedEntityRows = [];
       for (const ent of entities) {
-        await txClient.query(
+        const insertedEntity = await txClient.query(
           `INSERT INTO entity_memory_edges (company_id, entity, entity_type, memory_id)
            VALUES ($1, $2, $3, $4)
-           ON CONFLICT DO NOTHING`,
+           ON CONFLICT DO NOTHING
+           RETURNING id, company_id, entity, entity_type, memory_id`,
           [cid, ent.name, ent.type, memId]
         );
+        graphEntityEdges += insertedEntity.rowCount;
+        committedEntityRows.push(...insertedEntity.rows);
+      }
+      if (committedEntityRows.length > 0) {
+        entityEdgeProjection = buildEntityEdgeProjection(committedEntityRows);
+        entityEdgeReceipt = await logEvent(cid, 'housekeeper', 'memory_entity_edges_committed', key, {
+          schema: entityEdgeProjection.schema,
+          memory_id: String(memId),
+          row_count: entityEdgeProjection.row_count,
+          records: entityEdgeProjection.records,
+          projection_root_sha256: entityEdgeProjection.projection_root_sha256,
+          canonical_memory_changed: false,
+          retention_changed: false,
+          reasoning: 'The canonical SAVE transaction committed the exact entity-edge row set and a domain-separated signed projection root atomically.',
+          source_knowledge: 'CR7 relational parity over retained provisional entity-memory edges',
+        }, graphEventId || canaryReceipt?.event_id || securityReceipt?.event_id || null, {
+          client: txClient,
+          returnReceipt: true,
+        });
       }
   }
 
@@ -1740,7 +1958,7 @@ export async function persistMemory({
     key,
     source: effectiveSourceForHash,
     sessionId: session_id,
-    parentEventId: securityReceipt?.event_id || null,
+    parentEventId: canaryReceipt?.event_id || securityReceipt?.event_id || null,
     authority: mutation_authority && typeof mutation_authority === 'object'
       ? mutation_authority
       : null,
@@ -1808,7 +2026,8 @@ export async function persistMemory({
     memory_tier: result.rows[0].memory_tier,
     expires_at: result.rows[0].expires_at,
     quarantined,
-    security_decision_event_id: securityReceipt?.event_id || null,
+    security_decision_event_id: null,
+    canary_decision_event_id: canaryReceipt?.event_id || null,
     conflict_detected: !!conflict,
     correction_applied: correctionMode,
     corrections_applied: correctionsApplied,
@@ -1823,6 +2042,7 @@ export async function persistMemory({
     epistemic_confidence_milli: epistemicClassification.classification.confidence_milli,
     epistemic_classification_event_id: epistemicClassification.current_commit?.receipt?.event_id || null,
     epistemic_classification_hash: epistemicClassification.current_commit?.classification_hash || null,
+    epistemic_transition_appended: Boolean(epistemicClassification.current_commit),
     epistemic_related_memory_ids_reclassified: epistemicClassification.related_memory_ids_reclassified,
     save_feedback: saveFeedback,
     semantic_triples: result.rows[0].semantic_triples,
@@ -1834,6 +2054,42 @@ export async function persistMemory({
     ledger_commit: ledgerCommit.provenance,
     binding_commit: ledgerCommit.binding,
     envelope_commit: ledgerCommit.envelope,
+    secret_boundary: {
+      credential_lane: false,
+      redaction_applied: safeValue !== securityInput,
+    },
+    embedding_disposition: {
+      degraded: embeddingDegraded,
+      dimension: Array.isArray(embedding) ? embedding.length : 0,
+    },
+    lineage_disposition: supersessionEvidence ? {
+      status: 'COMMITTED',
+      supersedes_id: supersessionEvidence.supersedesId,
+      supersession_event_id: supersessionEvidence.eventId,
+      lineage_mutation_hash: supersessionEvidence.lineageMutationHash,
+    } : {
+      status: 'NO_OP',
+      reason: 'no_supersession_requested',
+    },
+    graph_disposition: quarantined ? {
+      status: 'QUARANTINE_SKIPPED',
+      reason: 'retained_quarantine_isolation',
+      cross_ref_edges_committed: 0,
+      entity_edges_committed: 0,
+      authority_event_id: null,
+      entity_edge_authority_event_id: null,
+      entity_edge_projection_root_sha256: null,
+      entity_edge_row_ids: [],
+    } : {
+      status: graphCrossRefEdges > 0 || graphEntityEdges > 0 ? 'COMMITTED' : 'NO_OP',
+      reason: graphCrossRefEdges > 0 || graphEntityEdges > 0 ? null : 'no_new_graph_edges',
+      cross_ref_edges_committed: graphCrossRefEdges,
+      entity_edges_committed: graphEntityEdges,
+      authority_event_id: graphEventId,
+      entity_edge_authority_event_id: entityEdgeReceipt?.event_id || null,
+      entity_edge_projection_root_sha256: entityEdgeProjection?.projection_root_sha256 || null,
+      entity_edge_row_ids: entityEdgeProjection?.records.map((record) => record.row_id) || [],
+    },
   };
 
   } catch (error) {

@@ -6,17 +6,14 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 // ═══════════════════════════════════════════════════════════════════════════════
+
+export const PROSPECT_THEORY_SOURCE_SHA256 = '33f52599bff4484c55986a697739b5d51223f33d4a5f6567798e93defa39e30d';
 // PROSPECT THEORY (prospect-theory.js)
 // ═══════════════════════════════════════════════════════════════════════════════
 // P2-B3-8: Models decision-making using Prospect Theory and Cumulative Prospect
 // Theory. Corrects for loss aversion bias and probability weighting in human feedback.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
-import { query } from '../../db/connection.js';
-import { logEvent } from '../observe/event-ledger.js';
-
-const COMPANY = AIMOS_COMPANY_ID;
 
 // PT constants (Tversky & Kahneman, 1992)
 const DEFAULT_ALPHA = 0.88;      // Risk aversion for gains
@@ -80,33 +77,8 @@ export function inversePTCorrection(humanFeedback, referencePoint, lambda = DEFA
  * @returns {Promise<number>} - Updated reference point
  */
 export async function updateReferencePoint(userId, domain, outcome, alpha = 0.1) {
-  try {
-    const result = await query(
-      `SELECT reference_point FROM user_reference_points
-       WHERE user_id = $1 AND domain = $2`,
-      [userId, domain]
-    );
-
-    let oldRef = 0.5; // Default reference
-    if (result.rows.length > 0) {
-      oldRef = parseFloat(result.rows[0].reference_point) || 0.5;
-    }
-
-    const newRef = (1 - alpha) * oldRef + alpha * outcome;
-
-    await query(
-      `INSERT INTO user_reference_points (user_id, domain, reference_point, updated_at)
-       VALUES ($1, $2, $3, NOW())
-       ON CONFLICT (user_id, domain) DO UPDATE
-       SET reference_point = $3, updated_at = NOW()`,
-      [userId, domain, newRef]
-    );
-
-    return newRef;
-  } catch (err) {
-    console.error('[prospect-theory] updateReferencePoint error:', err.message);
-    return 0.5;
-  }
+  void userId; void domain; void outcome; void alpha;
+  throw new Error('prospect_reference_mutation_dormant_no_verified_caller');
 }
 
 /**
@@ -117,21 +89,8 @@ export async function updateReferencePoint(userId, domain, outcome, alpha = 0.1)
  * @returns {Promise<number>} - Reference point (0-1 scale)
  */
 export async function getReferencePoint(userId, domain) {
-  try {
-    const result = await query(
-      `SELECT reference_point FROM user_reference_points
-       WHERE user_id = $1 AND domain = $2`,
-      [userId, domain]
-    );
-
-    if (result.rows.length > 0) {
-      return parseFloat(result.rows[0].reference_point) || 0.5;
-    }
-    return 0.5; // Default reference
-  } catch (err) {
-    console.error('[prospect-theory] getReferencePoint error:', err.message);
-    return 0.5;
-  }
+  void userId; void domain;
+  return 0.5;
 }
 
 /**

@@ -255,7 +255,6 @@ export async function getVerifiedCalibrationSnapshot(companyId = COMPANY, { clie
   const company = String(companyId || '').trim();
   if (!company) throw new Error('calibration_company_required');
   const cached = snapshotCache.get(company);
-  if (cached && (Date.now() - cached.fetchedAt) < CACHE_TTL_MS) return cached.snapshot;
   if (cached && client) {
     const head = await readCalibrationStreamHead(company, client);
     if (canonicalJson(head) === canonicalJson(cached.head)) {
@@ -263,6 +262,7 @@ export async function getVerifiedCalibrationSnapshot(companyId = COMPANY, { clie
       return cached.snapshot;
     }
   }
+  if (cached && !client && (Date.now() - cached.fetchedAt) < CACHE_TTL_MS) return cached.snapshot;
   const loaded = client
     ? await loadSnapshotWithClient(company, client)
     : await withTransaction(

@@ -21,12 +21,16 @@ test('epistemic labels are a signed append-only projection, never an admission r
   assert.doesNotMatch(migration, /DELETE\s+FROM\s+public\.aimos_memories/i);
   assert.doesNotMatch(migration, /DROP\s+TABLE\s+public\.aimos_memories/i);
 
-  const classifyAt = persistence.indexOf('classifyAndCommitRetainedMemoryGroup({');
   const provenanceAt = persistence.indexOf('const ledgerCommit = await commitInitialEvidence({');
+  const classifyAt = persistence.indexOf('classifyAndCommitRetainedMemoryGroup({', provenanceAt);
   const commitAt = persistence.indexOf("if (ownsTransaction) await txClient.query('COMMIT');", provenanceAt);
   assert.ok(provenanceAt >= 0 && classifyAt > provenanceAt && classifyAt < commitAt);
   assert.match(persistence.slice(classifyAt, commitAt), /save_mutation_hash/);
   assert.match(persistence.slice(classifyAt, commitAt), /binding_mutation_hash/);
+  const exactOccurrenceAt = persistence.indexOf("'content_state_occurrence_reasserted'");
+  const exactClassificationAt = persistence.indexOf('classifyAndCommitRetainedMemoryGroup({', exactOccurrenceAt);
+  const exactCommitAt = persistence.indexOf("if (ownsTransaction) await txClient.query('COMMIT');", exactOccurrenceAt);
+  assert.ok(exactOccurrenceAt >= 0 && exactClassificationAt > exactOccurrenceAt && exactClassificationAt < exactCommitAt);
 });
 
 test('canonical recall hydrates the signed label before one pre-disclosure owner', async () => {

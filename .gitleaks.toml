@@ -30,3 +30,13 @@ paths = [
   '''(?:^|/)verifiers/mutmem-conformance/v1/MM-CV-023\.json$''',
   '''(?:^|/)verifiers/mutmem-conformance/v1/MM-CV-024\.json$''',
 ]
+
+[[allowlists]]
+description = "Public P3 qualification: one-way Housekeeper key commitments, never key material"
+condition = "AND"
+paths = [
+  '''(?:^|/)verifiers/mutmem-conformance/v2/p3-clean-installer-qualification\.json$''',
+]
+regexes = [
+  '''7b503a233c7e481b4fc1c013c318ea47c91a2cc23d9cf9895ac47f3915f497d7''',
+]

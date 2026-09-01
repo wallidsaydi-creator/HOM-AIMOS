@@ -11,8 +11,7 @@ import {
 } from '../../services/security/housekeeper-signer.js';
 import { beginToolAction, finishToolAction } from '../../services/orchestration/tool-action-ledger.js';
 import { persistMemory } from '../../services/write/persist-memory.js';
-import { resolveNativeRecallAuthority } from '../../services/retrieval/native-recall.js';
-import { executeNativeRecall } from '../../services/retrieval/native-recall-pipeline.js';
+import { executeCanonicalRecall } from '../../services/retrieval/native-recall-pipeline.js';
 
 const databaseName = new URL(resolveAimosDatabaseUrl()).pathname.slice(1);
 const LIVE_FIRE = process.argv.includes('--live-fire');
@@ -75,13 +74,13 @@ test('signed derived save and recall actions produce linked memory and Merkle pr
     runtimeAgentId: 'housekeeper',
     executionContext,
   });
-  const recallAuthority = await resolveNativeRecallAuthority({
+  const recalled = await executeCanonicalRecall({
+    req: { ip: 'isolated-test', headers: {}, originalUrl: 'tool:aimos_recall' },
     rawCommand: recallCommand,
     executionContext,
     requestAuthority: recallAction.authority,
     transportBinding: { transport: 'tool', toolName: 'aimos_recall' },
   });
-  const recalled = await executeNativeRecall({ ip: 'isolated-test', headers: {}, originalUrl: 'tool:aimos_recall' }, recallAuthority);
   assert.equal(recalled.status, 200);
   assert(recalled.body.memories.some((memory) => memory.id === saved.id));
   assert.match(recalled.body.recall_receipt.merkle_root, /^[0-9a-f]{64}$/);

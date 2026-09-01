@@ -1,0 +1,1140 @@
+{
+  "schema": "hom.aimos.mutmem-v2-publication-table-registry/v1",
+  "status": "REGENERATED_FROM_RETAINED_PUBLIC_EVIDENCE",
+  "tables": {
+    "historical_v1_rates": [
+      {
+        "id": "v1-longmemeval-judged-accuracy",
+        "family": "historical_v1_utility",
+        "metric": "llm_judged_accuracy",
+        "count": 459,
+        "total": 500,
+        "value": 0.918,
+        "wilson_95": {
+          "lower": 0.8906451408426114,
+          "upper": 0.9389809105315311
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": null
+      },
+      {
+        "id": "v1-locomo-judged-accuracy",
+        "family": "historical_v1_utility",
+        "metric": "llm_judged_accuracy",
+        "count": 1472,
+        "total": 1986,
+        "value": 0.7411883182275931,
+        "wilson_95": {
+          "lower": 0.7214730756554129,
+          "upper": 0.7599723157617362
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": null
+      },
+      {
+        "id": "v1-poisonedrag-clean-asr",
+        "family": "historical_v1_poisonedrag",
+        "metric": "official_substring_clean_asr",
+        "count": 2,
+        "total": 100,
+        "value": 0.02,
+        "wilson_95": {
+          "lower": 0.005501967550162343,
+          "upper": 0.0700117907285439
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": null
+      },
+      {
+        "id": "v1-poisonedrag-attacked-asr",
+        "family": "historical_v1_poisonedrag",
+        "metric": "official_substring_attacked_asr",
+        "count": 3,
+        "total": 100,
+        "value": 0.03,
+        "wilson_95": {
+          "lower": 0.010254524024038925,
+          "upper": 0.0845193642905276
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": null
+      },
+      {
+        "id": "v1-poisonedrag-induced-asr",
+        "family": "historical_v1_poisonedrag",
+        "metric": "official_substring_induced_asr",
+        "count": 1,
+        "total": 98,
+        "value": 0.01020408163265306,
+        "wilson_95": {
+          "lower": 0.0018035477567974675,
+          "upper": 0.055554809913420274
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": null
+      },
+      {
+        "id": "v1-poisonedrag-poison-retrieved-at-5",
+        "family": "historical_v1_poisonedrag",
+        "metric": "poison_retrieved_at_5",
+        "count": 0,
+        "total": 100,
+        "value": 0,
+        "wilson_95": {
+          "lower": 3.469446951953614e-18,
+          "upper": 0.03699349820698568
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": null
+      },
+      {
+        "id": "v1-poisonedrag-clean-accuracy",
+        "family": "historical_v1_poisonedrag",
+        "metric": "clean_accuracy",
+        "count": 72,
+        "total": 100,
+        "value": 0.72,
+        "wilson_95": {
+          "lower": 0.6251197129007884,
+          "upper": 0.7986031478881379
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": null
+      },
+      {
+        "id": "v1-poisonedrag-attacked-accuracy",
+        "family": "historical_v1_poisonedrag",
+        "metric": "attacked_accuracy",
+        "count": 71,
+        "total": 100,
+        "value": 0.71,
+        "wilson_95": {
+          "lower": 0.6146110882442888,
+          "upper": 0.7898516425087772
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": null
+      },
+      {
+        "id": "v1-poisonedrag-poison-label-recall",
+        "family": "historical_v1_epistemics",
+        "metric": "poison_adverse_label_rate",
+        "count": 500,
+        "total": 500,
+        "value": 1,
+        "wilson_95": {
+          "lower": 0.9923756595384479,
+          "upper": 1
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": null
+      },
+      {
+        "id": "v1-poisonedrag-clean-label-fpr",
+        "family": "historical_v1_epistemics",
+        "metric": "clean_adverse_label_rate",
+        "count": 4,
+        "total": 18808,
+        "value": 0.0002126754572522331,
+        "wilson_95": {
+          "lower": 0.0000827083419452822,
+          "upper": 0.0005467600089663068
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": null
+      }
+    ],
+    "historical_v1_ablation_rates": [
+      {
+        "id": "v1-ablation-a0-attacked-poison-retrieval-at-5",
+        "family": "historical_v1_ablation",
+        "metric": "attacked_poison_retrieval_at_5",
+        "count": 94,
+        "total": 100,
+        "value": 0.94,
+        "wilson_95": {
+          "lower": 0.8752318455410406,
+          "upper": 0.9722138760368118
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A0"
+      },
+      {
+        "id": "v1-ablation-a0-official-clean-asr",
+        "family": "historical_v1_ablation",
+        "metric": "official_substring_clean_asr",
+        "count": 3,
+        "total": 100,
+        "value": 0.03,
+        "wilson_95": {
+          "lower": 0.010254524024038925,
+          "upper": 0.0845193642905276
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A0"
+      },
+      {
+        "id": "v1-ablation-a0-official-attacked-asr",
+        "family": "historical_v1_ablation",
+        "metric": "official_substring_attacked_asr",
+        "count": 56,
+        "total": 100,
+        "value": 0.56,
+        "wilson_95": {
+          "lower": 0.4622810465167699,
+          "upper": 0.6532797336983921
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A0"
+      },
+      {
+        "id": "v1-ablation-a0-official-induced-asr",
+        "family": "historical_v1_ablation",
+        "metric": "official_substring_induced_asr",
+        "count": 53,
+        "total": 97,
+        "value": 0.5463917525773195,
+        "wilson_95": {
+          "lower": 0.4474409242951606,
+          "upper": 0.6418080820684112
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A0"
+      },
+      {
+        "id": "v1-ablation-a0-semantic-attacked-asr",
+        "family": "historical_v1_ablation",
+        "metric": "semantic_attacked_asr",
+        "count": 57,
+        "total": 100,
+        "value": 0.57,
+        "wilson_95": {
+          "lower": 0.47215389549212305,
+          "upper": 0.6626670147588988
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A0"
+      },
+      {
+        "id": "v1-ablation-a0-semantic-induced-asr",
+        "family": "historical_v1_ablation",
+        "metric": "semantic_induced_asr",
+        "count": 55,
+        "total": 98,
+        "value": 0.5612244897959183,
+        "wilson_95": {
+          "lower": 0.4625100210917257,
+          "upper": 0.6553201841994971
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A0"
+      },
+      {
+        "id": "v1-ablation-a0-clean-accuracy",
+        "family": "historical_v1_ablation",
+        "metric": "clean_accuracy",
+        "count": 71,
+        "total": 100,
+        "value": 0.71,
+        "wilson_95": {
+          "lower": 0.6146110882442888,
+          "upper": 0.7898516425087772
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A0"
+      },
+      {
+        "id": "v1-ablation-a0-attacked-accuracy",
+        "family": "historical_v1_ablation",
+        "metric": "attacked_accuracy",
+        "count": 40,
+        "total": 100,
+        "value": 0.4,
+        "wilson_95": {
+          "lower": 0.3094012864324589,
+          "upper": 0.4979974132089382
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A0"
+      },
+      {
+        "id": "v1-ablation-a1-attacked-poison-retrieval-at-5",
+        "family": "historical_v1_ablation",
+        "metric": "attacked_poison_retrieval_at_5",
+        "count": 0,
+        "total": 100,
+        "value": 0,
+        "wilson_95": {
+          "lower": 3.469446951953614e-18,
+          "upper": 0.03699349820698568
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A1"
+      },
+      {
+        "id": "v1-ablation-a1-official-clean-asr",
+        "family": "historical_v1_ablation",
+        "metric": "official_substring_clean_asr",
+        "count": 4,
+        "total": 100,
+        "value": 0.04,
+        "wilson_95": {
+          "lower": 0.01566330399154762,
+          "upper": 0.0983707143588792
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A1"
+      },
+      {
+        "id": "v1-ablation-a1-official-attacked-asr",
+        "family": "historical_v1_ablation",
+        "metric": "official_substring_attacked_asr",
+        "count": 3,
+        "total": 100,
+        "value": 0.03,
+        "wilson_95": {
+          "lower": 0.010254524024038925,
+          "upper": 0.0845193642905276
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A1"
+      },
+      {
+        "id": "v1-ablation-a1-official-induced-asr",
+        "family": "historical_v1_ablation",
+        "metric": "official_substring_induced_asr",
+        "count": 0,
+        "total": 96,
+        "value": 0,
+        "wilson_95": {
+          "lower": 3.469446951953614e-18,
+          "upper": 0.038475587857675686
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A1"
+      },
+      {
+        "id": "v1-ablation-a1-semantic-attacked-asr",
+        "family": "historical_v1_ablation",
+        "metric": "semantic_attacked_asr",
+        "count": 1,
+        "total": 100,
+        "value": 0.01,
+        "wilson_95": {
+          "lower": 0.0017674320641406505,
+          "upper": 0.054486196178705315
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A1"
+      },
+      {
+        "id": "v1-ablation-a1-semantic-induced-asr",
+        "family": "historical_v1_ablation",
+        "metric": "semantic_induced_asr",
+        "count": 0,
+        "total": 97,
+        "value": 0,
+        "wilson_95": {
+          "lower": 0,
+          "upper": 0.03809404252594769
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A1"
+      },
+      {
+        "id": "v1-ablation-a1-clean-accuracy",
+        "family": "historical_v1_ablation",
+        "metric": "clean_accuracy",
+        "count": 68,
+        "total": 100,
+        "value": 0.68,
+        "wilson_95": {
+          "lower": 0.5833738138954762,
+          "upper": 0.7633085267500092
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A1"
+      },
+      {
+        "id": "v1-ablation-a1-attacked-accuracy",
+        "family": "historical_v1_ablation",
+        "metric": "attacked_accuracy",
+        "count": 65,
+        "total": 100,
+        "value": 0.65,
+        "wilson_95": {
+          "lower": 0.5525444329688796,
+          "upper": 0.7363575175690247
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A1"
+      },
+      {
+        "id": "v1-ablation-a2-attacked-poison-retrieval-at-5",
+        "family": "historical_v1_ablation",
+        "metric": "attacked_poison_retrieval_at_5",
+        "count": 0,
+        "total": 100,
+        "value": 0,
+        "wilson_95": {
+          "lower": 3.469446951953614e-18,
+          "upper": 0.03699349820698568
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A2"
+      },
+      {
+        "id": "v1-ablation-a2-official-clean-asr",
+        "family": "historical_v1_ablation",
+        "metric": "official_substring_clean_asr",
+        "count": 3,
+        "total": 100,
+        "value": 0.03,
+        "wilson_95": {
+          "lower": 0.010254524024038925,
+          "upper": 0.0845193642905276
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A2"
+      },
+      {
+        "id": "v1-ablation-a2-official-attacked-asr",
+        "family": "historical_v1_ablation",
+        "metric": "official_substring_attacked_asr",
+        "count": 3,
+        "total": 100,
+        "value": 0.03,
+        "wilson_95": {
+          "lower": 0.010254524024038925,
+          "upper": 0.0845193642905276
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A2"
+      },
+      {
+        "id": "v1-ablation-a2-official-induced-asr",
+        "family": "historical_v1_ablation",
+        "metric": "official_substring_induced_asr",
+        "count": 0,
+        "total": 97,
+        "value": 0,
+        "wilson_95": {
+          "lower": 0,
+          "upper": 0.03809404252594769
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A2"
+      },
+      {
+        "id": "v1-ablation-a2-semantic-attacked-asr",
+        "family": "historical_v1_ablation",
+        "metric": "semantic_attacked_asr",
+        "count": 1,
+        "total": 100,
+        "value": 0.01,
+        "wilson_95": {
+          "lower": 0.0017674320641406505,
+          "upper": 0.054486196178705315
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A2"
+      },
+      {
+        "id": "v1-ablation-a2-semantic-induced-asr",
+        "family": "historical_v1_ablation",
+        "metric": "semantic_induced_asr",
+        "count": 0,
+        "total": 98,
+        "value": 0,
+        "wilson_95": {
+          "lower": 0,
+          "upper": 0.03771999012168061
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A2"
+      },
+      {
+        "id": "v1-ablation-a2-clean-accuracy",
+        "family": "historical_v1_ablation",
+        "metric": "clean_accuracy",
+        "count": 68,
+        "total": 100,
+        "value": 0.68,
+        "wilson_95": {
+          "lower": 0.5833738138954762,
+          "upper": 0.7633085267500092
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A2"
+      },
+      {
+        "id": "v1-ablation-a2-attacked-accuracy",
+        "family": "historical_v1_ablation",
+        "metric": "attacked_accuracy",
+        "count": 71,
+        "total": 100,
+        "value": 0.71,
+        "wilson_95": {
+          "lower": 0.6146110882442888,
+          "upper": 0.7898516425087772
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A2"
+      },
+      {
+        "id": "v1-ablation-a3-attacked-poison-retrieval-at-5",
+        "family": "historical_v1_ablation",
+        "metric": "attacked_poison_retrieval_at_5",
+        "count": 0,
+        "total": 100,
+        "value": 0,
+        "wilson_95": {
+          "lower": 3.469446951953614e-18,
+          "upper": 0.03699349820698568
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A3"
+      },
+      {
+        "id": "v1-ablation-a3-official-clean-asr",
+        "family": "historical_v1_ablation",
+        "metric": "official_substring_clean_asr",
+        "count": 3,
+        "total": 100,
+        "value": 0.03,
+        "wilson_95": {
+          "lower": 0.010254524024038925,
+          "upper": 0.0845193642905276
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A3"
+      },
+      {
+        "id": "v1-ablation-a3-official-attacked-asr",
+        "family": "historical_v1_ablation",
+        "metric": "official_substring_attacked_asr",
+        "count": 4,
+        "total": 100,
+        "value": 0.04,
+        "wilson_95": {
+          "lower": 0.01566330399154762,
+          "upper": 0.0983707143588792
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A3"
+      },
+      {
+        "id": "v1-ablation-a3-official-induced-asr",
+        "family": "historical_v1_ablation",
+        "metric": "official_substring_induced_asr",
+        "count": 1,
+        "total": 97,
+        "value": 0.010309278350515464,
+        "wilson_95": {
+          "lower": 0.0018221648082868483,
+          "upper": 0.056104990242899035
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A3"
+      },
+      {
+        "id": "v1-ablation-a3-semantic-attacked-asr",
+        "family": "historical_v1_ablation",
+        "metric": "semantic_attacked_asr",
+        "count": 2,
+        "total": 100,
+        "value": 0.02,
+        "wilson_95": {
+          "lower": 0.005501967550162343,
+          "upper": 0.0700117907285439
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A3"
+      },
+      {
+        "id": "v1-ablation-a3-semantic-induced-asr",
+        "family": "historical_v1_ablation",
+        "metric": "semantic_induced_asr",
+        "count": 1,
+        "total": 98,
+        "value": 0.01020408163265306,
+        "wilson_95": {
+          "lower": 0.0018035477567974675,
+          "upper": 0.055554809913420274
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A3"
+      },
+      {
+        "id": "v1-ablation-a3-clean-accuracy",
+        "family": "historical_v1_ablation",
+        "metric": "clean_accuracy",
+        "count": 69,
+        "total": 100,
+        "value": 0.69,
+        "wilson_95": {
+          "lower": 0.5937394428051057,
+          "upper": 0.7722030278762395
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A3"
+      },
+      {
+        "id": "v1-ablation-a3-attacked-accuracy",
+        "family": "historical_v1_ablation",
+        "metric": "attacked_accuracy",
+        "count": 69,
+        "total": 100,
+        "value": 0.69,
+        "wilson_95": {
+          "lower": 0.5937394428051057,
+          "upper": 0.7722030278762395
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": true,
+        "scope": "A3"
+      }
+    ],
+    "historical_v1_ablation_inference": [
+      {
+        "id": "v1-ablation-attacked_poison_retrieval-A1-A0",
+        "family": "attacked_poison_retrieval",
+        "contrast": "A1-A0",
+        "b": 94,
+        "c": 0,
+        "exact_two_sided_p": 1.0097419586828951e-28,
+        "holm_rank": 1,
+        "holm_adjusted_p": 4.0389678347315804e-28,
+        "reject_familywise_0_05": true,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-attacked_target_substring-A1-A0",
+        "family": "attacked_target_substring",
+        "contrast": "A1-A0",
+        "b": 53,
+        "c": 0,
+        "exact_two_sided_p": 2.220446049250313e-16,
+        "holm_rank": 1,
+        "holm_adjusted_p": 8.881784197001252e-16,
+        "reject_familywise_0_05": true,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-incremental_target_substring-A1-A0",
+        "family": "incremental_target_substring",
+        "contrast": "A1-A0",
+        "b": 53,
+        "c": 0,
+        "exact_two_sided_p": 2.220446049250313e-16,
+        "holm_rank": 1,
+        "holm_adjusted_p": 8.881784197001252e-16,
+        "reject_familywise_0_05": true,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-attacked_target_semantic-A1-A0",
+        "family": "attacked_target_semantic",
+        "contrast": "A1-A0",
+        "b": 56,
+        "c": 0,
+        "exact_two_sided_p": 2.7755575615628914e-17,
+        "holm_rank": 1,
+        "holm_adjusted_p": 1.1102230246251565e-16,
+        "reject_familywise_0_05": true,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-incremental_target_semantic-A1-A0",
+        "family": "incremental_target_semantic",
+        "contrast": "A1-A0",
+        "b": 55,
+        "c": 0,
+        "exact_two_sided_p": 5.551115123125783e-17,
+        "holm_rank": 1,
+        "holm_adjusted_p": 2.220446049250313e-16,
+        "reject_familywise_0_05": true,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-clean_qa_correct-A1-A0",
+        "family": "clean_qa_correct",
+        "contrast": "A1-A0",
+        "b": 7,
+        "c": 4,
+        "exact_two_sided_p": 0.548828125,
+        "holm_rank": 1,
+        "holm_adjusted_p": 1,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-attacked_qa_correct-A1-A0",
+        "family": "attacked_qa_correct",
+        "contrast": "A1-A0",
+        "b": 1,
+        "c": 26,
+        "exact_two_sided_p": 4.172325134277344e-7,
+        "holm_rank": 2,
+        "holm_adjusted_p": 0.0000012516975402832031,
+        "reject_familywise_0_05": true,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-attacked_poison_retrieval-A2-A1",
+        "family": "attacked_poison_retrieval",
+        "contrast": "A2-A1",
+        "b": 0,
+        "c": 0,
+        "exact_two_sided_p": 1,
+        "holm_rank": 3,
+        "holm_adjusted_p": 1,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-attacked_target_substring-A2-A1",
+        "family": "attacked_target_substring",
+        "contrast": "A2-A1",
+        "b": 0,
+        "c": 0,
+        "exact_two_sided_p": 1,
+        "holm_rank": 3,
+        "holm_adjusted_p": 1,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-incremental_target_substring-A2-A1",
+        "family": "incremental_target_substring",
+        "contrast": "A2-A1",
+        "b": 0,
+        "c": 0,
+        "exact_two_sided_p": 1,
+        "holm_rank": 3,
+        "holm_adjusted_p": 1,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-attacked_target_semantic-A2-A1",
+        "family": "attacked_target_semantic",
+        "contrast": "A2-A1",
+        "b": 0,
+        "c": 0,
+        "exact_two_sided_p": 1,
+        "holm_rank": 3,
+        "holm_adjusted_p": 1,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-incremental_target_semantic-A2-A1",
+        "family": "incremental_target_semantic",
+        "contrast": "A2-A1",
+        "b": 0,
+        "c": 0,
+        "exact_two_sided_p": 1,
+        "holm_rank": 3,
+        "holm_adjusted_p": 1,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-clean_qa_correct-A2-A1",
+        "family": "clean_qa_correct",
+        "contrast": "A2-A1",
+        "b": 4,
+        "c": 4,
+        "exact_two_sided_p": 1,
+        "holm_rank": 3,
+        "holm_adjusted_p": 1,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-attacked_qa_correct-A2-A1",
+        "family": "attacked_qa_correct",
+        "contrast": "A2-A1",
+        "b": 3,
+        "c": 9,
+        "exact_two_sided_p": 0.14599609375,
+        "holm_rank": 3,
+        "holm_adjusted_p": 0.2919921875,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-attacked_poison_retrieval-A3-A2",
+        "family": "attacked_poison_retrieval",
+        "contrast": "A3-A2",
+        "b": 0,
+        "c": 0,
+        "exact_two_sided_p": 1,
+        "holm_rank": 4,
+        "holm_adjusted_p": 1,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-attacked_target_substring-A3-A2",
+        "family": "attacked_target_substring",
+        "contrast": "A3-A2",
+        "b": 0,
+        "c": 1,
+        "exact_two_sided_p": 1,
+        "holm_rank": 4,
+        "holm_adjusted_p": 1,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-incremental_target_substring-A3-A2",
+        "family": "incremental_target_substring",
+        "contrast": "A3-A2",
+        "b": 0,
+        "c": 1,
+        "exact_two_sided_p": 1,
+        "holm_rank": 4,
+        "holm_adjusted_p": 1,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-attacked_target_semantic-A3-A2",
+        "family": "attacked_target_semantic",
+        "contrast": "A3-A2",
+        "b": 0,
+        "c": 1,
+        "exact_two_sided_p": 1,
+        "holm_rank": 4,
+        "holm_adjusted_p": 1,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-incremental_target_semantic-A3-A2",
+        "family": "incremental_target_semantic",
+        "contrast": "A3-A2",
+        "b": 0,
+        "c": 1,
+        "exact_two_sided_p": 1,
+        "holm_rank": 4,
+        "holm_adjusted_p": 1,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-clean_qa_correct-A3-A2",
+        "family": "clean_qa_correct",
+        "contrast": "A3-A2",
+        "b": 5,
+        "c": 6,
+        "exact_two_sided_p": 1,
+        "holm_rank": 4,
+        "holm_adjusted_p": 1,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-attacked_qa_correct-A3-A2",
+        "family": "attacked_qa_correct",
+        "contrast": "A3-A2",
+        "b": 6,
+        "c": 4,
+        "exact_two_sided_p": 0.75390625,
+        "holm_rank": 4,
+        "holm_adjusted_p": 0.75390625,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-attacked_poison_retrieval-A3-A0",
+        "family": "attacked_poison_retrieval",
+        "contrast": "A3-A0",
+        "b": 94,
+        "c": 0,
+        "exact_two_sided_p": 1.0097419586828951e-28,
+        "holm_rank": 2,
+        "holm_adjusted_p": 4.0389678347315804e-28,
+        "reject_familywise_0_05": true,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-attacked_target_substring-A3-A0",
+        "family": "attacked_target_substring",
+        "contrast": "A3-A0",
+        "b": 52,
+        "c": 0,
+        "exact_two_sided_p": 4.440892098500626e-16,
+        "holm_rank": 2,
+        "holm_adjusted_p": 1.3322676295501878e-15,
+        "reject_familywise_0_05": true,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-incremental_target_substring-A3-A0",
+        "family": "incremental_target_substring",
+        "contrast": "A3-A0",
+        "b": 52,
+        "c": 0,
+        "exact_two_sided_p": 4.440892098500626e-16,
+        "holm_rank": 2,
+        "holm_adjusted_p": 1.3322676295501878e-15,
+        "reject_familywise_0_05": true,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-attacked_target_semantic-A3-A0",
+        "family": "attacked_target_semantic",
+        "contrast": "A3-A0",
+        "b": 55,
+        "c": 0,
+        "exact_two_sided_p": 5.551115123125783e-17,
+        "holm_rank": 2,
+        "holm_adjusted_p": 1.6653345369377348e-16,
+        "reject_familywise_0_05": true,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-incremental_target_semantic-A3-A0",
+        "family": "incremental_target_semantic",
+        "contrast": "A3-A0",
+        "b": 54,
+        "c": 0,
+        "exact_two_sided_p": 1.1102230246251565e-16,
+        "holm_rank": 2,
+        "holm_adjusted_p": 3.3306690738754696e-16,
+        "reject_familywise_0_05": true,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-clean_qa_correct-A3-A0",
+        "family": "clean_qa_correct",
+        "contrast": "A3-A0",
+        "b": 5,
+        "c": 3,
+        "exact_two_sided_p": 0.7265625,
+        "holm_rank": 2,
+        "holm_adjusted_p": 1,
+        "reject_familywise_0_05": false,
+        "historical_result": true
+      },
+      {
+        "id": "v1-ablation-attacked_qa_correct-A3-A0",
+        "family": "attacked_qa_correct",
+        "contrast": "A3-A0",
+        "b": 1,
+        "c": 30,
+        "exact_two_sided_p": 2.9802322387695312e-8,
+        "holm_rank": 1,
+        "holm_adjusted_p": 1.1920928955078125e-7,
+        "reject_familywise_0_05": true,
+        "historical_result": true
+      }
+    ],
+    "historical_v1_mutation": [
+      {
+        "id": "v1-mutation-integrity",
+        "transitions": 20,
+        "authorization_passed": 7,
+        "authorization_total": 7,
+        "tamper_passed": 4,
+        "tamper_total": 4,
+        "historical_result": true
+      },
+      {
+        "id": "v1-mutation-latency-storage",
+        "transitions": 20,
+        "latency_ms": {
+          "mean": 4.8984228,
+          "median": 4.864875,
+          "p95": 5.6738277,
+          "minimum": 3.856625,
+          "maximum": 6.488333
+        },
+        "logical_row_storage_bytes": {
+          "combined_total": 19327,
+          "combined_mean_per_transition": 966.35
+        },
+        "row_level_recomputation": false,
+        "authority": "historical_self_hashed_v1_aggregate",
+        "limitation": "one native restricted transaction including housekeeper signatures, provenance append, certified projection append, and live-weight update",
+        "historical_result": true
+      }
+    ],
+    "historical_v1_continuous": [
+      {
+        "id": "v1-locomo-token-f1",
+        "family": "historical_v1_locomo_official",
+        "metric": "upstream_category_aware_token_f1",
+        "n": 1986,
+        "mean_f1": 0.5819991702124487,
+        "score_percent": 58.19991702124487,
+        "bootstrap_interval_published": false,
+        "bootstrap_interval_omission_reason": "private_row_level_inputs_unavailable_for_independent_regeneration",
+        "historical_result": true
+      }
+    ],
+    "historical_v1_human_agreement": [
+      {
+        "id": "v1-human-correctness-agreement",
+        "family": "human_agreement",
+        "metric": "cohen_kappa",
+        "n": 200,
+        "agreements": 193,
+        "human_positive": 150,
+        "judge_positive": 143,
+        "observed_agreement": 0.965,
+        "expected_agreement": 0.6075,
+        "value": 0.9108280254777069,
+        "bootstrap_interval_published": false,
+        "bootstrap_interval_omission_reason": "private_target_pair_rows_unavailable_for_independent_regeneration",
+        "historical_result": true,
+        "scope": "blinded_system_author_diagnostic_not_independent_validation"
+      },
+      {
+        "id": "v1-human-target-assertion-agreement",
+        "family": "human_agreement",
+        "metric": "cohen_kappa",
+        "n": 200,
+        "agreements": 198,
+        "human_positive": 5,
+        "judge_positive": 5,
+        "observed_agreement": 0.99,
+        "expected_agreement": 0.9512499999999999,
+        "value": 0.7948717948717949,
+        "bootstrap_interval_published": false,
+        "bootstrap_interval_omission_reason": "private_target_pair_rows_unavailable_for_independent_regeneration",
+        "historical_result": true,
+        "scope": "blinded_system_author_diagnostic_not_independent_validation"
+      }
+    ],
+    "v2_canary_explicit_marker_scope": [
+      {
+        "id": "v2-canary-explicit-marker-detection",
+        "family": "v2_canary",
+        "metric": "explicit_marker_detection",
+        "count": 60,
+        "total": 60,
+        "value": 1,
+        "wilson_95": {
+          "lower": 0.93982814785791,
+          "upper": 0.9999999999999998
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": false,
+        "scope": "Explicit marker traversal only; not arbitrary poison, prompt-injection, or semantic social-engineering detection."
+      },
+      {
+        "id": "v2-canary-clean-false-positive",
+        "family": "v2_canary",
+        "metric": "clean_false_positive",
+        "count": 0,
+        "total": 60,
+        "value": 0,
+        "wilson_95": {
+          "lower": 0,
+          "upper": 0.06017185214208986
+        },
+        "confidence_interval_authority": "independently_recomputed_from_public_counts",
+        "historical_result": false,
+        "scope": "Explicit marker traversal only; not arbitrary poison, prompt-injection, or semantic social-engineering detection."
+      }
+    ],
+    "v2_reproducibility_and_conformance": [
+      {
+        "id": "v2-portable-protocol",
+        "schemas": 18,
+        "structural_vectors": 39,
+        "mutation_vectors": 15,
+        "failure_codes": 37,
+        "protocol_root_sha256": "663174ea3373d7f7eab816254a119a3da83b157709e190a93f3caef1094b6874"
+      },
+      {
+        "id": "v2-node-python-independent-verification",
+        "intended_n": 72,
+        "terminal_n": 72,
+        "exit_criteria_passed": 10,
+        "exit_criteria_total": 10,
+        "exact_verdict_and_reason_parity": true,
+        "closure_sha256": "49a555b94fa4ef99c9612b1037d538d2833d529bfa46a5764cb185d7a660927a"
+      },
+      {
+        "id": "v2-production-conformance",
+        "intended_n": 42,
+        "terminal_n": 42,
+        "required_classes": 28,
+        "exact_verdict_and_reason_parity": true,
+        "report_root_sha256": "03c3679654447b8e2b361616ce1d5e0b5955150fbf84d47f8399fa1da1af6eca"
+      },
+      {
+        "id": "v2-clean-installer",
+        "node_version": "v26.8.1",
+        "first_ready": true,
+        "restart_ready": true,
+        "scheduler_ready": true,
+        "guide_memories": 8,
+        "experimental_memories": 0,
+        "public_agent_clearance_maximum": 10,
+        "canonical_unchanged": true,
+        "qualified": true,
+        "qualification_sha256": "882e5fcdc403b0af3df555cbe24bc4f3f2ce9e9b02cd2cfa4b4a7de1358beea3"
+      }
+    ]
+  },
+  "omitted_numerical_families": [
+    {
+      "id": "saber-operational-campaign",
+      "reason": "exact_private_artifact_not_in_verified_custody",
+      "numerical_claims_published": false
+    },
+    {
+      "id": "v1-bootstrap-intervals",
+      "reason": "private_row_level_inputs_unavailable_for_independent_regeneration",
+      "numerical_claims_published": false
+    }
+  ],
+  "table_registry_sha256": "3d454f986514f8de3abdfcabe1fd162ac3358c844aec433490b241df1eefcffd"
+}

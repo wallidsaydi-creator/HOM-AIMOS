@@ -11,8 +11,9 @@
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mkdirSync, writeFileSync, chmodSync, existsSync } from 'node:fs';
+import { mkdirSync, writeFileSync, chmodSync, existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
+import { createHash } from 'node:crypto';
 import {
   enrollAgentWithDeps,
   KC_SERVICE,
@@ -22,6 +23,7 @@ import { keychainGet, keychainSet } from './keychain.js';
 import * as identityDb from './db.js';
 import { readPassphrase, readLine } from './passphrase.js';
 import { pool } from '../../db/connection.js';
+import { AIMOS_AGENT_KEY_ROOT } from '../../services/core/runtime-config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -39,8 +41,10 @@ if (!agentId) {
   process.exit(64);
 }
 
-const AGENTS_DIR = path.join(os.homedir(), '.aimos', 'agents');
+const AGENTS_DIR = AIMOS_AGENT_KEY_ROOT;
 const AGENT_KEY_PATH = path.join(AGENTS_DIR, `${agentId}.key`);
+const AGENT_CERT_CACHE_PATH = path.join(AGENTS_DIR, `${agentId}.cert-cache.json`);
+const sha256Hex = (value) => createHash('sha256').update(value).digest('hex');
 
 async function main() {
   // The master ceremony permits a custom Keychain account. Agent enrollment
@@ -102,19 +106,37 @@ async function main() {
     kcService: KC_SERVICE,
     kcAccount,
     brainRoot: BRAIN_ROOT
-  }, { validityDays });
+  }, { validityDays, deferCommit: true });
 
   if (!result.ok) {
     console.error(`[ERR] ${result.reason}${result.detail ? ': ' + result.detail : ''}`);
     process.exit(5);
   }
 
-  // Write agent privkey to disk, mode 0600.
-  if (!existsSync(AGENTS_DIR)) {
-    mkdirSync(AGENTS_DIR, { recursive: true, mode: 0o700 });
+  const enrollmentStart = await identityDb.beginAgentEnrollment(result.agentRow);
+  try {
+    // Write agent privkey and exact public cert cache before the identity row;
+    // the signed start makes a crash-open attempt independently detectable.
+    if (!existsSync(AGENTS_DIR)) {
+      mkdirSync(AGENTS_DIR, { recursive: true, mode: 0o700 });
+    }
+    writeFileSync(AGENT_KEY_PATH, result.agentPrivkey, { mode: 0o600 });
+    chmodSync(AGENT_KEY_PATH, 0o600);
+    writeFileSync(AGENT_CERT_CACHE_PATH, JSON.stringify({
+      agent_id: agentId,
+      cert: result.cert,
+      expires_at_ms: result.validUntil * 1000,
+    }) + '\n', { mode: 0o600 });
+    chmodSync(AGENT_CERT_CACHE_PATH, 0o600);
+    await identityDb.commitAgentEnrollment(result.agentRow, enrollmentStart, {
+      signing_material_sha256: sha256Hex(readFileSync(AGENT_KEY_PATH)),
+      cert_cache_sha256: sha256Hex(readFileSync(AGENT_CERT_CACHE_PATH)),
+    });
+  } catch (error) {
+    try { await identityDb.markAgentEnrollmentIndeterminate(enrollmentStart, error); }
+    catch (traceError) { error.identity_enrollment_terminal_error = traceError?.message || String(traceError); }
+    throw error;
   }
-  writeFileSync(AGENT_KEY_PATH, result.agentPrivkey, { mode: 0o600 });
-  chmodSync(AGENT_KEY_PATH, 0o600);
 
   console.log();
   console.log('[OK] agent enrolled');

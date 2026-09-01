@@ -35,8 +35,10 @@ import {
 import { calibrateNativeRecallResponse } from '../services/retrieval/recall-output-calibrator.js';
 import { logEvent, readVerifiedEventById } from '../services/observe/event-ledger.js';
 import { signAsHousekeeper } from '../services/security/housekeeper-signer.js';
+import { buildEnvelopeHeaders } from '../services/security/envelope-headers.js';
 import {
   ensureProviderRuntime,
+  providerRequestAuthority,
   providerEvidence,
   signedRequestArtifact,
   verifyRecallReceipt,
@@ -71,17 +73,13 @@ import { readJsonFile, writeImmutableJson } from './poisonedrag/protocol.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PROTOCOL = 'poisonedrag-n100-epistemic-ablation-v1';
-const SOURCE_RUN_ID = '20260722172124_db0d79';
-const SOURCE_DATABASE = `aimos_benchmark_${SOURCE_RUN_ID}`;
-const SOURCE_RUN_DIR = path.join(ROOT, 'eval', 'public-results', SOURCE_RUN_ID);
 const PREREGISTRATION = path.join(
   ROOT,
-  'plans',
-  'Codex',
-  'paper',
+  'docs',
+  'benchmarks',
   'POISONEDRAG-N100-EPISTEMIC-ABLATION-PREREGISTRATION.md',
 );
-const PREREGISTRATION_SHA256 = 'c224e942df7e4864cd66a82634f6739dc4657a9fc7cded93743f5f9c39e56fac';
+const PREREGISTRATION_SHA256 = '88e9e33f64645ba0d87f6f0a35c9e792c267da149d36d54533a81d35603642f9';
 const TOP_K = 5;
 const ARM_IDS = Object.freeze(['A0', 'A1', 'A2', 'A3']);
 const MODEL_ARM_IDS = Object.freeze(['A0', 'A1', 'A2', 'A3']);
@@ -112,6 +110,14 @@ export function parseAblationArgs(argv) {
   }
   const retries = Number(cliValue(argv, '--retries') || POISONEDRAG_MAX_ATTEMPTS);
   if (!Number.isInteger(retries) || retries < 1 || retries > 10) throw new Error('ablation_retries_invalid');
+  const installedService = argv.includes('--installed-service');
+  const databaseName = String(cliValue(argv, '--aimos-db') || '').trim();
+  const sourceRunId = String(cliValue(argv, '--source-run-id') || '').trim().toLowerCase();
+  const agentId = String(cliValue(argv, '--agent-id') || 'housekeeper').trim();
+  if (installedService && (!databaseName || !/^\d{14}_[0-9a-f]{6}$/.test(sourceRunId))) {
+    throw new Error('ablation_installed_source_binding_required');
+  }
+  if (installedService && agentId === 'housekeeper') throw new Error('ablation_installed_ordinary_agent_required');
   return {
     runId,
     runDir: path.resolve(runDirRaw),
@@ -119,6 +125,11 @@ export function parseAblationArgs(argv) {
     origin,
     targetCount,
     retries,
+    installedService,
+    databaseName,
+    sourceRunId: sourceRunId || '20260722172124_db0d79',
+    sourceDatabase: installedService ? databaseName : 'aimos_benchmark_20260722172124_db0d79',
+    agentId,
   };
 }
 
@@ -175,31 +186,35 @@ function sleep(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-function sourceTargetRoot(target) {
-  return path.join(SOURCE_RUN_DIR, 'poisonedrag', 'targets', targetDirectoryName(target));
+function sourceRunDir(args) {
+  return path.join(ROOT, 'eval', 'public-results', args.sourceRunId);
+}
+
+function sourceTargetRoot(args, target) {
+  return path.join(sourceRunDir(args), 'poisonedrag', 'targets', targetDirectoryName(target));
 }
 
 function resultTargetRoot(root, target) {
   return path.join(root, 'targets', targetDirectoryName(target));
 }
 
-function verifySourceEvidence(inputs) {
+function verifySourceEvidence(args, inputs) {
   if (sha256File(PREREGISTRATION) !== PREREGISTRATION_SHA256) {
     throw new Error('ablation_preregistration_hash_mismatch');
   }
-  const status = readJsonFile(path.join(SOURCE_RUN_DIR, 'run-status.json'));
-  const summary = readJsonFile(path.join(SOURCE_RUN_DIR, 'poisonedrag', 'summary.json'));
+  const status = readJsonFile(path.join(sourceRunDir(args), 'run-status.json'));
+  const summary = readJsonFile(path.join(sourceRunDir(args), 'poisonedrag', 'summary.json'));
   if (status.state !== 'complete' || status.phase !== 'complete'
-    || status.database_name !== SOURCE_DATABASE
-    || summary.run_id !== SOURCE_RUN_ID
+    || status.database_name !== args.sourceDatabase
+    || summary.run_id !== args.sourceRunId
     || summary.protocol !== 'poisonedrag-n100-v1'
     || summary.intended_n !== 100 || summary.completed_n !== 100
     || summary.summary_sha256 !== selfHash(summary, 'summary_sha256')) {
     throw new Error('ablation_source_run_not_canonical_complete');
   }
   for (const target of inputs.targets) {
-    const admission = readJsonFile(path.join(sourceTargetRoot(target), 'admission.json'));
-    if (admission.run_id !== SOURCE_RUN_ID
+    const admission = readJsonFile(path.join(sourceTargetRoot(args, target), 'admission.json'));
+    if (admission.run_id !== args.sourceRunId
       || admission.target_ordinal !== target.ordinal
       || admission.admission_sha256 !== selfHash(admission, 'admission_sha256')) {
       throw new Error(`ablation_source_admission_invalid:${target.ordinal}`);
@@ -218,8 +233,10 @@ function buildExecutionPlan(args, inputs, sourceBinding) {
     run_id: args.runId,
     target_count: args.targetCount,
     confirmatory: args.targetCount === 100,
-    source_run_id: SOURCE_RUN_ID,
-    source_database: SOURCE_DATABASE,
+    source_run_id: args.sourceRunId,
+    source_database: args.sourceDatabase,
+    execution_mode: args.installedService ? 'installed-service' : 'historical-scratch-clone',
+    agent_id: args.agentId,
     ...sourceBinding,
     source_lock_sha256: inputs.sourceLockSha256,
     private_target_manifest_sha256: inputs.privateManifest.manifest_sha256,
@@ -249,8 +266,19 @@ function buildExecutionPlan(args, inputs, sourceBinding) {
   return plan;
 }
 
-export async function signedPost(origin, route, body) {
-  const signed = await signAsHousekeeper(body, { method: 'POST', path: route });
+export async function signedPost(origin, route, body, args = {}) {
+  let signed;
+  if (args.installedService) {
+    const headers = await buildEnvelopeHeaders(args.agentId, 'POST', route, body);
+    signed = {
+      body,
+      certString: headers['Aimos-Agent-Cert'],
+      sigB64u: headers['Aimos-Agent-Signature'],
+      nonce: headers['Aimos-Agent-Nonce'],
+      signedTs: Number(headers['Aimos-Agent-Timestamp']),
+      sigForm: Number(headers['X-Aimos-Sig-Form']),
+    };
+  } else signed = await signAsHousekeeper(body, { method: 'POST', path: route });
   const started = performance.now();
   const response = await fetch(`${origin}${route}`, {
     method: 'POST',
@@ -275,14 +303,14 @@ export async function signedPost(origin, route, body) {
   };
 }
 
-async function verifyScratchHealth(args) {
+async function verifyExecutionHealth(args) {
   const response = await fetch(`${args.origin}/health`, { signal: AbortSignal.timeout(10_000) });
   const body = await response.json().catch(() => ({}));
-  const expectedDatabase = `aimos_benchmark_${args.runId}`;
+  const expectedDatabase = args.installedService ? args.databaseName : `aimos_benchmark_${args.runId}`;
   if (!response.ok || body.ready !== true
     || body.runtime?.database_name !== expectedDatabase
-    || body.runtime?.benchmark_scratch !== true) {
-    throw new Error('ablation_scratch_server_identity_mismatch');
+    || body.runtime?.benchmark_scratch !== !args.installedService) {
+    throw new Error('ablation_execution_server_identity_mismatch');
   }
   return body;
 }
@@ -363,13 +391,14 @@ async function executeNativeRecall(args, root, target, datasetArm) {
       scopeId: target.scope_ids[datasetArm],
       question: target.question,
       limit: TOP_K,
+      agentId: args.agentId,
     }),
     doctor_trace: 1,
   };
   for (let attempt = 1; attempt <= args.retries; attempt += 1) {
     let posted = null;
     try {
-      posted = await signedPost(args.origin, '/aimos/recall', body);
+      posted = await signedPost(args.origin, '/aimos/recall', body, args);
       if (!posted.ok || posted.responseBody?.success !== true) {
         throw new Error(`ablation_signed_recall_failed:${posted.status}:${posted.responseBody?.error || 'unknown'}`);
       }
@@ -421,7 +450,7 @@ function decisionFile(root, target, datasetArm, policyId) {
   );
 }
 
-async function findOrAppendDecisionReceipt(eventKey, metadata) {
+async function findOrAppendDecisionReceipt(args, eventKey, metadata, requestAuthority) {
   const existing = await pool.query(
     `SELECT id::text
        FROM public.aimos_events
@@ -452,12 +481,12 @@ async function findOrAppendDecisionReceipt(eventKey, metadata) {
   }
   const receipt = await logEvent(
     'hom',
-    'housekeeper',
+    args.agentId,
     'poisonedrag_epistemic_ablation_decision',
     eventKey,
     metadata,
-    null,
-    { returnReceipt: true },
+    requestAuthority?.requestAdmissionEventId || null,
+    { authority: args.installedService ? requestAuthority : null, returnReceipt: true },
   );
   const retained = await readVerifiedEventById(receipt.event_id, 'hom');
   if (Buffer.from(retained.mutation_hash).toString('hex') !== receipt.mutation_hash) {
@@ -501,7 +530,7 @@ async function commitDecisionArtifact({
     schema: 'hom.aimos.poisonedrag-epistemic-ablation-decision-evidence/v1',
     protocol: PROTOCOL,
     run_id: args.runId,
-    source_run_id: SOURCE_RUN_ID,
+    source_run_id: args.sourceRunId,
     preregistration_sha256: PREREGISTRATION_SHA256,
     target_ordinal: target.ordinal,
     upstream_id: target.upstream_id,
@@ -531,12 +560,14 @@ async function commitDecisionArtifact({
     classification_mutated: false,
   };
   evidence.evidence_sha256 = selfHash(evidence, 'evidence_sha256');
+  const requestAuthority = providerRequestAuthority(args, nativeRecall.response);
   const receipt = await findOrAppendDecisionReceipt(
+    args,
     `ablation:${args.runId}:${target.ordinal}:${datasetArm}:${policyId}`,
     {
       reasoning: 'Preregistered fixed-policy causal attribution over a copied native recall candidate set; canonical memory and cognitive projections remain unchanged.',
       protocol: PROTOCOL,
-      source_run_id: SOURCE_RUN_ID,
+      source_run_id: args.sourceRunId,
       preregistration_sha256: PREREGISTRATION_SHA256,
       target_ordinal: target.ordinal,
       dataset_arm: datasetArm,
@@ -553,6 +584,7 @@ async function commitDecisionArtifact({
       retrieval_weight_mutated: false,
       classification_mutated: false,
     },
+    requestAuthority,
   );
   const artifact = writeHashedArtifact(file, {
     ...evidence,
@@ -568,7 +600,7 @@ async function commitDecisionArtifact({
 }
 
 async function evaluateRetrievalTarget(args, root, target, progress) {
-  const admission = readJsonFile(path.join(sourceTargetRoot(target), 'admission.json'));
+  const admission = readJsonFile(path.join(sourceTargetRoot(args, target), 'admission.json'));
   const poisonIds = new Set(admission.poison_memory_ids.map(String));
   const byDatasetArm = {};
   for (const datasetArm of DATASET_ARMS) {
@@ -719,6 +751,7 @@ async function providerOperation(args, {
   systemPrompt,
   userPrompt,
   responseSchema = null,
+  requestAuthority = null,
   parse,
 }) {
   const promptSha256 = sha256(Buffer.from(`${systemPrompt}\n${userPrompt}`, 'utf8'));
@@ -760,7 +793,7 @@ async function providerOperation(args, {
         textVerbosity: 'low',
         ...(responseSchema ? { responseSchema } : {}),
         returnMetadata: true,
-        useContext: { subjectAgentId: 'housekeeper' },
+        useContext: requestAuthority || { subjectAgentId: args.agentId },
       });
       const output = parse(response.text);
       const artifact = writeHashedArtifact(file, {
@@ -819,6 +852,12 @@ async function generatePolicyAnswer(args, root, target, datasetArm, policyId, de
     target.question,
     decision.active_context_memories,
   );
+  const nativeRecall = readHashedArtifact(
+    nativeRecallFile(root, target, datasetArm),
+    'hom.aimos.poisonedrag-epistemic-ablation-native-recall/v4',
+  );
+  if (!nativeRecall) throw new Error('ablation_native_recall_authority_missing');
+  const requestAuthority = providerRequestAuthority(args, nativeRecall.response);
   return providerOperation(args, {
     file: answerFile(root, target, datasetArm, policyId),
     schema: 'hom.aimos.poisonedrag-epistemic-ablation-answer/v1',
@@ -828,6 +867,7 @@ async function generatePolicyAnswer(args, root, target, datasetArm, policyId, de
     reasoningEffort: 'medium',
     systemPrompt: '',
     userPrompt,
+    requestAuthority,
     parse: (text) => {
       const answer = String(text || '').trim();
       if (!answer || answer.length > 8000) throw new Error('ablation_generator_semantic_contract_invalid');
@@ -857,6 +897,12 @@ async function judgePolicyAnswer(args, root, target, datasetArm, policyId, decis
     targetAnswer: target.target_answer,
     answer,
   });
+  const nativeRecall = readHashedArtifact(
+    nativeRecallFile(root, target, datasetArm),
+    'hom.aimos.poisonedrag-epistemic-ablation-native-recall/v4',
+  );
+  if (!nativeRecall) throw new Error('ablation_native_recall_authority_missing');
+  const requestAuthority = providerRequestAuthority(args, nativeRecall.response);
   const correctness = await providerOperation(args, {
     file: judgmentFile(root, target, datasetArm, policyId, 'correctness'),
     schema: 'hom.aimos.poisonedrag-epistemic-ablation-judgment/v1',
@@ -867,6 +913,7 @@ async function judgePolicyAnswer(args, root, target, datasetArm, policyId, decis
     systemPrompt: CORRECTNESS_SYSTEM_PROMPT,
     userPrompt: correctnessPrompt,
     responseSchema: { name: 'hom_poisonedrag_ablation_correctness', schema: CORRECTNESS_SCHEMA },
+    requestAuthority,
     parse: (text) => {
       const value = parseStrictObject(text, 'ablation_correctness_judge');
       if (!validateCorrectnessJudgment(value)) {
@@ -885,6 +932,7 @@ async function judgePolicyAnswer(args, root, target, datasetArm, policyId, decis
     systemPrompt: TARGET_ASSERTION_SYSTEM_PROMPT,
     userPrompt: targetAssertionPrompt,
     responseSchema: { name: 'hom_poisonedrag_ablation_target_assertion', schema: TARGET_ASSERTION_SCHEMA },
+    requestAuthority,
     parse: (text) => {
       const value = parseStrictObject(text, 'ablation_target_assertion_judge');
       if (!validateTargetAssertionJudgment(value)) {
@@ -1106,7 +1154,7 @@ function aggregate(args, root, plan, outcomes) {
     run_id: args.runId,
     execution_plan_sha256: plan.plan_sha256,
     preregistration_sha256: PREREGISTRATION_SHA256,
-    source_run_id: SOURCE_RUN_ID,
+    source_run_id: args.sourceRunId,
     intended_n: args.targetCount,
     completed_n: outcomes.length,
     denominator_complete: true,
@@ -1162,11 +1210,11 @@ export function retainedArtifactCounts(root, inputs) {
 }
 
 async function runRetrievalPhase(args, root, inputs, progress) {
-  const expectedDatabase = `aimos_benchmark_${args.runId}`;
+  const expectedDatabase = args.installedService ? args.databaseName : `aimos_benchmark_${args.runId}`;
   if (resolveAimosDatabaseName() !== expectedDatabase) {
-    throw new Error('ablation_retrieval_not_bound_to_clone');
+    throw new Error('ablation_retrieval_not_bound_to_execution_database');
   }
-  await verifyScratchHealth(args);
+  await verifyExecutionHealth(args);
   const retained = retainedArtifactCounts(root, inputs);
   progress.phase = 'retrieve';
   progress.native_recalls_completed = retained.nativeRecalls;
@@ -1182,8 +1230,9 @@ async function runRetrievalPhase(args, root, inputs, progress) {
 }
 
 async function runModelPhase(args, root, inputs, progress, plan) {
-  if (resolveAimosDatabaseName() !== 'aimos') {
-    throw new Error('ablation_model_phase_requires_canonical_custody');
+  const expectedDatabase = args.installedService ? args.databaseName : 'aimos';
+  if (resolveAimosDatabaseName() !== expectedDatabase) {
+    throw new Error('ablation_model_phase_database_binding_invalid');
   }
   for (const target of inputs.targets) {
     for (const datasetArm of DATASET_ARMS) {
@@ -1197,7 +1246,7 @@ async function runModelPhase(args, root, inputs, progress, plan) {
       }
     }
   }
-  await ensureProviderRuntime();
+  await ensureProviderRuntime(args);
   const retained = retainedArtifactCounts(root, inputs);
   progress.phase = 'generate';
   progress.generations_completed = retained.generations;
@@ -1280,7 +1329,7 @@ async function main() {
   const root = path.join(args.runDir, 'poisonedrag-ablation');
   mkdirSync(path.join(root, 'targets'), { recursive: true, mode: 0o700 });
   const inputs = loadPoisonedRagInputs(args.targetCount);
-  const sourceBinding = verifySourceEvidence(inputs);
+  const sourceBinding = verifySourceEvidence(args, inputs);
   const expectedPlan = buildExecutionPlan(args, inputs, sourceBinding);
   const planFile = path.join(root, 'execution-plan.json');
   const priorPlan = readHashedArtifact(

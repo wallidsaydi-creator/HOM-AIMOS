@@ -183,17 +183,8 @@ export function buildHumanOnboardingFrictionDiagnostics({
  * @returns {Promise<boolean>} - true on success
  */
 export async function trackAgentPairSDR(senderId, receiverId, sdr) {
-  try {
-    await query(
-      `INSERT INTO agent_pair_sdr (sender_id, receiver_id, sdr, ts)
-       VALUES ($1, $2, $3, NOW())`,
-      [senderId, receiverId, sdr]
-    );
-    return true;
-  } catch (err) {
-    console.error('[semantic-intent] trackAgentPairSDR error:', err.message);
-    return false;
-  }
+  void senderId; void receiverId; void sdr;
+  throw new Error('agent_pair_sdr_mutation_retired_no_verified_caller');
 }
 
 /**

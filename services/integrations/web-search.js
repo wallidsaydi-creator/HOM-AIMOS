@@ -60,26 +60,32 @@ async function searchPerplexity(query, useContext) {
   } catch (error) {
     await credentialLedger.finalizeCredentialUse({
       reservation,
-      outcome: 'failed',
+      outcome: 'indeterminate',
       outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'transport_error' }),
       outcomeClass: 'transport_error',
       errorClass: error?.name || 'transport_error',
     });
     throw error;
   }
-  await credentialLedger.finalizeCredentialUse({
-    reservation,
-    outcome: 'completed',
-    outcomeHash: credentialUseEvidenceHash({ status: res.status }),
-    outcomeClass: `http_${res.status}`,
-  });
-
   if (!res.ok) {
     const text = await res.text();
+    await credentialLedger.finalizeCredentialUse({
+      reservation,
+      outcome: 'failed',
+      outcomeHash: credentialUseEvidenceHash({ status: res.status, response_hash: credentialUseEvidenceHash(text) }),
+      outcomeClass: `http_${res.status}`,
+      errorClass: `http_${res.status}`,
+    });
     throw new Error(`Perplexity error (${res.status}): ${text}`);
   }
 
   const data = await res.json();
+  await credentialLedger.finalizeCredentialUse({
+    reservation,
+    outcome: 'completed',
+    outcomeHash: credentialUseEvidenceHash({ status: res.status, response_hash: credentialUseEvidenceHash(data) }),
+    outcomeClass: `http_${res.status}`,
+  });
   if (!Array.isArray(data?.choices) || data.choices.length === 0) {
     return { answer: '', results: [] };
   }
@@ -120,26 +126,32 @@ async function searchBrave(query, maxResults, useContext) {
   } catch (error) {
     await credentialLedger.finalizeCredentialUse({
       reservation,
-      outcome: 'failed',
+      outcome: 'indeterminate',
       outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'transport_error' }),
       outcomeClass: 'transport_error',
       errorClass: error?.name || 'transport_error',
     });
     throw error;
   }
-  await credentialLedger.finalizeCredentialUse({
-    reservation,
-    outcome: 'completed',
-    outcomeHash: credentialUseEvidenceHash({ status: res.status }),
-    outcomeClass: `http_${res.status}`,
-  });
-
   if (!res.ok) {
     const text = await res.text();
+    await credentialLedger.finalizeCredentialUse({
+      reservation,
+      outcome: 'failed',
+      outcomeHash: credentialUseEvidenceHash({ status: res.status, response_hash: credentialUseEvidenceHash(text) }),
+      outcomeClass: `http_${res.status}`,
+      errorClass: `http_${res.status}`,
+    });
     throw new Error(`Brave error (${res.status}): ${text}`);
   }
 
   const data = await res.json();
+  await credentialLedger.finalizeCredentialUse({
+    reservation,
+    outcome: 'completed',
+    outcomeHash: credentialUseEvidenceHash({ status: res.status, response_hash: credentialUseEvidenceHash(data) }),
+    outcomeClass: `http_${res.status}`,
+  });
   const results = (data?.web?.results || []).slice(0, maxResults).map(item => ({
     title: item.title,
     url: item.url,

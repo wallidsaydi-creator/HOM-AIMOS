@@ -109,7 +109,7 @@ export function computeDeviceFp(brainRoot) {
 //     kcAccount: '<your_keychain_account>',
 //     brainRoot: '/Users/.../backend/brain' }
 
-export async function enrollMasterWithDeps(passphrase, deps) {
+export async function enrollMasterWithDeps(passphrase, deps, opts = {}) {
   const existing = await deps.db.getMaster();
   if (existing) {
     return {
@@ -131,16 +131,47 @@ export async function enrollMasterWithDeps(passphrase, deps) {
       .export({ type: 'spki', format: 'der' })
       .toString('base64url');
     const recoveredFingerprint = pubkeyFingerprint(recoveredPubkey);
-    await deps.db.insertMaster(recoveredPubkey, recoveredFingerprint, deps.kcService, deps.kcAccount);
-    return { ok: true, pubkey: recoveredPubkey, fingerprint: recoveredFingerprint, recovered: true };
+    const masterRow = {
+      master_pubkey: recoveredPubkey,
+      fingerprint: recoveredFingerprint,
+      keychain_service: deps.kcService,
+      keychain_account: deps.kcAccount,
+    };
+    if (opts.prepareOnly !== true) {
+      await deps.db.insertMaster(recoveredPubkey, recoveredFingerprint, deps.kcService, deps.kcAccount);
+    }
+    return {
+      ok: true,
+      pubkey: recoveredPubkey,
+      fingerprint: recoveredFingerprint,
+      recovered: true,
+      encryptedBlob: existingBlob,
+      needsKeychainWrite: false,
+      masterRow,
+    };
   }
 
   const { pubkey, privkey } = generateKeypair();
   const fingerprint = pubkeyFingerprint(pubkey);
   const blob = encryptMasterPrivkey(passphrase, privkey);
-  await deps.keychain.set(deps.kcService, deps.kcAccount, blob);
-  await deps.db.insertMaster(pubkey, fingerprint, deps.kcService, deps.kcAccount);
-  return { ok: true, pubkey, fingerprint };
+  const masterRow = {
+    master_pubkey: pubkey,
+    fingerprint,
+    keychain_service: deps.kcService,
+    keychain_account: deps.kcAccount,
+  };
+  if (opts.prepareOnly !== true) {
+    await deps.keychain.set(deps.kcService, deps.kcAccount, blob);
+    await deps.db.insertMaster(pubkey, fingerprint, deps.kcService, deps.kcAccount);
+  }
+  return {
+    ok: true,
+    pubkey,
+    fingerprint,
+    encryptedBlob: blob,
+    needsKeychainWrite: true,
+    masterRow,
+  };
 }
 
 export async function enrollAgentWithDeps(agentId, passphrase, deps, opts = {}) {
@@ -197,14 +228,15 @@ export async function enrollAgentWithDeps(agentId, passphrase, deps, opts = {}) 
     return { ok: false, reason: 'cert_self_check_failed', detail: verify.reason };
   }
 
-  await deps.db.insertAgent({
+  const agentRow = {
     agent_id: agentId,
     pubkey: agentPubkey,
     cert,
     device_fp: deviceFp,
     valid_from: new Date(validFrom * 1000).toISOString(),
     valid_until: new Date(validUntil * 1000).toISOString()
-  });
+  };
+  if (opts.deferCommit !== true) await deps.db.insertAgent(agentRow);
 
   return {
     ok: true,
@@ -214,7 +246,8 @@ export async function enrollAgentWithDeps(agentId, passphrase, deps, opts = {}) 
     deviceFp,
     validFrom,
     validUntil,
-    fingerprint: pubkeyFingerprint(agentPubkey)
+    fingerprint: pubkeyFingerprint(agentPubkey),
+    agentRow,
   };
 }
 
@@ -231,9 +264,16 @@ export async function revokeAgentWithDeps(agentId, passphrase, deps, opts = {}) 
   const masterPrivkey = decryptMasterPrivkey(passphrase, blob);
   if (!masterPrivkey) return { ok: false, reason: 'wrong_passphrase' };
 
-  const agent = await deps.db.getAgent(agentId);
+  const requestedEpoch = opts.agentValidFrom == null
+    ? null : new Date(opts.agentValidFrom).toISOString();
+  const agent = requestedEpoch && typeof deps.db.getAgentEpoch === 'function'
+    ? await deps.db.getAgentEpoch(agentId, requestedEpoch)
+    : await deps.db.getAgent(agentId);
   if (!agent) {
     return { ok: false, reason: 'agent_not_found_or_already_revoked' };
+  }
+  if (requestedEpoch && new Date(agent.valid_from).toISOString() !== requestedEpoch) {
+    return { ok: false, reason: 'agent_epoch_mismatch' };
   }
   const proof = createAgentRevocationProof(masterPrivkey, {
     agentId,

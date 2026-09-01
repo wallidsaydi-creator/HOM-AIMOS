@@ -1,0 +1,29 @@
+{
+  "schema": "hom.aimos.mutmem-p2-resource-measurement/v1",
+  "intended_n": 100000,
+  "exact_root_parity": true,
+  "thresholds": {
+    "maximum_elapsed_ms_per_implementation": 5000,
+    "maximum_peak_rss_bytes_per_implementation": 268435456
+  },
+  "node": {
+    "root_sha256": "cecfaf74a1560ec86034c59eacb1586ed054dd4f356e077ca8d2928990c6d5f2",
+    "elapsed_ms": 266.685,
+    "peak_rss_bytes": 88866816,
+    "time_complexity": "O(n)",
+    "auxiliary_peak_space": "O(log n)",
+    "node_version": "v24.14.0"
+  },
+  "python": {
+    "auxiliary_peak_space": "O(log n)",
+    "count": 100000,
+    "cryptography_version": "49.0.0",
+    "elapsed_ms": 952.625667,
+    "peak_rss_bytes": 58949632,
+    "python_version": "3.14.2",
+    "root_sha256": "cecfaf74a1560ec86034c59eacb1586ed054dd4f356e077ca8d2928990c6d5f2",
+    "time_complexity": "O(n)"
+  },
+  "passed": true,
+  "measurement_sha256": "a704e7568bb1a586b29faa7030baa676a5e6ae18dc9e2ec176ae0fbf68570902"
+}

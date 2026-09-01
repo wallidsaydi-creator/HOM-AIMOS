@@ -1,0 +1,87 @@
+{
+  "schema": "hom.aimos.mutmem-reproducibility-assessment/v1",
+  "version": 1,
+  "paper": {
+    "name": "MutMem V1",
+    "arxiv": "2608.02843",
+    "pdf_sha256": "0740d0605a10df9fb337e3a09579dbb5ce4e115720f117fe2848576c66d25cb0",
+    "tex_sha256": "0868b57f6f299b4327904cf9e1da1cbba5aaa2fb14a16de8a440d72625dd2e4f"
+  },
+  "authority": {
+    "commit": "c7f46ff403160d460b35917c4e79d71dfbe1353c",
+    "source": "recovered_opus_fable_reproducibility_standard",
+    "section": "PUBLICATION REPRODUCIBILITY STANDARD — V2 AND ALL FUTURE PAPERS"
+  },
+  "scores": {
+    "artifact_integrity_and_claim_verifiability": 4.5,
+    "independent_end_to_end_reproducibility": 3.5
+  },
+  "targets": {
+    "artifact_integrity_and_claim_verifiability": 5,
+    "independent_end_to_end_reproducibility": 4
+  },
+  "highest_supported_level": "verified",
+  "independently_replicated": false,
+  "requirements": [
+    {
+      "id": "verify_and_reproduce_entrypoints",
+      "status": "partial",
+      "evidence": "V1 exposes hashes, verifiers and rerun components, but not two prominent unified commands.",
+      "improvement": "Ship distinct network-minimal verify and full isolated reproduce entry points."
+    },
+    {
+      "id": "environment_manifest",
+      "status": "missing",
+      "evidence": "V1 identifies important runtimes and models but lacks one complete machine-readable execution environment manifest.",
+      "improvement": "Bind OS, architecture, hardware, runtime, database, extensions, dependencies, concurrency, models and timestamps."
+    },
+    {
+      "id": "dataset_manifests",
+      "status": "present",
+      "evidence": "Restricted benchmark text is downloader-and-hash based with pinned upstream identities.",
+      "improvement": "Retain exact revision, license, file and SHA-256 coverage in V2."
+    },
+    {
+      "id": "generated_tables_and_figures",
+      "status": "present",
+      "evidence": "Publication aggregates and exporters generate the reported V1 numerical tables.",
+      "improvement": "Make every V2 numeric cell map to one script, field, run and hash."
+    },
+    {
+      "id": "claim_to_evidence_map",
+      "status": "present",
+      "evidence": "V1 Appendix A maps central claims to code and required evidence.",
+      "improvement": "Extend the V2 map to every quantitative and security claim, denominator and limitation."
+    },
+    {
+      "id": "attempt_failure_ledger",
+      "status": "partial",
+      "evidence": "Intended-N and run status exist, but complete per-attempt evidence is partly private and no single sanitized public ledger exists.",
+      "improvement": "Release a bounded machine-readable attempt ledger covering failures, retries, exclusions, reuse and terminal status."
+    },
+    {
+      "id": "public_private_boundary_manifest",
+      "status": "partial",
+      "evidence": "V1 explains withheld datasets and identity-bearing evidence in prose.",
+      "improvement": "Release one machine-readable manifest naming every withheld artifact and reason."
+    },
+    {
+      "id": "fresh_machine_proof",
+      "status": "partial",
+      "evidence": "The clean public source tree passed release gates, but the complete experiment was not rerun through one public fresh-machine command.",
+      "improvement": "Run verify and reproduce from a clean checkout across supported runtimes and retain the environment-bound result."
+    },
+    {
+      "id": "archival_release_binding",
+      "status": "partial",
+      "evidence": "V1 binds source and evidence hashes but lacks one complete TeX/PDF/package/license/DOI archival record.",
+      "improvement": "Bind source, evidence, TeX, PDF, package, licenses and DOI into one immutable record."
+    },
+    {
+      "id": "v1_to_v2_change_ledger",
+      "status": "missing",
+      "evidence": "A V1-to-V2 claim, protocol, model, dataset, artifact and result ledger did not exist at V1 release.",
+      "improvement": "Generate and verify the exact change ledger before V2 publication."
+    }
+  ]
+}

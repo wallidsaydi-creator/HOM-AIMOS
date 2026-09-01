@@ -1,12 +1,11 @@
 /**
  * temporal-kg-reasoning.js - temporal KG QA, HyTE, and temporal KGQA operators
  *
- * Status: Live in /aimos/recall via native_paper_recall_operators; exported by
- * temporal/index.js.
+ * Status: Native structural projection in canonical /aimos/recall; exported by
+ * temporal/index.js. Rank influence is exactly zero pending calibration.
  * Runtime note: pure deterministic math/state transformation. It does not
  * mutate memory, prune evidence, apply decay, delete records, or call providers.
- * In recall it contributes temporal KG diagnostics and bounded native scoring
- * signals.
+ * In recall it contributes temporal question structure to the signed receipt.
  *
  * Paper authority:
  * - Complex Temporal Question Answering on Knowledge Graphs.pdf

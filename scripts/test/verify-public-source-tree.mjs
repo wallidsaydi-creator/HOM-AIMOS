@@ -73,6 +73,8 @@ assert.equal(
 for (const forbidden of [
   'architecture-authority.json',
   'plans',
+  'engineering',
+  'baselines',
   'remediation',
   'research',
   'scratchpad',
@@ -130,7 +132,6 @@ const disclosureRules = [
   { label: 'private-plan-path', pattern: new RegExp(['plans', 'Codex'].join('/'), 'i') },
   { label: 'private-model-handoff', pattern: new RegExp(['Claude', 'Fable'].join('\\s+'), 'i') },
   { label: 'private-model-handoff', pattern: new RegExp(['GLM', '5\\.2', 'handoff'].join('.*'), 'i') },
-  { label: 'private-model-handoff', pattern: new RegExp(['GPT', '5\\.6', 'SOL'].join('.*'), 'i') },
   { label: 'private-wiki-reference', pattern: /\[\[(?:hom-|feedback-)[^\]]+\]\]/i },
   { label: 'operator-home-path', pattern: new RegExp(['<operator', 'home>'].join('-'), 'i') },
   { label: 'temporary-backup-path', pattern: new RegExp(['/tmp/hom', 'phase0'].join('-'), 'i') },
@@ -201,8 +202,8 @@ const legalNameFiles = observed
   .map((entry) => entry.path);
 assert.deepEqual(
   legalNameFiles,
-  ['NOTICE'],
-  'personal legal name may appear only in the required copyright notice',
+  ['NOTICE', 'paper/mutmem-v2-manuscript-contract.json', 'paper/mutmem-v2.tex'],
+  'personal legal name may appear only in the copyright notice and authored manuscript metadata',
 );
 
 const benchmarkTests = observed

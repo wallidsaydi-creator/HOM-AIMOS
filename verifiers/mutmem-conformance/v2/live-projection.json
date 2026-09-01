@@ -1,0 +1,16 @@
+{
+  "schema": "hom.aimos.mutmem-p1-live-projection-public/v1",
+  "event_id": "10217fc3-2c04-418c-8f8f-61346e29a88b",
+  "bundle_sha256": "57b0285f2624af4b3bccfac992390b589779fa663cf2b3b40725ce6a821b02b1",
+  "object_root_sha256": "f4dbffca1f728e6ced2e3db000a8e981eaa03b35e32cec0bd6ee8a8198c92a61",
+  "result_count": 1,
+  "object_count": 18,
+  "occurrence_form": "v3",
+  "reference_predicates_valid": true,
+  "predicate_count": 37,
+  "private_artifact_sha256": "f5b19f8cf5fc7ccd444f65417932cb53b6d4bf8e559047fc948b6cc85f2a9631",
+  "private_artifact_distributed": false,
+  "memory_write": false,
+  "domain_database_mutation": false,
+  "manifest_sha256": "011ca6425c562ffcc62f6435026879b406e59b1f80645bb464ddcf2451bf9520"
+}

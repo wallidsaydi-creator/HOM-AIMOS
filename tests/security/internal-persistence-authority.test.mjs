@@ -6,7 +6,7 @@ const ROOT = new URL('../../', import.meta.url);
 
 const EXPECTED_CALLS = new Map([
   ['services/observe/architecture-registry.js', 2],
-  ['services/orchestration/agent-runner.js', 9],
+  ['services/orchestration/agent-runner.js', 10],
   ['services/orchestration/agent-xai-explanation.js', 2],
   ['services/orchestration/capability-probe.js', 1],
   ['services/orchestration/explore-exploit-loop.js', 1],
@@ -19,7 +19,7 @@ function persistCallWindows(source) {
   const lines = source.split('\n');
   const starts = [];
   for (let index = 0; index < lines.length; index++) {
-    if (lines[index].includes('persistMemory({')) starts.push(index);
+    if (lines[index].includes('executeHousekeeperCanonicalSave({')) starts.push(index);
   }
   return starts.map((start, index) => {
     const nextStart = starts[index + 1] ?? lines.length;
@@ -27,7 +27,7 @@ function persistCallWindows(source) {
   });
 }
 
-test('every scoped internal persistence call declares housekeeper mutation authority', async () => {
+test('every scoped internal persistence call uses the typed Housekeeper SAVE owner', async () => {
   let totalCalls = 0;
   for (const [relativePath, expectedCount] of EXPECTED_CALLS) {
     const source = await readFile(new URL(relativePath, ROOT), 'utf8');
@@ -36,15 +36,15 @@ test('every scoped internal persistence call declares housekeeper mutation autho
     totalCalls += calls.length;
 
     for (const call of calls) {
-      assert.match(call, /mutation_authority: 'housekeeper'/, relativePath);
-      assert.equal((call.match(/mutation_authority:/g) || []).length, 1, relativePath);
+      assert.doesNotMatch(call, /mutation_authority:/, relativePath);
     }
 
-    assert.doesNotMatch(source, /agent_id: 'housekeeper'/, `${relativePath} rewrote the memory subject`);
+    assert.doesNotMatch(source, /(?<!actor_)agent_id: 'housekeeper'/, `${relativePath} rewrote the memory subject`);
+    assert.doesNotMatch(source, /mutation_authority: 'housekeeper'/);
     assert.doesNotMatch(source, /commitProvenance|signAsHousekeeper|memoryProvenanceLedger/);
   }
 
-  assert.equal(totalCalls, 19);
+  assert.equal(totalCalls, 20);
 });
 
 test('subject identities remain distinct from the autonomous signer', async () => {

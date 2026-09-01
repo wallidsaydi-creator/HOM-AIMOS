@@ -1,12 +1,12 @@
 /**
  * temporal-knowledge-base.js - temporal KB fact/probe operators
  *
- * Status: Live in /aimos/recall via native_paper_recall_operators; exported by
- * temporal/index.js.
+ * Status: Native structural projection in canonical /aimos/recall; exported by
+ * temporal/index.js. Rank influence is exactly zero pending calibration.
  * Runtime note: this file is pure deterministic math/state transformation. It
  * does not mutate memory, prune evidence, apply decay, delete records, or call
  * providers. In recall it contributes derived temporal fact diagnostics and
- * bounded native scoring signals.
+ * bounded fact-state structure to the signed native recall receipt.
  *
  * Paper authority:
  * - Can Language Models Serve as Temporal Knowledge Bases?.pdf

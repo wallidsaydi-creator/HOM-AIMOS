@@ -16,12 +16,11 @@
 //   . Trust boundary: agents can STORE (append); ROTATE/REVOKE are
 //     operator/housekeeper only (enforced by the CLI, not this service)
 //
-// This service does NOT sign or ledger anything — that's the caller's
-// job (store-credential.js CLI or backfill-credentials.mjs). The caller:
-//   1. Computes the hash via computeCredentialHash(value)
-//   2. Stores the plaintext via storeCredential(service, value)
-//   3. Signs the body with signAsHousekeeper
-//   4. Commits via credentialLedger.commitCredentialLifecycle(...)
+// This service does NOT sign or ledger anything. Production callers must use
+// credentialLedger.beginCredentialCustodyMutation(), which signs the start,
+// invokes these primitives, verifies exact readback, and binds the later
+// lifecycle/terminal commit. The only direct synchronous writer is the named
+// pre-Housekeeper runtime-database Genesis root.
 //
 // Phase B (USE linkage) will call readCredential + computeCredentialHash
 // at sign time to include credential_slot + credential_hash in the signed

@@ -2,7 +2,7 @@
   "schema": "hom.architecture-authority/v1",
   "runtime_mode": "template",
   "version": "0.13",
-  "updated": "2026-08-18",
+  "updated": "2026-08-28",
   "owner": "hom-aimos",
   "canonical": true,
   "purpose": "Portable public HOM-AIMOS authority. Paths are relative to the repository root and are resolved by the Genesis installer. Runtime state, credentials, identities, permissions, and memories are ledgered; no environment or private predecessor-system file hierarchy is authoritative.",
@@ -16,8 +16,8 @@
   "genesis_corpus": {
     "manifest": "./Guide/GENESIS-MANIFEST.json",
     "schema": "hom.aimos.genesis-manifest/v1",
-    "version": 21,
-    "corpus_root": "6b12d400fe223026401feb73509d22269746935b7f2164b2d7d19a063cea9d70",
+    "version": 26,
+    "corpus_root": "2004c925c6cb45c36d7e7328d92fcbab516e732b47ee35f2e3a4b6c058813aaa",
     "hash_algorithm": "sha256",
     "binding": "Every Guide genesis save signs this schema, version, corpus root, and its own file hash into provenance."
   },
@@ -109,8 +109,8 @@
     "manifest": "./hom-architecture-manifest.json",
     "counting_policy": "top-level services/<group>/*.js excluding index.js barrels and hidden directories",
     "counted_service_groups": 17,
-    "counted_service_files": 300,
-    "census_sha256": "96035ce470104abdda7fd41d027c5c6bc8d5a5bb14881d43fc29795ace38032e"
+    "counted_service_files": 295,
+    "census_sha256": "e71c332413b495b57e2349fe3f76dc98bacc66cc2b0dcc8b3c32ad05a7bff720"
   },
   "mechanical_rules": {
     "native_only": true,

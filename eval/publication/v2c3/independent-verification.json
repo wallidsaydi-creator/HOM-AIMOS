@@ -1,0 +1,32 @@
+{
+  "schema": "hom.aimos.mutmem-v2-publication-independent-verification/v1",
+  "success": true,
+  "publication_evidence_root_sha256": "99bed29dcf0cc5c2f597f17b69be8d6dc990bae4ae5dd30838a1d1f34d92a76b",
+  "table_registry_sha256": "3d454f986514f8de3abdfcabe1fd162ac3358c844aec433490b241df1eefcffd",
+  "claim_map_sha256": "4d8d23442e9ed311e33ddd9ce9a79e878642eba93329c460e203128e54997527",
+  "attempt_ledger_sha256": "7a0de711d4d9a12c71447ae78592a3026aeab6101daa29b0b3717872872a0ed1",
+  "boundary_sha256": "1237680332b6c3fb9c94097bd4338935a10cc1cc9bd9cf2c14bc50d7de7c079b",
+  "statistical_checks": {
+    "rate_and_wilson_rows": 44,
+    "mcnemar_and_holm_rows": 28,
+    "kappa_rows": 2,
+    "mutation_rows": 2,
+    "historical_continuous_rows": 1
+  },
+  "conformance_rows": 4,
+  "claim_rows": 17,
+  "attempt_rows": 10,
+  "node_python_verdict_reason_parity_n": 72,
+  "s5_verdict_reason_parity_n": 42,
+  "all_public_numerical_rows_regenerated": true,
+  "all_claim_rows_resolved": true,
+  "secret_and_private_boundary_passed": true,
+  "failures_counted_as_defenses": false,
+  "silent_exclusions": false,
+  "byte_identical_regeneration_verified": true,
+  "benchmark_run": false,
+  "database_access": false,
+  "network_access": false,
+  "provider_call": false,
+  "independent_verification_sha256": "f38268c86f2291971ac6ab75ded944d9a7e7eb6fa2809a5367d69dacd450ffe0"
+}

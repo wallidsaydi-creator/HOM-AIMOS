@@ -263,10 +263,11 @@ test('R5B exact identifier retains blocked state for the signed security boundar
 
 test('R4 source uses one request-scoped session across every production candidate lane', () => {
   const source = fs.readFileSync(path.join(ROOT, 'services/retrieval/native-recall-pipeline.js'), 'utf8');
+  assert.match(source, /openNativeRecallRequestSession/);
   assert.match(source, /openNativeRecallAdmissionSession/);
   assert.match(source, /createRequestScopedContentStateAdmission/);
   assert.doesNotMatch(source, /admitNativeRecallCandidates\(/);
-  assert.equal((source.match(/contentStateOccurrenceAdmission\.admit\(/g) || []).length, 8);
+  assert.equal((source.match(/contentStateOccurrenceAdmission\.admit\(/g) || []).length, 13);
   assert.match(source, /admitEvidenceFn: contentStateOccurrenceAdmission\.admit/);
   assert.match(source, /contentStateOccurrenceAdmission\.selectCandidateStateRepresentatives/);
   assert.match(source, /const siblingAdmission = siblingCandidates\.length/);
@@ -307,7 +308,7 @@ test('R4 source uses one request-scoped session across every production candidat
   assert.ok(reranking < qmdProposals);
   assert.match(source, /existing\.qmd_score = Math\.max\(/);
   assert.match(source, /existing\.hyde_score = Math\.max\(/);
-  assert.match(source, /getAuthorizedRescueDataClasses/);
+  assert.match(source, /getAuthorizedRecallDataClasses/);
   assert.doesNotMatch(source, /metadata->>'source'/);
   assert.match(source, /LOWER\(COALESCE\(source,''\)\)/);
   const conceptStage = source.indexOf("markStage('concept_graph_ppr')");

@@ -28,7 +28,7 @@
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { query } from '../../db/connection.js';
 import { getEmbedding } from '../core/embeddings.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -259,7 +259,7 @@ export async function cacheSuccessfulTopology(taskPrompt, templateName, topology
     const key = `topology_cache:${templateName}:${Date.now()}`;
     const value = JSON.stringify({ topology, templateName, cached_at: new Date().toISOString() });
 
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: COMPANY,
       agent_id: 'graph-designer',
       key,
@@ -268,7 +268,7 @@ export async function cacheSuccessfulTopology(taskPrompt, templateName, topology
       memory_type: 'procedural',
       memory_tier: 'long-term',
       clearance_level: 5,
-      mutation_authority: 'housekeeper',
+      source: 'graph-designer',
     });
   } catch (err) {
     console.warn('[graph-designer] topology caching failed:', err.message);

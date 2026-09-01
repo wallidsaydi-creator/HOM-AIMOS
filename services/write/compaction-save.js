@@ -3,7 +3,7 @@
  *
  * Builds a full-detail, dream-readable session_debrief for app-owned
  * context-window compaction, then persists through the canonical
- * persistMemory() spine. This is not the organic /aimos/save lane.
+ * executeCanonicalSave() spine. This is not the organic /aimos/save lane.
  *
  * Sources: docs/compaction-post-compaction-corpus.md
  * Formula anchors: TiMem L2 session memory, Chronos event/raw-turn split,
@@ -11,7 +11,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { persistMemory } from './persist-memory.js';
+import { executeCanonicalSave } from './canonical-save-owner.js';
 import { logEvent } from '../observe/event-ledger.js';
 
 const REQUIRED_FIELDS = [
@@ -405,7 +405,7 @@ export function buildCompactionSavePayload(input = {}) {
 }
 
 export function createCompactionSaveService(deps = {}) {
-  const persistFn = deps.persistMemory || persistMemory;
+  const saveFn = deps.executeCanonicalSave || deps.persistMemory || executeCanonicalSave;
   const logEventFn = deps.logEvent || logEvent;
 
   return async function saveCompactionMemory(input = {}, context = {}) {
@@ -438,7 +438,7 @@ export function createCompactionSaveService(deps = {}) {
       };
     }
 
-    const saved = await persistFn({
+    const saved = await saveFn({
       company_id: companyId,
       agent_id: agentId,
       key: payload.key,
@@ -465,7 +465,7 @@ export function createCompactionSaveService(deps = {}) {
         status: 'rejected',
         error_code: saved.reason,
         quality_score: saved.quality_score,
-        reasoning: `Compaction full save was rejected by persistMemory quality gate: ${saved.reason}.`,
+        reasoning: `Compaction full save was rejected by the canonical SAVE owner: ${saved.reason}.`,
         source_knowledge: 'persist-memory.js + compaction-save.js',
       });
       return {

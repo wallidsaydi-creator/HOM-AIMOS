@@ -9,12 +9,16 @@
 import { createHash } from 'node:crypto';
 
 import { canonicalJson } from '../security/agent-identity.js';
-import { logEvent, readVerifiedEventById } from '../observe/event-ledger.js';
+import { logEvent, readVerifiedEventById, readVerifiedEventHistory } from '../observe/event-ledger.js';
+import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 
 const SCHEMA = 'aimos.tool-action/v1';
 const STARTED = 'tool_execution_started';
 const SUCCEEDED = 'tool_execution_succeeded';
 const FAILED = 'tool_execution_failed';
+const INDETERMINATE = 'tool_execution_indeterminate';
+const TERMINAL = 'tool_execution_terminal';
+const MAX_RECOVERY_EVENTS = 100_000;
 
 function sha256Canonical(value) {
   return createHash('sha256').update(canonicalJson(value ?? null), 'utf8').digest('hex');
@@ -84,10 +88,14 @@ export async function beginToolAction({
   });
 }
 
-export async function finishToolAction({ action, executionContext, succeeded, result = null, error = null } = {}) {
+export async function finishToolAction({ action, executionContext, succeeded, disposition = null, result = null, error = null } = {}) {
   if (!action?.receipt?.event_id || !action?.authority) throw new Error('tool_action_start_receipt_required');
-  const operation = succeeded ? SUCCEEDED : FAILED;
-  return logEvent(action.authority.companyId, action.authority.runtimeAgentId, operation, action.authority.tool, {
+  const normalizedDisposition = String(disposition || (succeeded ? 'SUCCEEDED' : 'FAILED')).toUpperCase();
+  if (!['SUCCEEDED', 'FAILED', 'INDETERMINATE'].includes(normalizedDisposition)) {
+    throw new Error('tool_action_terminal_disposition_invalid');
+  }
+  const operation = TERMINAL;
+  return logEvent(action.authority.companyId, action.authority.runtimeAgentId, operation, action.receipt.event_id, {
     schema: SCHEMA,
     tool_action_event_id: action.receipt.event_id,
     tool: action.authority.tool,
@@ -96,11 +104,115 @@ export async function finishToolAction({ action, executionContext, succeeded, re
     actor_agent_id: action.authority.actorAgentId,
     actor_valid_from: action.authority.actorValidFromIso,
     actor_identity_tier: action.authority.actorIdentityTier,
-    outcome_sha256: sha256Canonical(succeeded ? result : String(error || 'unknown_error')),
-    outcome: succeeded ? 'succeeded' : 'failed',
+    outcome_sha256: sha256Canonical(normalizedDisposition === 'SUCCEEDED' ? result : String(error || 'unknown_error')),
+    outcome: normalizedDisposition.toLowerCase(),
+    disposition: normalizedDisposition,
     reasoning: `Housekeeper signed the terminal ${operation} outcome for the exact derived tool action.`,
     source_knowledge: 'tool-action-ledger.js — append-only signed tool outcome',
-  }, action.receipt.event_id, { authority: executionContext, returnReceipt: true });
+  }, action.receipt.event_id, {
+    authority: executionContext,
+    returnReceipt: true,
+    exclusiveOperationKey: true,
+  });
+}
+
+export function reconstructToolActionTraces(rows = []) {
+  if (!Array.isArray(rows) || rows.length > MAX_RECOVERY_EVENTS) throw new Error('tool_action_recovery_limit');
+  const actions = new Map();
+  for (const row of rows) {
+    if (![STARTED, TERMINAL, SUCCEEDED, FAILED, INDETERMINATE].includes(row?.operation)) continue;
+    const metadata = rowMetadata(row);
+    if (metadata.schema !== SCHEMA) continue;
+    if (row.operation === STARTED) {
+      const startId = String(row.id || row.event_id || '');
+      const action = actions.get(startId) || { actionId: startId, start: null, terminal: null };
+      if (!startId || action.start) throw new Error('tool_action_start_fork');
+      action.start = row;
+      actions.set(startId, action);
+      continue;
+    }
+    const startId = String(metadata.tool_action_event_id || '');
+    const action = actions.get(startId) || { actionId: startId, start: null, terminal: null };
+    if (action.terminal) throw new Error('tool_action_terminal_fork');
+    action.terminal = row;
+    actions.set(startId, action);
+  }
+  const values = [...actions.values()].sort((left, right) => left.actionId.localeCompare(right.actionId));
+  for (const action of values) {
+    if (!action.start) throw new Error('tool_action_terminal_without_start');
+    if (!action.terminal) continue;
+    const metadata = rowMetadata(action.terminal);
+    if (String(action.terminal.key || '') !== action.actionId
+        || String(action.terminal.parent_event_id || '') !== action.actionId
+        || metadata.args_sha256 !== rowMetadata(action.start).args_sha256
+        || metadata.tool !== rowMetadata(action.start).tool) {
+      throw new Error('tool_action_terminal_start_binding_invalid');
+    }
+  }
+  return Object.freeze({
+    complete: Object.freeze(values.filter((action) => action.terminal)),
+    open: Object.freeze(values.filter((action) => !action.terminal)),
+    timeComplexity: 'O(n)',
+    spaceComplexity: 'O(n)',
+  });
+}
+
+export async function reconcileOpenToolActions({
+  companyId = AIMOS_COMPANY_ID,
+  rows = null,
+  readHistoryFn = readVerifiedEventHistory,
+  finishFn = finishToolAction,
+} = {}) {
+  const load = async () => rows || readHistoryFn(companyId, { signerAgentId: 'housekeeper' });
+  const before = reconstructToolActionTraces(await load());
+  const reconciled = [];
+  for (const trace of before.open) {
+    const metadata = rowMetadata(trace.start);
+    const startId = String(trace.start.id || trace.start.event_id || '');
+    const mutationHash = typeof trace.start.mutation_hash === 'string'
+      ? trace.start.mutation_hash
+      : Buffer.from(trace.start.mutation_hash || []).toString('hex');
+    const action = Object.freeze({
+      receipt: Object.freeze({ event_id: startId, mutation_hash: mutationHash }),
+      authority: Object.freeze({
+        kind: 'verified_tool_action',
+        eventId: startId,
+        eventMutationHash: mutationHash,
+        tool: metadata.tool,
+        argsHash: metadata.args_sha256,
+        runtimeAgentId: metadata.runtime_agent_id,
+        actorAgentId: metadata.actor_agent_id,
+        actorValidFromIso: metadata.actor_valid_from,
+        actorIdentityTier: metadata.actor_identity_tier,
+        companyId: String(trace.start.company_id || companyId),
+        purposeAuthorizationSha256: metadata.purpose_authorization_sha256 || null,
+      }),
+    });
+    try {
+      const receipt = await finishFn({
+        action,
+        executionContext: null,
+        disposition: 'INDETERMINATE',
+        error: 'process_restart_orphan_reconciled_without_tool_replay',
+      });
+      reconciled.push(Object.freeze({ actionId: trace.actionId, receipt }));
+    } catch (error) {
+      if (error?.message !== 'event_operation_key_exists') throw error;
+      const raced = reconstructToolActionTraces(await load()).complete
+        .find((entry) => entry.actionId === trace.actionId);
+      if (!raced) throw new Error('tool_action_recovery_race_unverified');
+      reconciled.push(Object.freeze({ actionId: trace.actionId, existing: true }));
+    }
+  }
+  const after = reconstructToolActionTraces(await load());
+  return Object.freeze({
+    scanned: before.complete.length + before.open.length,
+    reconciled: Object.freeze(reconciled),
+    remainingOpen: after.open.length,
+    toolInvocationsReplayed: 0,
+    timeComplexity: 'O(n)',
+    spaceComplexity: 'O(n)',
+  });
 }
 
 export async function verifyToolActionAuthority(authority, {

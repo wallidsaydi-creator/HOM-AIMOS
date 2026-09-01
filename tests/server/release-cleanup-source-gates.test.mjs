@@ -146,6 +146,8 @@ test('CI fails closed and every external action is commit-pinned', () => {
     assert.ok(actions.length > 0);
     assert.equal(actions.every((revision) => /^[0-9a-f]{40}$/.test(revision)), true);
   }
+  assert.match(workflows[0], /node:\s*\[20, 24, 26\]/);
+  assert.match(workflows[1], /node-version:\s*26\.8\.1/);
   assert.doesNotMatch(read('package.json'), /grep -v ['"]OK\$['"] \|\| echo/);
 });
 
@@ -158,7 +160,8 @@ test('public dataset fetch is immutable and redistributable bytes stay untracked
   assert.doesNotMatch(download, /TODO|NOT YET CONFIGURED/);
   const ignore = read('.gitignore');
   assert.match(ignore, /eval\/data\/\*\.json/);
-  assert.match(ignore, /eval\/data\/canonical\//);
+  assert.match(ignore, /^eval\/data\/canonical\/\*$/m);
+  assert.match(ignore, /^!eval\/data\/canonical\/corpus-manifest\.json$/m);
   assert.match(ignore, /\.claude\//);
 });
 
@@ -166,5 +169,17 @@ test('obsolete paper draft and local package configuration are absent from the r
   assert.equal(existsSync(path.join(root, 'docs/security/Traceability Through a Cryptographic Ledger.pdf')), false);
   const npmIgnore = read('.npmignore');
   assert.match(npmIgnore, /^\.claude\/$/m);
+  assert.match(npmIgnore, /^engineering\/$/m);
+  assert.match(npmIgnore, /^baselines\/$/m);
   assert.match(npmIgnore, /^docs\/security\/\*\.pdf$/m);
+  assert.match(npmIgnore, /^paper\/\*\.aux$/m);
+  assert.match(npmIgnore, /^paper\/\*\.out$/m);
+  assert.match(npmIgnore, /^paper\/\*\.log$/m);
+});
+
+test('public repository builder requires manifest-to-git exact set equality', () => {
+  const builder = read('scripts/release/build-public-repository.mjs');
+  assert.match(builder, /public_release_source_untracked/);
+  assert.match(builder, /git', \['ls-files', '-z'\]/);
+  assert.match(builder, /public_release_git_tree_mismatch/);
 });

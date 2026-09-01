@@ -14,7 +14,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 import { agents } from '../services/orchestration/agent-store.js';
 import { runAgent, runAgentStream, extractConfidence } from '../services/orchestration/agent-runner.js';
-import { persistMemory } from '../services/write/persist-memory.js';
+import { executeCanonicalSave } from '../services/write/canonical-save-owner.js';
 import { providerStatus } from '../services/core/providers.js';
 import { resolveExecutionContext } from '../services/orchestration/governance-resolver.js';
 import { withSessionLane } from '../services/orchestration/session-runner.js';
@@ -45,9 +45,11 @@ import {
   coerceBoolean,
   mergeToolDeltas
 } from './agent-shared.js';
+import { materialEffectOwner, materialEffectProjectionHash } from '../services/security/material-effect-owner.js';
 import { getOperatorAgentId, isOperatorAgentId, normalizeOperatorAgentId } from '../services/security/system-config-store.js';
 import { syncGovernance } from './agent-management.js';
 import { getPermissions } from '../services/core/permissions.js';
+import { verifiedRequestAuthorityFromRequest } from '../services/security/auth-gate.js';
 
 const router = express.Router();
 const AGENT_RUN_TIMEOUT_MS = 120_000;
@@ -481,13 +483,49 @@ function buildHtmlBriefing({
 </html>`;
 }
 
-function saveHtmlBriefing(prompt = '', html = '') {
-  fs.mkdirSync(INTELLIGENCE_ARTIFACT_DIR, { recursive: true });
+async function saveHtmlBriefing(prompt = '', html = '', { executionContext = null, subjectAgentId = null } = {}) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-');
   const filename = `${stamp}-${sanitizeBriefingSlug(prompt)}.html`;
   const filepath = path.join(INTELLIGENCE_ARTIFACT_DIR, filename);
-  fs.writeFileSync(filepath, html, 'utf8');
-  return filepath;
+  const effect = await materialEffectOwner.begin({
+    kind: 'filesystem',
+    operation: 'intelligence_briefing_artifact',
+    targetIdentifier: `briefing:${filename}`,
+    inputProjection: { prompt, html },
+    subjectAgentId,
+    authority: executionContext,
+    parentEventId: executionContext?.requestAdmissionEventId || null,
+  });
+  try {
+    fs.mkdirSync(INTELLIGENCE_ARTIFACT_DIR, { recursive: true });
+    fs.writeFileSync(filepath, html, 'utf8');
+    const bytes = fs.readFileSync(filepath);
+    const stat = fs.statSync(filepath);
+    await materialEffectOwner.finish({
+      action: effect,
+      disposition: 'SUCCEEDED',
+      resultProjection: {
+        content_sha256: materialEffectProjectionHash(bytes.toString('utf8')),
+        byte_length: bytes.length,
+        mode: stat.mode & 0o777,
+        is_file: stat.isFile(),
+      },
+      resultClass: 'briefing_file_readback_verified',
+    });
+    return filepath;
+  } catch (error) {
+    try {
+      await materialEffectOwner.finish({
+        action: effect,
+        disposition: 'INDETERMINATE',
+        resultProjection: { error_class: error?.name || 'briefing_file_error' },
+        resultClass: 'briefing_file_state_not_proven',
+      });
+    } catch (terminalError) {
+      error.materialEffectTerminalError = terminalError?.message || String(terminalError);
+    }
+    throw error;
+  }
 }
 
 function buildCheckerPrompt({ userPrompt, specialistAgentId, specialistResponse }) {
@@ -530,6 +568,7 @@ async function runIntelligencePipeline({
   requestedModel,
   skipAimos,
   executionContext,
+  requestAuthority,
 }) {
   const specialistAgentId = specialistResolution.resolvedAgentId;
   const specialistExecutionResolution = {
@@ -677,20 +716,23 @@ async function runIntelligencePipeline({
     delegationChain,
     sources
   });
-  const artifactPath = saveHtmlBriefing(delegationPrompt, html);
+  const artifactPath = await saveHtmlBriefing(delegationPrompt, html, {
+    executionContext,
+    subjectAgentId: sourceAgentId,
+  });
 
   if (!skipAimos) {
     try {
-      await persistMemory({
+      await executeCanonicalSave({
         company_id: COMPANY,
-        agent_id: sourceAgentId,
+        agent_id: requestAuthority.agentId,
         key: `briefing:${Date.now()}`,
         value: artifactPath,
         scope: 'global',
         clearance_level: 5,
         memory_type: 'briefing_output',
         source: 'agent-execution.js',
-        mutation_authority: 'housekeeper'
+        mutation_authority: requestAuthority,
       });
     } catch (error) {
       console.warn('[agents] briefing persistence failed:', error.message);
@@ -763,6 +805,7 @@ async function executeAgentRun(params) {
     agentIdFromRoute,
     actorAgentId = agentIdFromRoute,
     credentialUseContext = {},
+    requestAuthority,
     prompt,
     routingPrompt,
     userPrompt,
@@ -957,7 +1000,8 @@ async function executeAgentRun(params) {
       sessionKey: normalizedSessionKey,
       runId,
       agentId: sourceAgentId,
-      model: FAST_LANE_MODEL
+      model: FAST_LANE_MODEL,
+      authority: credentialUseContext,
     }, async ({ queueWaitMs, sessionKey: lockedSessionKey }) => {
       runningAt = new Date().toISOString();
       onFastLaneClaimed({ runId, sourceAgentId, queueWaitMs });
@@ -987,7 +1031,8 @@ async function executeAgentRun(params) {
         peerId: peerId || null,
         intent: inferredIntent,
         authorizationTrajectory: fastAuthorizationTrajectory,
-        authorizationChainHash: null
+        authorizationChainHash: null,
+        authority: credentialUseContext,
       });
 
       return Promise.race([
@@ -1069,7 +1114,8 @@ async function executeAgentRun(params) {
         payload.response,
         0,
         result.contextCompaction?.keptItems ?? 0
-      )
+      ),
+      authority: credentialUseContext,
     });
 
     if (directiveId) {
@@ -1209,7 +1255,8 @@ async function executeAgentRun(params) {
     sessionKey: executionResolution.sessionKey || normalizedSessionKey,
     runId,
     agentId: intelligenceMode ? specialistAgentId : executionResolution.resolvedAgentId,
-    model: executionResolution.primaryModel
+    model: executionResolution.primaryModel,
+    authority: credentialUseContext,
   }, async ({ queueWaitMs, sessionKey: lockedSessionKey }) => {
     runningAt = new Date().toISOString();
     onRunning({ runId, sourceAgentId, queueWaitMs });
@@ -1232,7 +1279,8 @@ async function executeAgentRun(params) {
       peerId: executionResolution.peerId,
       intent: executionResolution.intent,
       authorizationTrajectory: executionResolution.authorizationTrajectory || resolution.authorizationTrajectory || [],
-      authorizationChainHash: executionResolution.authorizationChainHash || resolution.authorizationChainHash || null
+      authorizationChainHash: executionResolution.authorizationChainHash || resolution.authorizationChainHash || null,
+      authority: credentialUseContext,
     });
 
     return Promise.race([
@@ -1252,6 +1300,7 @@ async function executeAgentRun(params) {
             requestedModel: normalizedRequestedModel,
             skipAimos: effectiveSkipAimos,
             executionContext: credentialUseContext,
+            requestAuthority,
           })
         : agentRunner(executionResolution.resolvedAgentId, prompt, {
             skipAimos: effectiveSkipAimos,
@@ -1382,7 +1431,8 @@ async function executeAgentRun(params) {
       deliveryResponse,
       0,
       result.contextCompaction?.keptItems ?? 0
-    )
+    ),
+    authority: credentialUseContext,
   });
 
   if (!effectiveSkipAimos) {
@@ -1390,7 +1440,8 @@ async function executeAgentRun(params) {
       companyId: COMPANY,
       agentId: sourceAgentId,
       idempotencyKey,
-      response: finalPayload
+      response: finalPayload,
+      authority: credentialUseContext,
     });
   }
 
@@ -1452,6 +1503,7 @@ router.post('/:id/run', async (req, res, next) => {
       agentIdFromRoute: req.params.id,
       actorAgentId: targetAuthorization.actorAgentId,
       credentialUseContext: req.executionContext,
+      requestAuthority: verifiedRequestAuthorityFromRequest(req),
       ...body,
       agentRunner: runAgent
       // No hooks needed — JSON route has no lifecycle event side-effects
@@ -1509,14 +1561,17 @@ router.post('/:id/run', async (req, res, next) => {
         sourceAgentId,
         resolvedAgentId: null,
         error: err.message,
-        approvalRequestId: err?.toolApproval?.approvalRequestId || null
+        approvalRequestId: err?.toolApproval?.approvalRequestId || null,
+        authority: credentialUseContext,
       });
     } else if (runId) {
       await markRunFailed({
         runId,
         companyId: COMPANY,
         error: err.message,
-        lifecycleStatus: isTimeout ? 'timeout' : 'failed'
+        lifecycleStatus: isTimeout ? 'timeout' : 'failed',
+        sourceAgentId,
+        authority: credentialUseContext,
       });
     }
     if (directiveId) {
@@ -1627,6 +1682,7 @@ router.post('/:id/stream', async (req, res, next) => {
       agentIdFromRoute: req.params.id,
       actorAgentId: targetAuthorization.actorAgentId,
       credentialUseContext: req.executionContext,
+      requestAuthority: verifiedRequestAuthorityFromRequest(req),
       ...body,
       agentRunner: makeStreamRunner,
       hooks: {
@@ -1716,14 +1772,17 @@ router.post('/:id/stream', async (req, res, next) => {
         sourceAgentId,
         resolvedAgentId: null,
         error: err.message,
-        approvalRequestId: err?.toolApproval?.approvalRequestId || null
+        approvalRequestId: err?.toolApproval?.approvalRequestId || null,
+        authority: credentialUseContext,
       });
     } else if (runId) {
       await markRunFailed({
         runId,
         companyId: COMPANY,
         error: err.message,
-        lifecycleStatus: isTimeout ? 'timeout' : 'failed'
+        lifecycleStatus: isTimeout ? 'timeout' : 'failed',
+        sourceAgentId,
+        authority: credentialUseContext,
       });
     }
 

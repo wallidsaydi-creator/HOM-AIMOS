@@ -11,6 +11,7 @@ import {
 import { peekCachedCredential } from '../security/credential-cache.js';
 import { credentialLedger, credentialUseEvidenceHash } from '../security/credential-ledger.js';
 import { systemConfigStore } from '../security/system-config-store.js';
+import { materialEffectOwner } from '../security/material-effect-owner.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -61,7 +62,7 @@ async function githubRequest(target, operation, requestEvidence, useContext = {}
     if (!response.ok) {
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'failed',
+        outcome: response ? 'failed' : 'indeterminate',
         outcomeClass: 'github_api_rejected',
         errorClass: `http_${response.status}`,
         outcomeHash: credentialUseEvidenceHash({ status: response.status, responseHash: credentialUseEvidenceHash(json) }),
@@ -81,7 +82,7 @@ async function githubRequest(target, operation, requestEvidence, useContext = {}
     if (!terminalRecorded) {
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'failed',
+        outcome: response ? 'failed' : 'indeterminate',
         outcomeClass: response ? 'github_api_response_invalid' : 'github_api_transport_failed',
         errorClass: error?.name || 'github_api_failed',
         outcomeHash: credentialUseEvidenceHash({ status: response?.status || null, error: error?.message || String(error) }),
@@ -91,11 +92,35 @@ async function githubRequest(target, operation, requestEvidence, useContext = {}
   }
 }
 
-function runAppleScript(script) {
+async function runAppleScript(script, operation, useContext = {}) {
+  const effect = await materialEffectOwner.begin({
+    kind: 'process',
+    operation: `applescript_${operation}`,
+    targetIdentifier: `macos-applescript:${operation}`,
+    inputProjection: { script },
+    subjectAgentId: useContext.actorAgentId || 'housekeeper',
+    authority: useContext,
+    parentEventId: useContext.autonomousActionEventId || useContext.requestAdmissionEventId || null,
+  });
   return new Promise((resolve, reject) => {
     execFile('osascript', ['-e', script], { timeout: 10000 }, (err, stdout, stderr) => {
-      if (err) reject(new Error(stderr || err.message));
-      else resolve(stdout.trim());
+      if (err) {
+        const error = new Error(stderr || err.message);
+        void materialEffectOwner.finish({
+          action: effect,
+          disposition: 'INDETERMINATE',
+          resultProjection: { error_class: err?.name || 'applescript_error' },
+          resultClass: 'applescript_completion_not_proven',
+        }).then(() => reject(error), (terminalError) => reject(terminalError));
+      } else {
+        const result = stdout.trim();
+        void materialEffectOwner.finish({
+          action: effect,
+          disposition: 'SUCCEEDED',
+          resultProjection: { stdout: result },
+          resultClass: 'applescript_response',
+        }).then(() => resolve(result), (terminalError) => reject(terminalError));
+      }
     });
   });
 }
@@ -215,7 +240,7 @@ export async function salesforceListObjects({ limit = 50 } = {}, useContext = {}
     if (!res.ok) {
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'failed',
+        outcome: res ? 'failed' : 'indeterminate',
         outcomeClass: 'salesforce_api_rejected',
         errorClass: `http_${res.status}`,
         outcomeHash: credentialUseEvidenceHash({ status: res.status, responseHash: credentialUseEvidenceHash(json) }),
@@ -234,7 +259,7 @@ export async function salesforceListObjects({ limit = 50 } = {}, useContext = {}
     if (!terminalRecorded) {
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'failed',
+        outcome: res ? 'failed' : 'indeterminate',
         outcomeClass: res ? 'salesforce_api_response_invalid' : 'salesforce_api_transport_failed',
         errorClass: error?.name || 'salesforce_api_failed',
         outcomeHash: credentialUseEvidenceHash({ status: res?.status || null, error: error?.message || String(error) }),
@@ -293,7 +318,16 @@ export async function githubListMyPullRequests({ limit = 20 } = {}, useContext =
   }));
 }
 
-export async function imessageListChats({ limit = 10 } = {}) {
+export async function imessageRequestAccess(useContext = {}) {
+  const result = await runAppleScript(
+    'tell application "Messages" to count of chats',
+    'imessage_request_access',
+    useContext,
+  );
+  return Number.parseInt(result, 10) || 0;
+}
+
+export async function imessageListChats({ limit = 10 } = {}, useContext = {}) {
   const capped = Math.min(Math.max(toInt(limit, 10), 1), 100);
   const script = `
     tell application "Messages"
@@ -307,11 +341,11 @@ export async function imessageListChats({ limit = 10 } = {}) {
       return chatList
     end tell
   `;
-  const result = await runAppleScript(script);
+  const result = await runAppleScript(script, 'imessage_list_chats', useContext);
   return result.split(', ').filter(Boolean);
 }
 
-export async function imessageSearchContact({ query }) {
+export async function imessageSearchContact({ query }, useContext = {}) {
   if (!query) throw new Error('query is required');
   const safeQuery = escapeAppleScriptString(query);
   // Use Contacts.app — Messages.app "buddies" is deprecated on macOS 12+
@@ -331,11 +365,11 @@ export async function imessageSearchContact({ query }) {
       return matchResults
     end tell
   `;
-  const result = await runAppleScript(script);
+  const result = await runAppleScript(script, 'imessage_search_contact', useContext);
   return result.split(', ').filter(Boolean);
 }
 
-export async function contactsSearch({ query }) {
+export async function contactsSearch({ query }, useContext = {}) {
   if (!query) throw new Error('query is required');
   const safeQuery = escapeAppleScriptString(query);
   const script = `
@@ -354,7 +388,7 @@ export async function contactsSearch({ query }) {
       return results
     end tell
   `;
-  const result = await runAppleScript(script);
+  const result = await runAppleScript(script, 'contacts_search', useContext);
   return result
     .split(', ')
     .filter(Boolean)
@@ -368,7 +402,7 @@ export async function contactsSearch({ query }) {
     });
 }
 
-export async function imessageSend({ to, message }) {
+export async function imessageSend({ to, message }, useContext = {}) {
   if (!to || !message) throw new Error('to and message are required');
   const safe = escapeAppleScriptString(message);
 
@@ -395,7 +429,7 @@ export async function imessageSend({ to, message }) {
       end tell
     `;
     try {
-      const raw = await runAppleScript(lookupScript);
+      const raw = await runAppleScript(lookupScript, 'imessage_resolve_contact', useContext);
       const found = raw.split(', ').map(s => s.trim()).filter(Boolean);
       if (found.length === 0) throw new Error(`No contact found for "${to}" in Contacts.app`);
       handle = found[0];
@@ -418,7 +452,7 @@ export async function imessageSend({ to, message }) {
   `;
 
   try {
-    const result = await runAppleScript(script);
+    const result = await runAppleScript(script, 'imessage_send', useContext);
     if (result === "sent") return { success: true, sentTo: handle };
     throw new Error(result);
   } catch (err) {

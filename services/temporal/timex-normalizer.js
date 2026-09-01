@@ -1,11 +1,11 @@
 /**
  * timex-normalizer.js — Native temporal expression normalization
  *
- * Status: Live in /aimos/recall via native_paper_recall_operators; exported by
- * temporal/index.js.
+ * Status: Native structural projection in canonical /aimos/recall; exported by
+ * temporal/index.js. Rank influence is exactly zero pending calibration.
  * Runtime note: this file does not mutate memory, prune evidence, apply decay,
  * delete records, or call providers. In recall it contributes temporal parsing
- * signals to bounded native scoring only.
+ * structure to the signed native recall receipt only.
  *
  * Paper authority:
  * - 2010_SEMEVAL_StroetgenGertz_HeidelTime.pdf

@@ -11,8 +11,8 @@ import { createHash } from 'node:crypto';
 
 import { query } from '../../db/connection.js';
 import { getEmbedding } from '../core/embeddings.js';
-import { logEvent } from '../observe/event-ledger.js';
-import { recordSimilarityObservation, getAnisotropyStats } from './similarity-stats.js';
+import { logEvent, readVerifiedEventsByIds } from '../observe/event-ledger.js';
+import { getAnisotropyStats } from './similarity-stats.js';
 import {
   applyCalibrationSnapshot,
   getVerifiedCalibrationSnapshot,
@@ -32,7 +32,6 @@ import {
   applyDeepRecallOverrideRanking,
   compareDeepRecallOverride,
 } from './deep-recall-override.js';
-import { reinforceRetrievedPheromones } from '../temporal/retrieval-pheromone.js';
 import { detectEncodingStyle, rankByStyleMatch } from '../context/mnemonic-encoder.js';
 import {
   MULTI_STAGE_RETRIEVAL_CONTRACT,
@@ -45,7 +44,9 @@ import { quimLookup } from './quim-index.js';
 import { extractQueryEntityAnchors as extractEntities } from './query-entity-anchors.js';
 import {
   finalizeNativeRecall,
+  isNativeRecallCandidateMetadataEligible,
   openNativeRecallAdmissionSession,
+  openNativeRecallRequestSession,
 } from './native-recall.js';
 import { createRequestScopedContentStateAdmission } from './content-state-occurrence/request-admission.js';
 import { createRequestEpistemicEvidenceScope } from './content-state-occurrence/evidence-scope.js';
@@ -87,6 +88,51 @@ import {
   governCanaryRecallFinalClosure,
 } from '../security/canary-tracker.js';
 import { canonicalJson } from '../security/protocol/canonical-json.js';
+import {
+  normalizeTemporalExpressions,
+  temporalWindowFromTimex,
+} from '../temporal/timex-normalizer.js';
+import {
+  temporalFactHasBoundaries,
+  temporalFactState,
+} from '../temporal/temporal-knowledge-base.js';
+import { classifyTemporalQuestion } from '../temporal/temporal-kg-reasoning.js';
+import { intervalRelation } from '../temporal/temporal-graph-fusion.js';
+import {
+  createTimelineState,
+  narrativeTimelineRelation,
+} from '../temporal/multi-view-timeline.js';
+import {
+  allenRelation,
+  createIntervalEventUnit,
+  normalizeInterval,
+} from './interval-algebra-rag.js';
+import { parseSituatedContext } from './situated-qa-context.js';
+import { streamingQuestionPeriod } from '../temporal/streaming-qa-horizon.js';
+import {
+  classifyCourtTemporalReference,
+  normalizeCourtDateExpression,
+} from '../temporal/tempcourt-normalization.js';
+import { temporalClosure } from '../temporal/tempeval-merge-closure.js';
+import {
+  allenIntervalRelation,
+  detectTemporalQuestion,
+  temporalSignalRelation,
+} from '../temporal/tempquestions-intervals.js';
+import { evidenceCapsule, tokenCount } from './ember-retention-memory.js';
+import {
+  buildHippocampalIndex,
+  patternSeparation,
+  retrievalDemand,
+} from './ai-hippocampus-memory-system.js';
+
+function rethrowRecallBoundaryFailure(error) {
+  const reason = String(error?.message || '');
+  if (error?.rejected
+    || /(?:recall_(?:candidate|evidence|authority|admission)|portable_binding|topology|concept_ppr_result_outside_admitted_state_set)/.test(reason)) {
+    throw error;
+  }
+}
 
 export function partitionGraphCanaryDisclosure(
   memories = [],
@@ -136,6 +182,18 @@ const MAGMA_DORMANT_RUNTIME_DECISION = Object.freeze({
     .digest('hex'),
 });
 
+function readOnlyRecallPheromoneDecision(memories = []) {
+  return Object.freeze({
+    reinforced: false,
+    skipped: true,
+    reason: 'online_recall_is_read_only_pending_cr7_signed_action_owner',
+    memory_count: Array.isArray(memories) ? memories.length : 0,
+    edge_count: 0,
+    canonical_memory_changed: false,
+    ranking_math_changed: false,
+  });
+}
+
 function snapshotNativeGearboxMemory(memory = {}) {
   return Object.freeze({
     ...memory,
@@ -148,6 +206,66 @@ function snapshotNativeGearboxMemory(memory = {}) {
       ? Object.freeze({ ...memory.provenance_proof })
       : null,
     canary_admitted: true,
+  });
+}
+
+export const NATIVE_RECALL_EMBEDDING_CONTINUITY_SCHEMA =
+  'hom.aimos.native-recall-embedding-continuity/v1';
+
+function parseNativeRecallEmbedding(value) {
+  let vector = value;
+  if (typeof vector === 'string') {
+    try { vector = JSON.parse(vector); } catch { vector = null; }
+  }
+  if (!Array.isArray(vector) || vector.length !== 768) {
+    throw new Error('native_recall_embedding_continuity_invalid');
+  }
+  const normalized = vector.map(Number);
+  if (normalized.some((entry) => !Number.isFinite(entry))) {
+    throw new Error('native_recall_embedding_continuity_invalid');
+  }
+  return normalized;
+}
+
+export function buildNativeRecallEmbeddingContinuityDecision({
+  returnPath,
+  memories = [],
+} = {}) {
+  const members = memories.map((memory, ordinal) => {
+    const memoryId = String(memory?.id || memory?.memory_id || '').trim().toLowerCase();
+    if (!RECALL_GRAPH_LINK_UUID.test(memoryId)) {
+      throw new Error('native_recall_embedding_continuity_memory_id_invalid');
+    }
+    const vector = parseNativeRecallEmbedding(memory?.embedding);
+    return Object.freeze({
+      ordinal,
+      memory_id: memoryId,
+      embedding_sha256: createHash('sha256')
+        .update(Buffer.from(canonicalJson(vector), 'utf8'))
+        .digest('hex'),
+    });
+  });
+  const body = Object.freeze({
+    schema: NATIVE_RECALL_EMBEDDING_CONTINUITY_SCHEMA,
+    return_path: String(returnPath || ''),
+    selected_memory_count: members.length,
+    embedding_count: members.length,
+    embedding_dimension: 768,
+    ordered_embedding_set_sha256: createHash('sha256')
+      .update(Buffer.from(canonicalJson(members), 'utf8'))
+      .digest('hex'),
+    members: Object.freeze(members),
+    all_selected_memories_carry_embedding: true,
+    rank_authority: false,
+    candidate_membership_authority: false,
+    disclosure_authority: false,
+    canonical_memory_mutated: false,
+  });
+  return Object.freeze({
+    ...body,
+    decision_sha256: createHash('sha256')
+      .update(Buffer.from(canonicalJson(body), 'utf8'))
+      .digest('hex'),
   });
 }
 
@@ -741,8 +859,8 @@ async function selectAndLedgerEpistemicRecall({
         `SELECT id::text AS memory_id,
                 current_epistemic_label,
                 current_epistemic_confidence_milli,
-                current_epistemic_event_id::text
-                ${twinPrimePolicy ? ', embedding::text AS embedding' : ''}
+                current_epistemic_event_id::text,
+                embedding::text AS embedding
            FROM public.aimos_memories
           WHERE company_id = $1
             AND id = ANY($2::uuid[])`,
@@ -764,6 +882,7 @@ async function selectAndLedgerEpistemicRecall({
       current_epistemic_label: projection.current_epistemic_label,
       current_epistemic_confidence_milli: Number(projection.current_epistemic_confidence_milli || 0),
       current_epistemic_event_id: projection.current_epistemic_event_id || null,
+      embedding: projection.embedding ?? memory.embedding ?? null,
     } : memory;
   });
   const calibrated = calibrateEpistemicRecall({
@@ -1390,10 +1509,23 @@ async function calibrateAndFinalizeNativeRecallReturn({
   contentStateSelection = null,
   authority,
   epistemicDecisionHash,
+  graphEvidenceDecision = null,
+  structuralEvidenceDecision = null,
 } = {}) {
+  const embeddingContinuityDecision = buildNativeRecallEmbeddingContinuityDecision({
+    returnPath,
+    memories: securityClosure.memories,
+  });
+  const bodyWithEmbeddingContinuity = {
+    ...body,
+    recall_meta: {
+      ...(body.recall_meta || {}),
+      native_embedding_continuity: embeddingContinuityDecision,
+    },
+  };
   const calibrated = calibrateRecallRouteBody({
     queryText,
-    body,
+    body: bodyWithEmbeddingContinuity,
     runtimeBudget,
     responseLimit,
   });
@@ -1413,6 +1545,9 @@ async function calibrateAndFinalizeNativeRecallReturn({
     epistemicDecisionHash,
     securityClosureDecisionHash: securityClosure.decision.decision_sha256,
     returnProjectionDecision: projection,
+    graphEvidenceDecision,
+    structuralEvidenceDecision,
+    embeddingContinuityDecision,
   });
   return calibrated;
 }
@@ -1445,7 +1580,8 @@ export async function hydrateSemanticCacheStateReferences({
     `SELECT id, key, value, agent_id, memory_type, scope, source, clearance_level,
             retrieval_weight, created_at, updated_at, last_verified_at,
             verified_by, verification_basis, freshness_state, data_class,
-            credit_score, memory_tier, valid_from, valid_until
+            credit_score, memory_tier, valid_from, valid_until,
+            embedding::text AS embedding
        FROM public.aimos_memories
       WHERE company_id = $1
         AND id = ANY($2::uuid[])
@@ -1469,7 +1605,7 @@ function getMaxDataClassForClearance(clearanceLevel) {
   return ['public'];
 }
 
-function getAuthorizedRescueDataClasses(clearanceLevel, authorityCeiling) {
+export function getAuthorizedRecallDataClasses(clearanceLevel, authorityCeiling) {
   const order = ['public', 'internal', 'confidential', 'restricted'];
   const authorityIndex = order.indexOf(String(authorityCeiling || ''));
   if (authorityIndex < 0) throw new Error('recall_rescue_data_class_ceiling_invalid');
@@ -1485,15 +1621,263 @@ const RECALL_GRAPH_LINK_NEIGHBORS_PER_EXPANSION = 8;
 const RECALL_GRAPH_LINK_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 export const RECALL_GRAPH_LINK_BATCH_CONTRACT = Object.freeze({
-  schema: 'hom-aimos/recall-graph-link-batch/v1',
+  schema: 'hom-aimos/recall-graph-link-batch/v2',
   maximum_seed_states: RECALL_GRAPH_LINK_MAX_SEEDS,
   maximum_hops: RECALL_GRAPH_LINK_MAX_HOPS,
   maximum_neighbors_per_expansion: RECALL_GRAPH_LINK_NEIGHBORS_PER_EXPANSION,
   maximum_links_per_seed: RECALL_GRAPH_LINKS_PER_SEED,
-  database_round_trips: 1,
+  database_round_trips: 2,
   read_owner: 'shared_request_scoped_r4_session',
+  authority_requirement: 'verified_signed_event_and_exact_relational_parity',
   mutation_authority: false,
 });
+
+export const NATIVE_STRUCTURAL_RECALL_PROJECTION_CONTRACT = Object.freeze({
+  schema: 'hom-aimos/native-structural-recall-projection/v1',
+  maximum_candidate_states: 64,
+  maximum_closure_states: 16,
+  execution: 'native_structural_zero_rank_authority',
+  independent_vote_count: 0,
+  rank_influence: 0,
+  database_write_authority: false,
+  disclosure_authority: false,
+  retention_authority: false,
+});
+
+function countLabels(values = []) {
+  const counts = {};
+  for (const value of values) {
+    const label = String(value || 'unknown');
+    counts[label] = (counts[label] || 0) + 1;
+  }
+  return Object.freeze(Object.fromEntries(Object.entries(counts).sort(([a], [b]) => a.localeCompare(b))));
+}
+
+function candidateTemporalBoundary(memory = {}, referenceIso) {
+  const start = memory.valid_from || memory.created_at || memory.updated_at || referenceIso;
+  const end = memory.valid_until || start;
+  return Object.freeze({ start, end });
+}
+
+export function buildNativeStructuralRecallProjection({
+  queryText = '',
+  memories = [],
+  referenceTimeMs,
+} = {}) {
+  const numericReference = Number(referenceTimeMs);
+  if (!Number.isInteger(numericReference) || numericReference <= 0) {
+    throw new Error('native_structural_projection_reference_time_invalid');
+  }
+  const referenceDate = new Date(numericReference);
+  if (Number.isNaN(referenceDate.getTime())) {
+    throw new Error('native_structural_projection_reference_time_invalid');
+  }
+  const referenceIso = referenceDate.toISOString();
+  const states = (Array.isArray(memories) ? memories : [])
+    .slice(0, NATIVE_STRUCTURAL_RECALL_PROJECTION_CONTRACT.maximum_candidate_states)
+    .map((memory) => Object.freeze({
+      id: String(memory?.id || ''),
+      text: String(memory?.value || ''),
+      memory,
+      boundary: candidateTemporalBoundary(memory, referenceIso),
+    }))
+    .filter((state) => RECALL_GRAPH_LINK_UUID.test(state.id));
+
+  const timex = normalizeTemporalExpressions(queryText, { documentTime: referenceDate });
+  const queryWindow = timex.timexes.map(temporalWindowFromTimex).find(Boolean) || {
+    from: referenceIso,
+    to: referenceIso,
+    granularity: 'signed_request_time',
+  };
+  const queryInterval = { start: queryWindow.from, end: queryWindow.to };
+  const kbFacts = states.map((state) => temporalFactState({
+    subject: state.id,
+    predicate: 'retained_memory_occurrence',
+    object: state.memory.memory_type || 'memory',
+    start_time: state.boundary.start,
+    end_time: state.boundary.end,
+    source: state.memory.source || '',
+  }));
+  const graphRelations = states.map((state) => intervalRelation(state.boundary, queryInterval));
+  const timeline = createTimelineState({
+    events: states.map((state) => ({
+      id: state.id,
+      text: state.memory.memory_type || 'memory',
+      start: state.boundary.start,
+      end: state.boundary.end,
+    })),
+    timexes: timex.timexes.map((value, index) => ({ id: `q${index + 1}`, value: value.value })),
+  });
+  const timelineRelations = timeline.events.slice(1).map((event, index) =>
+    narrativeTimelineRelation(timeline.events[index], event));
+  const intervalUnits = states.map((state) => createIntervalEventUnit({
+    id: state.id,
+    content: state.memory.memory_type || 'memory',
+    start: state.boundary.start,
+    end: state.boundary.end,
+    source: state.memory.source || '',
+  }));
+  const allenRelations = intervalUnits.slice(1).map((event, index) =>
+    allenRelation(intervalUnits[index], event));
+  const situated = parseSituatedContext(queryText, { referenceDate });
+  const streaming = streamingQuestionPeriod(queryText, { referenceDate });
+  const court = normalizeCourtDateExpression(queryText, { referenceDate });
+  const questionDetection = detectTemporalQuestion(queryText);
+  const questionSignals = temporalSignalRelation(queryText);
+  const questionAllenRelations = states.slice(1).map((state, index) => {
+    const left = normalizeInterval(states[index].boundary);
+    const right = normalizeInterval(state.boundary);
+    return allenIntervalRelation(left, right);
+  });
+  const closureStates = states.slice(0, NATIVE_STRUCTURAL_RECALL_PROJECTION_CONTRACT.maximum_closure_states);
+  const closureInput = closureStates.slice(1).map((state, index) => ({
+    from: closureStates[index].id,
+    to: state.id,
+    type: allenIntervalRelation(
+      normalizeInterval(closureStates[index].boundary),
+      normalizeInterval(state.boundary),
+    ),
+  }));
+  const closedRelations = temporalClosure(closureInput);
+  const capsules = states.map(evidenceCapsule);
+  const hippocampalIndex = buildHippocampalIndex(states);
+  const separated = patternSeparation(hippocampalIndex);
+
+  const internalEvidence = Object.freeze({
+    candidate_ids: states.map((state) => state.id),
+    timexes: timex.timexes,
+    invalid_timexes: timex.invalid,
+    kb_facts: kbFacts,
+    graph_relations: graphRelations,
+    timeline_relations: timelineRelations,
+    allen_relations: allenRelations,
+    situated_contexts: situated.contexts,
+    streaming_period: {
+      active_query: streaming.active_query,
+      ts: streaming.ts?.toISOString?.() || String(streaming.ts || ''),
+      te: streaming.te?.toISOString?.() || String(streaming.te || ''),
+      granularity: streaming.granularity,
+    },
+    court_expressions: court.expressions,
+    court_reference: classifyCourtTemporalReference(queryText),
+    question_detection: questionDetection,
+    question_signals: questionSignals,
+    question_allen_relations: questionAllenRelations,
+    temporal_closure: closedRelations,
+    capsules: capsules.map((capsule) => ({
+      id: capsule.id,
+      retrieval_key: capsule.retrieval_key,
+      token_count: capsule.token_count,
+    })),
+    hippocampal: {
+      episodes: hippocampalIndex.episodes.map((episode) => ({
+        id: episode.id,
+        paradigm: episode.paradigm,
+        stage: episode.stage,
+        cues: episode.cues,
+      })),
+      graph_edges: hippocampalIndex.graphEdges,
+      separation: [...separated.entries()].sort(([a], [b]) => a.localeCompare(b)),
+      demand: retrievalDemand(queryText),
+    },
+  });
+  const evidenceRoot = createHash('sha256')
+    .update(Buffer.from(canonicalJson(internalEvidence), 'utf8'))
+    .digest('hex');
+  const body = Object.freeze({
+    ...NATIVE_STRUCTURAL_RECALL_PROJECTION_CONTRACT,
+    reference_time: referenceIso,
+    candidate_count: states.length,
+    candidate_order_sha256: createHash('sha256')
+      .update(Buffer.from(canonicalJson(states.map((state) => state.id)), 'utf8'))
+      .digest('hex'),
+    evidence_root_sha256: evidenceRoot,
+    timex: Object.freeze({ expression_count: timex.timexes.length, invalid_count: timex.invalid.length }),
+    temporal_kb: Object.freeze({
+      fact_count: kbFacts.length,
+      bounded_fact_count: kbFacts.filter((fact) => temporalFactHasBoundaries(fact.fact)).length,
+    }),
+    temporal_kg: Object.freeze({ question_category: classifyTemporalQuestion(queryText) }),
+    temporal_graph: Object.freeze({ relation_counts: countLabels(graphRelations) }),
+    multi_view_timeline: Object.freeze({ event_count: timeline.events.length, relation_counts: countLabels(timelineRelations) }),
+    interval_algebra: Object.freeze({ bounded_interval_count: intervalUnits.filter((unit) => unit.interval.bounded).length, relation_counts: countLabels(allenRelations) }),
+    situated_context: Object.freeze({ context_count: situated.contexts.length, context_types: situated.context_types }),
+    streaming_horizon: Object.freeze({ active_query: streaming.active_query, granularity: streaming.granularity }),
+    tempcourt: Object.freeze({ expression_count: court.expressions.length, masked_reference_count: court.masked_references }),
+    tempeval: Object.freeze({ input_relation_count: closureInput.length, closed_relation_count: closedRelations.length }),
+    tempquestions: Object.freeze({ temporal: questionDetection.temporal, signal_count: questionSignals.length, relation_counts: countLabels(questionAllenRelations) }),
+    ember_budget: Object.freeze({ capsule_count: capsules.length, total_lexical_unit_count: capsules.reduce((sum, capsule) => sum + tokenCount(capsule.source_excerpt), 0) }),
+    hippocampus: Object.freeze({ episode_count: hippocampalIndex.episodes.length, cue_count: hippocampalIndex.cueToEpisodes.size, edge_count: hippocampalIndex.graphEdges.length, retrieval_demand: retrievalDemand(queryText) }),
+    candidate_order_changed: false,
+    candidate_membership_changed: false,
+    canonical_memory_mutated: false,
+    retention_changed: false,
+  });
+  return Object.freeze({
+    ...body,
+    decision_sha256: createHash('sha256')
+      .update(Buffer.from(canonicalJson(body), 'utf8'))
+      .digest('hex'),
+  });
+}
+
+function buildRecallGraphLinkDecision(fields = {}) {
+  const body = Object.freeze({ ...RECALL_GRAPH_LINK_BATCH_CONTRACT, ...fields });
+  return Object.freeze({
+    ...body,
+    decision_sha256: createHash('sha256')
+      .update(Buffer.from(canonicalJson(body), 'utf8'))
+      .digest('hex'),
+  });
+}
+
+function normalizeGraphPathEdges(value) {
+  const edges = typeof value === 'string' ? JSON.parse(value) : value;
+  if (!Array.isArray(edges) || !edges.length || edges.length > RECALL_GRAPH_LINK_MAX_HOPS) {
+    throw new Error('recall_graph_link_path_invalid');
+  }
+  return edges.map((edge) => {
+    const sourceId = String(edge?.source_memory_id || '').toLowerCase();
+    const targetId = String(edge?.target_memory_id || '').toLowerCase();
+    const authorityEventId = String(edge?.authority_event_id || '').toLowerCase();
+    const similarity = Number(edge?.similarity);
+    const edgeType = String(edge?.edge_type || '');
+    if (!RECALL_GRAPH_LINK_UUID.test(sourceId)
+      || !RECALL_GRAPH_LINK_UUID.test(targetId)
+      || !RECALL_GRAPH_LINK_UUID.test(authorityEventId)
+      || !Number.isFinite(similarity)
+      || !edgeType) {
+      throw new Error('recall_graph_link_path_invalid');
+    }
+    return Object.freeze({
+      source_memory_id: sourceId,
+      target_memory_id: targetId,
+      similarity,
+      edge_type: edgeType,
+      authority_event_id: authorityEventId,
+    });
+  });
+}
+
+function assertGraphEdgeEventParity(edge, event) {
+  const metadata = typeof event?.metadata === 'string' ? JSON.parse(event.metadata) : event?.metadata;
+  if (event?.operation === 'memory_cross_refs_seeded') {
+    const match = Array.isArray(metadata?.edges) && metadata.edges.some((candidate) =>
+      String(candidate?.source_memory_id || '').toLowerCase() === edge.source_memory_id
+      && String(candidate?.target_memory_id || '').toLowerCase() === edge.target_memory_id
+      && Number(candidate?.similarity) === edge.similarity);
+    if (match) return true;
+  }
+  if (event?.operation === 'spiced_graph_projection') {
+    const match = Array.isArray(metadata?.transitions) && metadata.transitions.some((transition) =>
+      String(transition?.source_memory_id || '').toLowerCase() === edge.source_memory_id
+      && String(transition?.target_memory_id || '').toLowerCase() === edge.target_memory_id
+      && Number(transition?.next?.similarity) === edge.similarity
+      && String(transition?.next?.edge_type || '') === edge.edge_type);
+    if (match) return true;
+  }
+  throw new Error('recall_graph_link_authority_relational_mismatch');
+}
 
 export async function readBatchedRecallGraphLinks({
   companyId,
@@ -1505,11 +1889,14 @@ export async function readBatchedRecallGraphLinks({
   const seedIds = [...new Set((Array.isArray(seedMemoryIds) ? seedMemoryIds : [])
     .map((value) => String(value || '').trim().toLowerCase()))];
   if (!company || typeof queryFn !== 'function') throw new Error('recall_graph_link_batch_inputs_invalid');
-  if (!seedIds.length) return Object.freeze({ linksBySeed: new Map(), decision: Object.freeze({
-    ...RECALL_GRAPH_LINK_BATCH_CONTRACT,
+  if (!seedIds.length) return Object.freeze({ linksBySeed: new Map(), decision: buildRecallGraphLinkDecision({
     seed_count: 0,
     row_count: 0,
     applied_hops: 0,
+    verified_edge_count: 0,
+    verified_authority_event_count: 0,
+    unsigned_edge_admission_count: 0,
+    edge_set_sha256: createHash('sha256').update(canonicalJson([])).digest('hex'),
   }) });
   if (seedIds.length > RECALL_GRAPH_LINK_MAX_SEEDS
     || seedIds.some((id) => !RECALL_GRAPH_LINK_UUID.test(id))) {
@@ -1520,43 +1907,63 @@ export async function readBatchedRecallGraphLinks({
     RECALL_GRAPH_LINK_MAX_HOPS,
   );
   const result = await queryFn(
-    `WITH RECURSIVE graph_walk(root_memory_id, memory_id, similarity, hop, path_ids) AS (
+    `WITH RECURSIVE graph_walk(root_memory_id, memory_id, similarity, hop, path_ids, path_edges) AS (
        SELECT seed.root_memory_id, edge.target_memory_id, edge.similarity, 1,
-              ARRAY[seed.root_memory_id, edge.target_memory_id]::uuid[]
+              ARRAY[seed.root_memory_id, edge.target_memory_id]::uuid[],
+              jsonb_build_array(jsonb_build_object(
+                'source_memory_id', seed.root_memory_id::text,
+                'target_memory_id', edge.target_memory_id::text,
+                'similarity', edge.similarity,
+                'edge_type', edge.edge_type,
+                'authority_event_id', edge.authority_event_id::text
+              ))
          FROM unnest($2::uuid[]) AS seed(root_memory_id)
          CROSS JOIN LATERAL (
-           SELECT cr.target_memory_id, cr.similarity
+           SELECT cr.target_memory_id, cr.similarity,
+                  cr.edge_type, cr.authority_event_id
              FROM memory_cross_refs cr
-            WHERE cr.company_id=$1 AND cr.source_memory_id=seed.root_memory_id
+            WHERE cr.company_id=$1
+              AND cr.source_memory_id=seed.root_memory_id
+              AND cr.authority_event_id IS NOT NULL
             ORDER BY cr.similarity DESC NULLS LAST, cr.target_memory_id
             LIMIT $4
          ) edge
        UNION ALL
        SELECT gw.root_memory_id, edge.target_memory_id, edge.similarity, gw.hop + 1,
-              gw.path_ids || edge.target_memory_id
+              gw.path_ids || edge.target_memory_id,
+              gw.path_edges || jsonb_build_array(jsonb_build_object(
+                'source_memory_id', gw.memory_id::text,
+                'target_memory_id', edge.target_memory_id::text,
+                'similarity', edge.similarity,
+                'edge_type', edge.edge_type,
+                'authority_event_id', edge.authority_event_id::text
+              ))
          FROM graph_walk gw
          CROSS JOIN LATERAL (
-           SELECT cr.target_memory_id, cr.similarity
+           SELECT cr.target_memory_id, cr.similarity,
+                  cr.edge_type, cr.authority_event_id
              FROM memory_cross_refs cr
-            WHERE cr.company_id=$1 AND cr.source_memory_id=gw.memory_id
+            WHERE cr.company_id=$1
+              AND cr.source_memory_id=gw.memory_id
+              AND cr.authority_event_id IS NOT NULL
             ORDER BY cr.similarity DESC NULLS LAST, cr.target_memory_id
             LIMIT $4
          ) edge
         WHERE gw.hop < $3 AND NOT edge.target_memory_id = ANY(gw.path_ids)
      ), deduplicated AS (
        SELECT DISTINCT ON (root_memory_id, memory_id)
-              root_memory_id, memory_id, similarity, hop
+              root_memory_id, memory_id, similarity, hop, path_edges
          FROM graph_walk
         ORDER BY root_memory_id, memory_id, hop ASC, similarity DESC NULLS LAST
      ), ranked AS (
-       SELECT root_memory_id, memory_id, similarity, hop,
+       SELECT root_memory_id, memory_id, similarity, hop, path_edges,
               row_number() OVER (
                 PARTITION BY root_memory_id
                 ORDER BY hop ASC, similarity DESC NULLS LAST, memory_id
               ) AS root_rank
          FROM deduplicated
      )
-     SELECT root_memory_id::text, memory_id::text, similarity, hop
+     SELECT root_memory_id::text, memory_id::text, similarity, hop, path_edges
        FROM ranked
       WHERE root_rank <= $5
       ORDER BY root_memory_id, root_rank`,
@@ -1570,8 +1977,22 @@ export async function readBatchedRecallGraphLinks({
   );
   const maximumRows = seedIds.length * RECALL_GRAPH_LINKS_PER_SEED;
   if (result.rows.length > maximumRows) throw new Error('recall_graph_link_batch_row_bound_exceeded');
+  const rows = result.rows.map((row) => Object.freeze({
+    ...row,
+    path_edges: Object.freeze(normalizeGraphPathEdges(row.path_edges)),
+  }));
+  const authorityEventIds = [...new Set(rows.flatMap((row) =>
+    row.path_edges.map((edge) => edge.authority_event_id)))].sort();
+  const verifiedEvents = await readVerifiedEventsByIds(authorityEventIds, company, { queryFn });
+  for (const row of rows) {
+    for (const edge of row.path_edges) {
+      const event = verifiedEvents.get(edge.authority_event_id);
+      if (!event) throw new Error('recall_graph_link_authority_missing');
+      assertGraphEdgeEventParity(edge, event);
+    }
+  }
   const linksBySeed = new Map(seedIds.map((id) => [id, []]));
-  for (const row of result.rows) {
+  for (const row of rows) {
     const rootId = String(row.root_memory_id || '').toLowerCase();
     const memoryId = String(row.memory_id || '').toLowerCase();
     if (!linksBySeed.has(rootId) || !RECALL_GRAPH_LINK_UUID.test(memoryId)) {
@@ -1581,14 +2002,24 @@ export async function readBatchedRecallGraphLinks({
       id: memoryId,
       similarity: Number(row.similarity),
       hop: Number(row.hop),
+      authority_event_ids: Object.freeze(row.path_edges.map((edge) => edge.authority_event_id)),
     }));
   }
   return Object.freeze({
     linksBySeed,
-    decision: Object.freeze({
-      ...RECALL_GRAPH_LINK_BATCH_CONTRACT,
+    decision: buildRecallGraphLinkDecision({
       seed_count: seedIds.length,
-      row_count: result.rows.length,
+      row_count: rows.length,
+      verified_edge_count: rows.reduce((sum, row) => sum + row.path_edges.length, 0),
+      verified_authority_event_count: verifiedEvents.size,
+      unsigned_edge_admission_count: 0,
+      edge_set_sha256: createHash('sha256').update(canonicalJson(rows.map((row) => ({
+        root_memory_id: String(row.root_memory_id).toLowerCase(),
+        memory_id: String(row.memory_id).toLowerCase(),
+        similarity: Number(row.similarity),
+        hop: Number(row.hop),
+        path_edges: row.path_edges,
+      })))).digest('hex'),
       requested_hops: Number(maxHops),
       applied_hops: hops,
     }),
@@ -1605,11 +2036,11 @@ const REQUIRED_FRESHNESS_COLUMNS = [
   'valid_from',
   'valid_until',
 ];
-async function ensureFreshnessSchema() {
+async function ensureFreshnessSchema(queryFn = query) {
   if (freshnessSchemaReady) return;
   if (!freshnessSchemaPromise) {
     freshnessSchemaPromise = (async () => {
-      const result = await query(
+      const result = await queryFn(
         `SELECT column_name
          FROM information_schema.columns
          WHERE table_name = 'aimos_memories'
@@ -1688,6 +2119,7 @@ function decorateCompactionHandoffMemory(row, index = 0) {
     valid_until: row.valid_until || parsed?.time_window?.valid_until || null,
     verified_by: row.verified_by || null,
     verification_basis: row.verification_basis || null,
+    embedding: row.embedding ?? null,
     rerank_score: Number(Math.max(0.85, confidence - index * 0.02).toFixed(3)),
     recall_confidence: confidence,
     confidence_source: 'heuristic_compaction_lane',
@@ -1752,7 +2184,8 @@ async function lookupPostCompactionHandoff({
   const result = await queryFn(
     `SELECT id, key, value, scope, memory_type, clearance_level, created_at, updated_at,
             credit_score, memory_tier, data_class, source, valid_from, valid_until,
-            freshness_state, verified_by, verification_basis
+            freshness_state, verified_by, verification_basis,
+            embedding::text AS embedding
        FROM aimos_memories
       WHERE ${filters.join('\n        AND ')}
       ORDER BY
@@ -1771,7 +2204,8 @@ async function lookupPostCompactionHandoff({
     const linked = await queryFn(
       `SELECT id, key, value, scope, memory_type, clearance_level, created_at, updated_at,
               credit_score, memory_tier, data_class, source, valid_from, valid_until,
-              freshness_state, verified_by, verification_basis
+              freshness_state, verified_by, verification_basis,
+              embedding::text AS embedding
          FROM aimos_memories
         WHERE company_id = $1
           AND key = $2
@@ -1790,7 +2224,23 @@ async function lookupPostCompactionHandoff({
   };
 }
 
-export async function executeNativeRecall(req, recallAuthority) {
+export async function executeCanonicalRecall({
+  req,
+  rawCommand,
+  executionContext,
+  requestAuthority,
+  transportBinding,
+} = {}) {
+  const session = await openNativeRecallRequestSession({
+    rawCommand,
+    executionContext,
+    requestAuthority,
+    transportBinding,
+  });
+  return executeNativeRecall(req, session.authority, { verifiedAdmissionSession: session });
+}
+
+export async function executeNativeRecall(req, recallAuthority, options = {}) {
   const { q, query: queryParam, scope, limit = 10, memory_type_filter, source_filter, max_hops, mode, selectivity, lazy, session_id, project_id, workspace_path, sort } = recallAuthority.command;
   const sessionLikePattern = session_id && typeof session_id === 'string' && session_id.trim()
     ? sessionKeyLikePattern(session_id)
@@ -1813,7 +2263,7 @@ export async function executeNativeRecall(req, recallAuthority) {
   let nativeGearboxEvaluationEvidence = null;
   let preConceptPprGearboxEvidence = null;
   const canaryClassificationMap = createCanaryContentClassificationMap();
-  let verifiedAdmissionSession = null;
+  let verifiedAdmissionSession = options.verifiedAdmissionSession || null;
   let contentStateOccurrenceAdmission = null;
 
   // ─── Recall Pipeline Tracer — per-stage timing (P0 #7) ─────────────────────
@@ -1888,8 +2338,6 @@ export async function executeNativeRecall(req, recallAuthority) {
       source_filter: source_filter || null,
       memory_type_filter: memory_type_filter || null,
     });
-    await ensureFreshnessSchema();
-    debugRecallPoint('freshness_schema_ready');
     const maxRows = Math.min(Math.max(Number(limit || 10), 1), 200);
     if (!searchQuery || typeof searchQuery !== 'string' || !searchQuery.trim()) {
       console.warn(`[RECALL-GUARD] Empty query from ${req.ip} | referer: ${req.headers.referer || 'none'} | user-agent: ${req.headers['user-agent'] || 'none'} | full URL: ${req.originalUrl}`);
@@ -1900,19 +2348,33 @@ export async function executeNativeRecall(req, recallAuthority) {
     // complete request. Every candidate-producing lane submits through this
     // owner. Proofs verified inside this exact repeatable-read snapshot may be
     // reused by peer gears; no proof persists beyond the request.
-    verifiedAdmissionSession = await openNativeRecallAdmissionSession({
-      authority: recallAuthority,
-    });
+    if (!verifiedAdmissionSession) {
+      verifiedAdmissionSession = await openNativeRecallAdmissionSession({
+        authority: recallAuthority,
+      });
+    }
+    await ensureFreshnessSchema(verifiedAdmissionSession.read);
+    debugRecallPoint('freshness_schema_ready');
     const calibrationSnapshot = await getVerifiedCalibrationSnapshot(company, {
       client: Object.freeze({ query: verifiedAdmissionSession.read }),
     });
-    const corpusMemoryCount = await getMemoryCount(company);
+    const corpusMemoryCount = await getMemoryCount(company, {
+      queryFn: verifiedAdmissionSession.read,
+      useCache: false,
+      failClosed: true,
+    });
     const requestEpistemicEvidenceScope = createRequestEpistemicEvidenceScope({
       queryFn: verifiedAdmissionSession.read,
     });
+    const filterNativeRecallProposals = (memories) => (
+      (Array.isArray(memories) ? memories : [])
+        .filter((memory) => isNativeRecallCandidateMetadataEligible(memory, recallAuthority))
+    );
     contentStateOccurrenceAdmission = createRequestScopedContentStateAdmission({
       authority: recallAuthority,
-      admitBatch: verifiedAdmissionSession.admit,
+      admitBatch: (memories) => verifiedAdmissionSession.admit(
+        filterNativeRecallProposals(memories),
+      ),
       evidenceScopeOwner: requestEpistemicEvidenceScope,
     });
 
@@ -2422,15 +2884,12 @@ export async function executeNativeRecall(req, recallAuthority) {
 
     // ─── Feature 6: Data classification filter ──────────────────────────────
     let dataClassClause = '';
-    const allowedClasses = getMaxDataClassForClearance(clearance);
-    const rescueAllowedDataClasses = getAuthorizedRescueDataClasses(
+    const allowedClasses = getAuthorizedRecallDataClasses(
       clearance,
       recallAuthority.dataClassCeiling,
     );
-    if (allowedClasses) {
-      params.push(allowedClasses);
-      dataClassClause = `AND COALESCE(data_class, 'public') = ANY($${params.length}::text[])`;
-    }
+    params.push(allowedClasses);
+    dataClassClause = `AND COALESCE(data_class, 'public') = ANY($${params.length}::text[])`;
 
     // ─── HYBRID BM25 + EMBEDDING RECALL ─────────────────────────────────────
     markStage('hybrid_vector_bm25');
@@ -2464,7 +2923,7 @@ export async function executeNativeRecall(req, recallAuthority) {
 
     const sortClause = isChronological ? 'created_at DESC' : 'distance ASC';
 
-    const result = await query(
+    const result = await verifiedAdmissionSession.read(
       `WITH vector_candidates AS (
          SELECT id, key, value, scope, memory_type, clearance_level, created_at, credit_score, memory_tier, decay_weight, data_class, source,
                 access_count, last_accessed_at, last_verified_at, verified_by, verification_basis, freshness_state,
@@ -2567,53 +3026,74 @@ export async function executeNativeRecall(req, recallAuthority) {
     // There is no boolean, ENV, shadow, or enforcement mode.
     markStage('quim_lookup');
     try {
-      const quimResults = await quimLookup(searchQuery, company, Math.min(candidateOpeningLimit, 10));
+      const quimResults = await quimLookup(
+        searchQuery,
+        company,
+        Math.min(candidateOpeningLimit, 10),
+        { queryFn: verifiedAdmissionSession.optionalRead },
+      );
       if (quimResults.length > 0) {
-          // Merge QuIM results with existing memories (deduplicate by ID)
-          for (const qr of quimResults) {
-            if (!seenIds.has(qr.id)) {
-              seenIds.add(qr.id);
-              // Fetch full memory content
-              const fullMem = await query(
-                `SELECT id, key, value, scope, memory_type, clearance_level, created_at,
-                        credit_score, memory_tier, data_class, source, access_count, last_accessed_at,
-                        last_verified_at, verified_by, verification_basis, freshness_state,
-                        COALESCE(retrieval_weight, 1.0) AS retrieval_weight
-                 FROM aimos_memories WHERE id = $1 AND company_id = $2`,
-                [qr.id, company]
-              );
-              if (fullMem.rows.length > 0) {
-                const row = fullMem.rows[0];
-                memories.push({
-                  id: row.id,
-                  key: row.key,
-                  value: row.value,
-                  scope: row.scope,
-                  memory_type: row.memory_type,
-                  clearance_level: row.clearance_level,
-                  created_at: row.created_at,
-                  credit_score: parseFloat(row.credit_score || 1.0),
-                  memory_tier: row.memory_tier || 'short-term',
-                  data_class: row.data_class || 'public',
-                  source: row.source || null,
-                  access_count: Number(row.access_count || 0),
-                  last_accessed_at: row.last_accessed_at || null,
-                  last_verified_at: row.last_verified_at || null,
-                  verified_by: row.verified_by || null,
-                  verification_basis: row.verification_basis || null,
-                  freshness_state: row.freshness_state || null,
-                  retrieval_weight: Math.max(0.1, Math.min(3, Number(row.retrieval_weight || 1))),
-                  retrieval_source: 'quim_lookup',
-                  graph_links: [],
-                  rerank_score: qr.score,
-                  quim_source: qr.source,
-                  quim_question: qr.question
-                });
-              }
-            }
+        const quimProposals = [];
+        for (const qr of quimResults) {
+          const fullMem = await verifiedAdmissionSession.optionalRead(
+            `SELECT id, agent_id, key, value, scope, memory_type, clearance_level, created_at,
+                    credit_score, memory_tier, data_class, source, access_count, last_accessed_at,
+                    last_verified_at, verified_by, verification_basis, freshness_state,
+                    COALESCE(retrieval_weight, 1.0) AS retrieval_weight,
+                    embedding::text AS embedding
+             FROM aimos_memories WHERE id = $1 AND company_id = $2`,
+            [qr.id, company],
+          );
+          if (fullMem.rows.length !== 1) throw new Error('quim_memory_hydration_missing_or_ambiguous');
+          const row = fullMem.rows[0];
+          if ((srcFilter && String(row.source || '') !== srcFilter)
+              || (typeFilter && String(row.memory_type || '') !== typeFilter)
+              || Number(row.clearance_level) > clearance
+              || (Array.isArray(allowedClasses)
+                && !allowedClasses.includes(String(row.data_class || 'public')))
+              || (Number(row.clearance_level) <= 2
+                && row.agent_id && String(row.agent_id) !== requestingAgent)) {
+            continue;
           }
+          quimProposals.push({
+            id: row.id,
+            agent_id: row.agent_id,
+            key: row.key,
+            value: row.value,
+            scope: row.scope,
+            memory_type: row.memory_type,
+            clearance_level: row.clearance_level,
+            created_at: row.created_at,
+            credit_score: parseFloat(row.credit_score || 1.0),
+            memory_tier: row.memory_tier || 'short-term',
+            data_class: row.data_class || 'public',
+            source: row.source || null,
+            access_count: Number(row.access_count || 0),
+            last_accessed_at: row.last_accessed_at || null,
+            last_verified_at: row.last_verified_at || null,
+            verified_by: row.verified_by || null,
+            verification_basis: row.verification_basis || null,
+            freshness_state: row.freshness_state || null,
+            retrieval_weight: Math.max(0.1, Math.min(3, Number(row.retrieval_weight || 1))),
+            embedding: row.embedding ?? null,
+            retrieval_source: 'quim_lookup',
+            graph_links: [],
+            rerank_score: qr.score,
+            quim_source: qr.source,
+            quim_question: qr.question,
+          });
+        }
+        const quimAdmission = await contentStateOccurrenceAdmission.admit(quimProposals);
+        recallBreadthPolicy.quim_admission_decision_sha256 =
+          quimAdmission.occurrence_admission_decision_sha256;
+        for (const memory of quimAdmission.memories) {
+          if (seenIds.has(memory.id)) continue;
+          seenIds.add(memory.id);
+          memories.push(memory);
+        }
       }
     } catch (_quimErr) {
+      rethrowRecallBoundaryFailure(_quimErr);
       console.warn('[recall] quim_lookup error (non-fatal):', _quimErr.message);
       if (_inst) skipStage('quim_lookup', 'error');
     }
@@ -2651,13 +3131,14 @@ export async function executeNativeRecall(req, recallAuthority) {
           entityParams.push(sessionLikePattern);
           entityClauses.push(`m.key LIKE $${entityParams.length} ESCAPE '\\'`);
         }
-        const entResult = await query(
+        const entResult = await verifiedAdmissionSession.optionalRead(
           `SELECT DISTINCT e.memory_id, m.key, m.value, m.scope, m.memory_type,
                   m.clearance_level, m.memory_tier, m.data_class, m.source,
                   m.created_at, m.credit_score,
                   m.access_count, m.last_accessed_at, m.last_verified_at,
                   m.verified_by, m.verification_basis, m.freshness_state,
                   COALESCE(m.retrieval_weight, 1.0) AS retrieval_weight,
+                  m.embedding::text AS embedding,
                   COUNT(*) OVER (PARTITION BY e.memory_id) as entity_hits
            FROM entity_memory_edges e
            JOIN aimos_memories m ON m.id = e.memory_id AND m.company_id = e.company_id
@@ -2686,6 +3167,7 @@ export async function executeNativeRecall(req, recallAuthority) {
           verification_basis: row.verification_basis || null,
           freshness_state: row.freshness_state || null,
           retrieval_weight: Math.max(0.1, Math.min(3, Number(row.retrieval_weight || 1))),
+          embedding: row.embedding ?? null,
           retrieval_source: 'entity_graph',
           graph_links: [],
         }));
@@ -2718,15 +3200,13 @@ export async function executeNativeRecall(req, recallAuthority) {
       Math.max(Number.isFinite(requestedHops) ? requestedHops : recallBreadthPolicy.graph_hops, 0),
       4
     );
+    const verifiedGraphLinkCounts = new Map();
     if (hops > 0) {
       markStage('recursive_graph_walk');
     } else {
       skipStage('recursive_graph_walk', 'intent_policy_graph_hops_zero');
     }
-    for (const row of result.rows) {
-      if (seenIds.has(row.id)) continue;
-      seenIds.add(row.id);
-      const mem = {
+    const baseProposals = result.rows.map((row) => ({
         id: row.id,
         key: row.key,
         value: row.value,
@@ -2751,9 +3231,17 @@ export async function executeNativeRecall(req, recallAuthority) {
         bm25_rank: Number(row.bm25_rank || 0),
         key_similarity: Number(row.key_similarity || 0),
         hybrid_distance: Number(row.distance),
-        graph_links: []
-      };
-      memories.push(mem);
+        graph_links: [],
+      }));
+    const baseAdmission = baseProposals.length
+      ? await contentStateOccurrenceAdmission.admit(baseProposals)
+      : { memories: [], occurrence_admission_decision_sha256: null };
+    recallBreadthPolicy.base_admission_decision_sha256 =
+      baseAdmission.occurrence_admission_decision_sha256;
+    for (const memory of baseAdmission.memories) {
+      if (seenIds.has(memory.id)) continue;
+      seenIds.add(memory.id);
+      memories.push(memory);
     }
     debugRecallPoint('base_memory_build_done', {
       memories: memories.length,
@@ -2815,9 +3303,10 @@ export async function executeNativeRecall(req, recallAuthority) {
         }
         rescueParams.push(recallBreadthPolicy.bm25_limit);
         const rescueLimitIdx = rescueParams.length;
-        const bm25Result = await query(
+        const bm25Result = await verifiedAdmissionSession.optionalRead(
           `SELECT id, key, value, scope, memory_type, clearance_level, created_at, credit_score, memory_tier, decay_weight,
                   data_class, source, access_count, last_accessed_at,
+                  embedding::text AS embedding,
                   ts_rank(search_vector, to_tsquery('english', $3)) as bm25_score
            FROM aimos_memories
            WHERE ${rescueClauses.join(' AND ')}
@@ -2829,10 +3318,7 @@ export async function executeNativeRecall(req, recallAuthority) {
           rescueParams
         );
 
-        for (const row of bm25Result.rows) {
-          if (!seenIds.has(row.id)) {
-            seenIds.add(row.id);
-            memories.push({
+        const bm25Proposals = bm25Result.rows.map((row) => ({
               id: row.id,
               key: row.key,
               value: row.value,
@@ -2846,14 +3332,24 @@ export async function executeNativeRecall(req, recallAuthority) {
               source: row.source || null,
               access_count: Number(row.access_count || 0),
               last_accessed_at: row.last_accessed_at || null,
+              embedding: row.embedding ?? null,
               retrieval_source: 'bm25_pass',
               bm25_score: parseFloat(row.bm25_score || 0),
-              graph_links: []
-            });
-          }
+              graph_links: [],
+            }));
+        const bm25Admission = bm25Proposals.length
+          ? await contentStateOccurrenceAdmission.admit(bm25Proposals)
+          : { memories: [], occurrence_admission_decision_sha256: null };
+        recallBreadthPolicy.bm25_rescue_admission_decision_sha256 =
+          bm25Admission.occurrence_admission_decision_sha256;
+        for (const memory of bm25Admission.memories) {
+          if (seenIds.has(memory.id)) continue;
+          seenIds.add(memory.id);
+          memories.push(memory);
         }
       }
     } catch (_bm25Err) {
+      rethrowRecallBoundaryFailure(_bm25Err);
       // BM25 pass is best-effort — don't break recall
     }
     debugRecallPoint('bm25_rescue_done', { memories: memories.length, seen_ids: seenIds.size });
@@ -2892,10 +3388,11 @@ export async function executeNativeRecall(req, recallAuthority) {
         const identityPatternIdx = identityRescueParams.length;
         identityRescueParams.push(recallBreadthPolicy.identity_truth_rescue_limit);
         const identityLimitIdx = identityRescueParams.length;
-        const identityRescueResult = await query(
+        const identityRescueResult = await verifiedAdmissionSession.optionalRead(
           `SELECT m.id, m.key, m.value, m.scope, m.memory_type, m.clearance_level,
                   m.created_at, m.credit_score, m.memory_tier, m.decay_weight,
                   m.data_class, m.source, m.access_count, m.last_accessed_at,
+                  m.embedding::text AS embedding,
                   CASE
                     WHEN m.memory_type IN ('identity', 'core_belief', 'directive', 'event_log') THEN 0
                     WHEN LOWER(m.key) LIKE '%precompact%' OR m.memory_type = 'conversation_feed'
@@ -2912,14 +3409,8 @@ export async function executeNativeRecall(req, recallAuthority) {
         );
 
         let identityRescued = 0;
-        const identityRescueCandidateKeys = identityRescueResult.rows.map((row) => row.key).slice(0, 12);
         const identityRescueAddedKeys = [];
-        for (const row of identityRescueResult.rows) {
-          if (seenIds.has(row.id)) continue;
-          seenIds.add(row.id);
-          identityRescued += 1;
-          identityRescueAddedKeys.push(row.key);
-          memories.push({
+        const identityProposals = identityRescueResult.rows.map((row) => ({
             id: row.id,
             key: row.key,
             value: row.value,
@@ -2933,16 +3424,31 @@ export async function executeNativeRecall(req, recallAuthority) {
             source: row.source || null,
             access_count: Number(row.access_count || 0),
             last_accessed_at: row.last_accessed_at || null,
+            embedding: row.embedding ?? null,
             retrieval_source: 'identity_truth_rescue',
             identity_source_rank: Number(row.identity_source_rank || 0),
             identity_body_length: Number(row.identity_body_length || 0),
-            graph_links: []
-          });
+            graph_links: [],
+          }));
+        const identityAdmission = identityProposals.length
+          ? await contentStateOccurrenceAdmission.admit(identityProposals)
+          : { memories: [], occurrence_admission_decision_sha256: null };
+        recallBreadthPolicy.identity_truth_rescue_admission_decision_sha256 =
+          identityAdmission.occurrence_admission_decision_sha256;
+        const identityRescueCandidateKeys = identityAdmission.memories
+          .map((memory) => memory.key).slice(0, 12);
+        for (const memory of identityAdmission.memories) {
+          if (seenIds.has(memory.id)) continue;
+          seenIds.add(memory.id);
+          identityRescued += 1;
+          identityRescueAddedKeys.push(memory.key);
+          memories.push(memory);
         }
         recallBreadthPolicy.identity_truth_rescued = identityRescued;
         recallBreadthPolicy.identity_truth_rescue_candidate_keys = identityRescueCandidateKeys;
         recallBreadthPolicy.identity_truth_rescue_added_keys = identityRescueAddedKeys.slice(0, 12);
       } catch (_identityRescueErr) {
+        rethrowRecallBoundaryFailure(_identityRescueErr);
         console.warn('[recall] identity truth rescue error (non-fatal):', _identityRescueErr.message);
         recallBreadthPolicy.identity_truth_rescue_error = _identityRescueErr.message;
       }
@@ -2984,10 +3490,11 @@ export async function executeNativeRecall(req, recallAuthority) {
         }
         rescueParams.push(recallBreadthPolicy.value_rescue_limit);
         const rescueLimitIdx = rescueParams.length;
-        const valueRescueResult = await query(
+        const valueRescueResult = await verifiedAdmissionSession.optionalRead(
           `SELECT m.id, m.key, m.value, m.scope, m.memory_type, m.clearance_level,
                   m.created_at, m.credit_score, m.memory_tier, m.decay_weight,
-                  m.data_class, m.source, m.access_count, m.last_accessed_at, vh.value_hit_count
+                  m.data_class, m.source, m.access_count, m.last_accessed_at,
+                  m.embedding::text AS embedding, vh.value_hit_count
            FROM aimos_memories m
            CROSS JOIN LATERAL (
              SELECT COUNT(*)::int AS value_hit_count
@@ -3001,10 +3508,7 @@ export async function executeNativeRecall(req, recallAuthority) {
           rescueParams
         );
 
-        for (const row of valueRescueResult.rows) {
-          if (!seenIds.has(row.id)) {
-            seenIds.add(row.id);
-            memories.push({
+        const valueRescueProposals = valueRescueResult.rows.map((row) => ({
               id: row.id,
               key: row.key,
               value: row.value,
@@ -3018,13 +3522,23 @@ export async function executeNativeRecall(req, recallAuthority) {
               source: row.source || null,
               access_count: Number(row.access_count || 0),
               last_accessed_at: row.last_accessed_at || null,
+              embedding: row.embedding ?? null,
               retrieval_source: 'lexical_value_rescue',
               value_hit_count: Number(row.value_hit_count || 0),
-              graph_links: []
-            });
-          }
+              graph_links: [],
+            }));
+        const valueRescueAdmission = valueRescueProposals.length
+          ? await contentStateOccurrenceAdmission.admit(valueRescueProposals)
+          : { memories: [], occurrence_admission_decision_sha256: null };
+        recallBreadthPolicy.value_rescue_admission_decision_sha256 =
+          valueRescueAdmission.occurrence_admission_decision_sha256;
+        for (const memory of valueRescueAdmission.memories) {
+          if (seenIds.has(memory.id)) continue;
+          seenIds.add(memory.id);
+          memories.push(memory);
         }
       } catch (_valueRescueErr) {
+        rethrowRecallBoundaryFailure(_valueRescueErr);
         console.warn('[recall] lexical value rescue error (non-fatal):', _valueRescueErr.message);
       }
     }
@@ -3075,10 +3589,11 @@ export async function executeNativeRecall(req, recallAuthority) {
           }
           siblingParams.push(24);
           const siblingLimitIdx = siblingParams.length;
-          const siblingResult = await query(
+          const siblingResult = await verifiedAdmissionSession.optionalRead(
             `SELECT m.id, m.key, m.value, m.scope, m.memory_type, m.clearance_level,
                     m.created_at, m.credit_score, m.memory_tier, m.decay_weight,
-                    m.data_class, m.source, m.access_count, m.last_accessed_at
+                    m.data_class, m.source, m.access_count, m.last_accessed_at,
+                    m.embedding::text AS embedding
              FROM aimos_memories m
              WHERE ${siblingClauses.join(' AND ')}
              ORDER BY m.created_at ASC, m.key ASC
@@ -3103,6 +3618,7 @@ export async function executeNativeRecall(req, recallAuthority) {
               source: row.source || null,
               access_count: Number(row.access_count || 0),
               last_accessed_at: row.last_accessed_at || null,
+              embedding: row.embedding ?? null,
               retrieval_source: 'benchmark_sibling_hydration',
               sibling_root: spec.root,
               graph_links: [],
@@ -3125,6 +3641,7 @@ export async function executeNativeRecall(req, recallAuthority) {
             contentStateOccurrenceAdmission.publicMetadata().decision_sha256;
         }
       } catch (_siblingErr) {
+        rethrowRecallBoundaryFailure(_siblingErr);
         console.warn('[recall] sibling hydration error (non-fatal):', _siblingErr.message);
       }
     }
@@ -3176,7 +3693,7 @@ export async function executeNativeRecall(req, recallAuthority) {
               'clearance_level <= $2',
               '(clearance_level > 2 OR agent_id = $3 OR agent_id IS NULL)',
             ];
-            scopedParams.push(rescueAllowedDataClasses);
+            scopedParams.push(allowedClasses);
             scopedClauses.push(`COALESCE(data_class, 'public') = ANY($${scopedParams.length}::text[])`);
             if (typeFilter) {
               scopedParams.push(typeFilter);
@@ -3195,10 +3712,10 @@ export async function executeNativeRecall(req, recallAuthority) {
           const qmdFtsScope = buildQmdScopedFilter();
           qmdFtsScope.scopedParams.push(tsqTerms);
           const qmdFtsQueryIdx = qmdFtsScope.scopedParams.length;
-          const qmdFtsResult = await query(
+          const qmdFtsResult = await verifiedAdmissionSession.optionalRead(
             `SELECT id, key, value, scope, memory_type, clearance_level, created_at,
                     credit_score, memory_tier, decay_weight, data_class, source,
-                    access_count, last_accessed_at,
+                    access_count, last_accessed_at, embedding::text AS embedding,
                     ts_rank(search_vector, to_tsquery('english', $${qmdFtsQueryIdx})) as fts_rank
              FROM aimos_memories
              WHERE ${qmdFtsScope.scopedClauses.join(' AND ')}
@@ -3218,10 +3735,10 @@ export async function executeNativeRecall(req, recallAuthority) {
           qmdKeyScope.scopedParams.push(...keyLikePatterns);
           const keyOrClauses = qmdKeyTerms.map((_, i) => `LOWER(key) LIKE $${qmdKeyFirstPatternIdx + i}`).join(' OR ');
           const metaOrClauses = qmdKeyTerms.map((_, i) => `LOWER(COALESCE(source,'')) LIKE $${qmdKeyFirstPatternIdx + i}`).join(' OR ');
-          const qmdKeyResult = await query(
+          const qmdKeyResult = await verifiedAdmissionSession.optionalRead(
             `SELECT id, key, value, scope, memory_type, clearance_level, created_at,
                     credit_score, memory_tier, decay_weight, data_class, source,
-                    access_count, last_accessed_at
+                    access_count, last_accessed_at, embedding::text AS embedding
              FROM aimos_memories
              WHERE ${qmdKeyScope.scopedClauses.join(' AND ')}
                    AND (${keyOrClauses} OR ${metaOrClauses})
@@ -3253,6 +3770,7 @@ export async function executeNativeRecall(req, recallAuthority) {
             data_class: row.data_class || 'public', source: row.source || null,
             access_count: Number(row.access_count || 0),
             last_accessed_at: row.last_accessed_at || null,
+            embedding: row.embedding ?? null,
             retrieval_source: row._source,
             graph_links: [],
           }));
@@ -3288,6 +3806,7 @@ export async function executeNativeRecall(req, recallAuthority) {
           }
         }
       } catch (qmdError) {
+        rethrowRecallBoundaryFailure(qmdError);
         recallBreadthPolicy.qmd_error = qmdError.message;
         console.warn('[recall] QMD auto-switch error:', qmdError.message);
       }
@@ -3309,12 +3828,14 @@ export async function executeNativeRecall(req, recallAuthority) {
           companyId: company,
           clearanceLevel: clearance,
           requestingAgent,
-          allowedDataClasses: rescueAllowedDataClasses,
+          allowedDataClasses: allowedClasses,
           memoryTypeFilter: typeFilter,
           sourceFilter: srcFilter,
           sessionLikePattern,
           limit: Math.min(candidateOpeningLimit, 10),
           admitEvidenceFn: contentStateOccurrenceAdmission.admit,
+          queryFn: verifiedAdmissionSession.optionalRead,
+          memoryCount: corpusMemoryCount,
         });
         const rescueMemoryById = new Map(memories.map((memory) => [String(memory.id), memory]));
         for (const hit of hydeResults) {
@@ -3339,6 +3860,7 @@ export async function executeNativeRecall(req, recallAuthority) {
         }
         recallBreadthPolicy.hyde_adaptation = MULTI_STAGE_RETRIEVAL_CONTRACT.hyde_implementation;
       } catch (hydeError) {
+        rethrowRecallBoundaryFailure(hydeError);
         recallBreadthPolicy.hyde_error = hydeError.message;
         console.warn('[recall] multi-stage HyDE fallback error (non-fatal):', hydeError.message);
       }
@@ -3503,9 +4025,18 @@ export async function executeNativeRecall(req, recallAuthority) {
       });
       for (const memory of memories) {
         memory.graph_links = graphLinkBatch.linksBySeed.get(String(memory.id).toLowerCase()) || [];
+        verifiedGraphLinkCounts.set(String(memory.id), memory.graph_links.length);
       }
       recallBreadthPolicy.graph_link_batch = graphLinkBatch.decision;
     }
+
+    const nativeStructuralProjection = buildNativeStructuralRecallProjection({
+      queryText: searchQuery,
+      memories,
+      referenceTimeMs: twinPrimeSignedRequestTimeMs,
+    });
+    recallBreadthPolicy.native_structural_projection_decision_sha256 =
+      nativeStructuralProjection.decision_sha256;
 
     let deepRecallOverrideSummary = annotateDeepRecallOverrides(memories, searchQuery, lexicalCalibration);
     const preEarlyExitDeepRecallOrder = applyDeepRecallOverrideRanking(memories);
@@ -3699,11 +4230,9 @@ export async function executeNativeRecall(req, recallAuthority) {
         annotateRecallRankDiagnostics(earlyDisclosureMemories);
         earlyRecallMeta.retrieval_frequency = annotateRetrievalFrequencyMetadata(earlyDisclosureMemories);
         earlyRecallMeta.rank_observability = buildRecallRankObservability(earlyDisclosureMemories);
-        earlyRecallMeta.pheromone_reinforcement = await reinforceRetrievedPheromones(earlyDisclosureMemories, {
-          companyId: company,
-          agentId: agent,
-          queryText: searchQuery,
-        });
+        earlyRecallMeta.pheromone_reinforcement =
+          readOnlyRecallPheromoneDecision(earlyDisclosureMemories);
+        earlyRecallMeta.native_structural_projection = nativeStructuralProjection;
         const earlyResponse = await calibrateAndFinalizeNativeRecallReturn({
           returnPath: 'adaptive_early_exit',
           queryText: searchQuery,
@@ -3714,6 +4243,8 @@ export async function executeNativeRecall(req, recallAuthority) {
           contentStateSelection: earlyStateSelection.decision,
           authority: recallAuthority,
           epistemicDecisionHash: epistemicReceiptDecisionHash(earlyEpistemic.decision),
+          graphEvidenceDecision: recallBreadthPolicy.graph_link_batch || null,
+          structuralEvidenceDecision: nativeStructuralProjection,
         });
         return { status: 200, body: earlyResponse };
       }
@@ -3735,7 +4266,12 @@ export async function executeNativeRecall(req, recallAuthority) {
           permanent_value_lowered: false,
         };
         if (memIds.length > 0) {
-          const salienceFrequencyResults = await evaluateSalienceFrequencyBatch(memIds, company);
+          const salienceFrequencyResults = await evaluateSalienceFrequencyBatch(memIds, company, {
+            memoryCount: corpusMemoryCount,
+            queryFn: verifiedAdmissionSession.optionalRead,
+            nowMs: twinPrimeSignedRequestTimeMs,
+            verifiedCrossRefCounts: verifiedGraphLinkCounts,
+          });
           salienceFrequencySummary = applySalienceFrequencyAnnotations(memories, salienceFrequencyResults);
         }
         recallBreadthPolicy.low_frequency_salience = {
@@ -3787,7 +4323,11 @@ export async function executeNativeRecall(req, recallAuthority) {
     try {
       const sessionKey = session_id || agent || company;
       if (sessionKey) {
-        const mvs = await checkContextSufficiency(sessionKey);
+        const mvs = await checkContextSufficiency(sessionKey, {
+          companyId: company,
+          queryFn: verifiedAdmissionSession.optionalRead,
+          memoryCount: corpusMemoryCount,
+        });
         if (mvs.needsMoreContext) {
           console.warn(`[recall] mvs-detector: context insufficient (mvs=${mvs.mvs}, depth=${mvs.historyDepth}) — consider deeper recall`);
         }
@@ -3825,6 +4365,7 @@ export async function executeNativeRecall(req, recallAuthority) {
                   memory_id: memory.id,
                   live_content_hash: memory.provenance_proof?.live_content_hash,
                 })),
+                queryFn: verifiedAdmissionSession.optionalRead,
               },
             )
           : [];
@@ -3840,6 +4381,7 @@ export async function executeNativeRecall(req, recallAuthority) {
           conceptPprStateSelection.decision.decision_sha256;
       }
     } catch (_pprErr) {
+      rethrowRecallBoundaryFailure(_pprErr);
       console.warn('[recall] concept-graph PPR error (non-fatal):', _pprErr.message);
     }
     debugRecallPoint('concept_graph_ppr_done', {
@@ -3962,7 +4504,10 @@ export async function executeNativeRecall(req, recallAuthority) {
     // using per-company sliding window statistics (similarity-stats.js).
     let anisotropyStats = null;
     try {
-      anisotropyStats = await getAnisotropyStats(company);
+      anisotropyStats = await getAnisotropyStats(company, {
+        queryFn: verifiedAdmissionSession.optionalRead,
+        useCache: false,
+      });
     } catch { /* best-effort */ }
 
     for (const mem of memories) {
@@ -3992,8 +4537,6 @@ export async function executeNativeRecall(req, recallAuthority) {
         semanticSignal = Math.max(0, Math.min(1, 1 / (1 + Math.exp(zScore))));
         // Blend with BM25 rerank: 60% anisotropy-corrected, 40% keyword
         semanticSignal = semanticSignal * 0.6 + rerank * 0.4;
-        // Record observation for future calibration (fire-and-forget)
-        recordSimilarityObservation(company, rawSim).catch(() => {});
       }
 
       // I1: Memory-type authority signal — knowledge outranks noise
@@ -4206,6 +4749,7 @@ export async function executeNativeRecall(req, recallAuthority) {
       },
       stages: {
         recall_breadth_policy: recallBreadthPolicy,
+        native_structural_projection: nativeStructuralProjection,
         effective_response_limit: effectiveMaxRows,
         candidate_opening_limit: candidateOpeningLimit,
         vector_candidate_limit: candidateLimit,
@@ -4264,11 +4808,7 @@ export async function executeNativeRecall(req, recallAuthority) {
       }
     };
 
-    const pheromoneReinforcement = await reinforceRetrievedPheromones(disclosureMemories, {
-      companyId: company,
-      agentId: agent,
-      queryText: searchQuery,
-    });
+    const pheromoneReinforcement = readOnlyRecallPheromoneDecision(disclosureMemories);
 
     const scoreComponents = {
       freshness_ranking_enabled: SPEED_CONFIG.temporalTruth.freshnessRankingEnabled,
@@ -4377,6 +4917,7 @@ export async function executeNativeRecall(req, recallAuthority) {
           },
         }),
         pheromone_reinforcement: pheromoneReinforcement,
+        native_structural_projection: nativeStructuralProjection,
         ...(useBoundedRecallProjection ? { body_projection_policy: 'bounded_lexical_window_for_non_full_detail_recall' } : {}),
         explain,
         ...(_inst && _stageTimings ? { stage_timings: _stageTimings } : {})
@@ -4412,6 +4953,8 @@ export async function executeNativeRecall(req, recallAuthority) {
       contentStateSelection: normalFinalStateSelection.decision,
       authority: recallAuthority,
       epistemicDecisionHash: epistemicReceiptDecisionHash(epistemicRecall.decision),
+      graphEvidenceDecision: recallBreadthPolicy.graph_link_batch || null,
+      structuralEvidenceDecision: nativeStructuralProjection,
     });
     debugRecallPoint('output_calibration_done', {
       memories: calibratedRecallResponse?.memories?.length || 0,

@@ -35,7 +35,7 @@ import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { query } from '../../db/connection.js';
 import { runProvider } from '../core/providers.js';
 import { logEvent } from '../observe/event-ledger.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -169,10 +169,9 @@ async function saveDreamConstraints(constraints, companyId) {
   const cid = companyId || COMPANY;
   const constraintsKey = `${DREAM_CONSTRAINTS_KEY_PREFIX}:${cid}`;
 
-  await persistMemory({
+  await executeHousekeeperCanonicalSave({
     company_id: cid,
     agent_id: 'dream-feedback',
-    mutation_authority: 'housekeeper',
     key: constraintsKey,
     value: JSON.stringify(constraints),
     scope: 'global',

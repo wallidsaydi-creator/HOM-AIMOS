@@ -130,7 +130,7 @@ function buildScopedSearch({
 const MEMORY_FIELDS = `id, key, value, scope, memory_type, clearance_level,
   created_at, credit_score, memory_tier, data_class, source, access_count,
   last_accessed_at, last_verified_at, verified_by, verification_basis,
-  freshness_state, retrieval_weight`;
+  freshness_state, retrieval_weight, embedding::text AS embedding`;
 
 async function admitRankedChannels(denseResults, sparseResults, admitEvidenceFn) {
   if (typeof admitEvidenceFn !== 'function') {

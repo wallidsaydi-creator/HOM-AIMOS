@@ -5,11 +5,15 @@ import dns from 'node:dns';
 import net from 'node:net';
 import { fetchWithTimeout } from '../services/orchestration/http.js';
 import { buildAimosMcpManifest } from '../services/orchestration/aimos-mcp-catalog.js';
-import { query } from '../db/connection.js';
+import { withTransaction } from '../db/connection.js';
+import { logEvent, readVerifiedEventById } from '../services/observe/event-ledger.js';
+import { verifiedRequestAuthorityFromRequest } from '../services/security/auth-gate.js';
+import { AIMOS_COMPANY_ID } from '../services/core/runtime-config.js';
+import { materialEffectOwner } from '../services/security/material-effect-owner.js';
 
 const router = express.Router();
 
-// In-memory cache hydrated from mcp_connections table on first access.
+// In-memory cache hydrated from verified signed connection events on first access.
 // Key: connection id (UUID), Value: connection object.
 const connections = new Map();
 let cacheHydrated = false;
@@ -17,25 +21,30 @@ let cacheHydrated = false;
 async function hydrateConnections() {
   if (cacheHydrated) return;
   try {
-    const result = await query(
-      `SELECT id, company_id, name, url, protocol, status, metadata,
-              COALESCE(last_error, '') AS last_error,
-              created_at, updated_at
-       FROM mcp_connections
-       WHERE status IN ('connected', 'error')`
-    );
-    for (const row of result.rows || []) {
-      connections.set(row.id, {
-        id: row.id,
-        companyId: row.company_id,
-        name: row.name,
-        url: row.url,
-        protocol: row.protocol || 'mcp',
-        status: row.status,
-        metadata: row.metadata || {},
-        lastError: row.last_error,
-        createdAt: row.created_at,
-        updatedAt: row.updated_at
+    const rows = await withTransaction(async (client) => {
+      const result = await client.query(
+        `SELECT DISTINCT ON (key) id FROM aimos_events
+          WHERE company_id = $1
+            AND operation IN ('mcp_connection_committed','mcp_connection_disconnected')
+            AND ledger_version = 1
+          ORDER BY key, ts DESC, signer_valid_from DESC, ledger_seq DESC LIMIT 200`,
+        [AIMOS_COMPANY_ID],
+      );
+      const verified = [];
+      for (const row of result.rows) {
+        verified.push(await readVerifiedEventById(row.id, AIMOS_COMPANY_ID, { client }));
+      }
+      return verified;
+    }, { restricted: true, client_id: AIMOS_COMPANY_ID, agent_id: 'housekeeper' });
+    for (const row of rows) {
+      if (row.operation === 'mcp_connection_disconnected') continue;
+      const metadata = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata;
+      if (metadata?.schema !== 'hom.aimos.mcp-connection/v1') throw new Error('mcp_connection_event_invalid');
+      connections.set(String(row.key), {
+        id: String(row.key), companyId: AIMOS_COMPANY_ID, name: metadata.name,
+        url: metadata.url, protocol: 'mcp', status: 'connected',
+        metadata: metadata.metadata || {}, headers: {}, eventId: row.id,
+        lastError: null, createdAt: row.ts, updatedAt: row.ts,
       });
     }
     cacheHydrated = true;
@@ -169,7 +178,18 @@ async function resolveConnection(id) {
   return conn;
 }
 
-async function callRemote(connection, path, options = {}) {
+async function callRemote(connection, path, options = {}, authority = null) {
+  const effect = await materialEffectOwner.begin({
+    kind: 'external',
+    operation: 'mcp_remote_call',
+    targetIdentifier: `mcp-connection:${connection.id}:${path}`,
+    inputProjection: { path, options },
+    subjectAgentId: authority?.actorAgentId || 'housekeeper',
+    authority,
+    parentEventId: authority?.requestAdmissionEventId || connection.eventId || null,
+  });
+  let terminalCommitted = false;
+  try {
   // R1 Step 7: re-validate at FETCH time. The stored URL is re-resolved and
   // re-checked so a DNS record that flipped to a private address after connect
   // (rebinding) is rejected before we ever open the socket.
@@ -185,12 +205,44 @@ async function callRemote(connection, path, options = {}) {
   }, 12_000);
   const payload = await res.json().catch(() => ({}));
   if (!res.ok) {
-    throw new Error(payload?.error || `Remote MCP error (${res.status})`);
+    await materialEffectOwner.finish({
+      action: effect,
+      disposition: 'FAILED',
+      resultProjection: { status: res.status, payload },
+      resultClass: 'mcp_remote_rejected',
+    });
+    terminalCommitted = true;
+    const error = new Error(payload?.error || `Remote MCP error (${res.status})`);
+    error.statusCode = res.status;
+    error.definiteRemoteRejection = true;
+    throw error;
   }
+  await materialEffectOwner.finish({
+    action: effect,
+    disposition: 'SUCCEEDED',
+    resultProjection: { status: res.status, payload },
+    resultClass: 'mcp_remote_response',
+  });
+  terminalCommitted = true;
   return payload;
+  } catch (error) {
+    if (!terminalCommitted) {
+      try {
+        await materialEffectOwner.finish({
+          action: effect,
+          disposition: 'INDETERMINATE',
+          resultProjection: { error_class: error?.name || 'mcp_remote_error' },
+          resultClass: 'mcp_remote_completion_not_proven',
+        });
+      } catch (terminalError) {
+        error.materialEffectTerminalError = terminalError?.message || String(terminalError);
+      }
+    }
+    throw error;
+  }
 }
 
-async function createConnectionFromBody(body = {}) {
+async function createConnectionFromBody(body = {}, authority = null) {
   const url = normalizeUrl(body?.url);
   const headers = body?.headers && typeof body.headers === 'object' ? body.headers : {};
   if (!url) {
@@ -200,8 +252,13 @@ async function createConnectionFromBody(body = {}) {
   }
 
   await assertSafeUrl(url);
+  if (Object.keys(headers).length) {
+    const error = new Error('inline MCP headers are forbidden; use the credential lifecycle owner');
+    error.statusCode = 400;
+    throw error;
+  }
 
-  const companyId = String(body?.company_id || 'hom').trim();
+  const companyId = AIMOS_COMPANY_ID;
   const name = String(body?.name || body?.url || url).trim();
   const id = randomUUID();
 
@@ -210,18 +267,16 @@ async function createConnectionFromBody(body = {}) {
   delete metadata.name;
   delete metadata.company_id;
 
-  // Persist to DB
-  await query(
-    `INSERT INTO mcp_connections (id, company_id, name, url, protocol, status, metadata)
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
-     ON CONFLICT (company_id, name) DO UPDATE SET
-       url = EXCLUDED.url,
-       protocol = EXCLUDED.protocol,
-       status = EXCLUDED.status,
-       metadata = EXCLUDED.metadata,
-       updated_at = NOW()`,
-    [id, companyId, name, url, 'mcp', 'connected', JSON.stringify(metadata)]
-  );
+  const receipt = await logEvent(companyId, authority?.agentId || 'housekeeper', 'mcp_connection_committed', id, {
+    schema: 'hom.aimos.mcp-connection/v1',
+    connection_id: id,
+    name,
+    url,
+    protocol: 'mcp',
+    status: 'connected',
+    metadata,
+    reasoning: 'The verified actor retained one SSRF-validated credential-free MCP connection projection.',
+  }, authority?.requestAdmissionEventId || null, { authority, returnReceipt: true });
 
   const connection = {
     id,
@@ -233,7 +288,8 @@ async function createConnectionFromBody(body = {}) {
     metadata,
     lastError: null,
     createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString()
+    updatedAt: new Date().toISOString(),
+    eventId: receipt.event_id,
   };
   connections.set(id, connection);
   return connection;
@@ -241,7 +297,7 @@ async function createConnectionFromBody(body = {}) {
 
 router.post('/connect', async (req, res) => {
   try {
-    const connection = await createConnectionFromBody(req.body);
+    const connection = await createConnectionFromBody(req.body, verifiedRequestAuthorityFromRequest(req));
     res.json({ success: true, connection });
   } catch (error) {
     res.status(error.statusCode || 500).json({ success: false, error: error?.message || String(error) });
@@ -252,7 +308,7 @@ router.post('/connections', async (req, res) => {
   const url = normalizeUrl(req.body?.url);
   if (!url) return res.status(400).json({ success: false, error: 'url is required' });
   try {
-    const connection = await createConnectionFromBody(req.body);
+    const connection = await createConnectionFromBody(req.body, verifiedRequestAuthorityFromRequest(req));
     res.json(connection);
   } catch (error) {
     res.status(error.statusCode || 500).json({ success: false, error: error?.message || String(error) });
@@ -272,10 +328,17 @@ router.get('/connections', async (req, res) => {
 router.delete('/connections/:id', async (req, res) => {
   const id = String(req.params.id || '').trim();
   try {
-    await query(
-      `UPDATE mcp_connections SET status = 'disconnected', updated_at = NOW() WHERE id = $1`,
-      [id]
-    );
+    await hydrateConnections();
+    const current = connections.get(id);
+    if (!current) return res.status(404).json({ success: false, error: 'connection not found' });
+    const authority = verifiedRequestAuthorityFromRequest(req);
+    await logEvent(AIMOS_COMPANY_ID, authority.agentId, 'mcp_connection_disconnected', id, {
+      schema: 'hom.aimos.mcp-connection/v1',
+      connection_id: id,
+      status: 'disconnected',
+      prior_event_id: current.eventId,
+      reasoning: 'The verified actor terminated one retained MCP connection projection.',
+    }, current.eventId || authority.requestAdmissionEventId, { authority, returnReceipt: true });
     connections.delete(id);
     res.json({ success: true, removed: true });
   } catch (error) {
@@ -290,11 +353,13 @@ router.get('/tools', async (req, res) => {
   }
   try {
     const connection = await resolveConnection(connectionId);
+    const authority = verifiedRequestAuthorityFromRequest(req);
     let payload;
     try {
-      payload = await callRemote(connection, '/mcp/tools', { method: 'GET' });
-    } catch {
-      payload = await callRemote(connection, '/tools', { method: 'GET' });
+      payload = await callRemote(connection, '/mcp/tools', { method: 'GET' }, authority);
+    } catch (error) {
+      if (!error?.definiteRemoteRejection || ![404, 405].includes(Number(error.statusCode))) throw error;
+      payload = await callRemote(connection, '/tools', { method: 'GET' }, authority);
     }
     res.json({ success: true, ...payload });
   } catch (error) {
@@ -313,17 +378,19 @@ router.post('/execute', async (req, res) => {
 
   try {
     const connection = await resolveConnection(connectionId);
+    const authority = verifiedRequestAuthorityFromRequest(req);
     let payload;
     try {
       payload = await callRemote(connection, '/mcp/execute', {
         method: 'POST',
         body: JSON.stringify({ tool, args })
-      });
-    } catch {
+      }, authority);
+    } catch (error) {
+      if (!error?.definiteRemoteRejection || ![404, 405].includes(Number(error.statusCode))) throw error;
       payload = await callRemote(connection, '/execute', {
         method: 'POST',
         body: JSON.stringify({ tool, args })
-      });
+      }, authority);
     }
     res.json({ success: true, ...payload });
   } catch (error) {

@@ -1,0 +1,87 @@
+{
+  "schema": "hom.aimos.p3-node26-qualification/v1",
+  "source_commit": "e50f81795f124564d581c43979f82fe0f399f7a7",
+  "node_executable": "private_machine_path_omitted",
+  "node_version": "v26.7.0",
+  "node_executable_sha256": "a9bd0630891c2dcdee70de88270fee2cc0c4a9e76495039dd3b4f91c5e6b71df",
+  "npm_executable": "sibling_of_selected_node_private_path_omitted",
+  "source_contract": {
+    "package_engine_node26": true,
+    "lock_engine_equal": true,
+    "brew_prefers_node26": true,
+    "installer_prefers_node26": true,
+    "genesis_accepts_node26": true,
+    "docs_declare_node26": true,
+    "github_ci_deferred": true
+  },
+  "installer_preflight": {
+    "passed": true,
+    "output_sha256": "906fee14b883b689c62ddf9e89774881b49c1e31c02a21d10d9c2bcbda22bfdd"
+  },
+  "p2_clean_tree": {
+    "passed": true,
+    "output_sha256": "adf9edeb3bb3daa5d612d04bb7e80331621a7ab9cdb864003a4712bc5962a0f2"
+  },
+  "service": {
+    "node_path": "private_machine_path_omitted",
+    "node_path_matches_auditor": true,
+    "node_version": "v26.7.0",
+    "node_executable_sha256": "a9bd0630891c2dcdee70de88270fee2cc0c4a9e76495039dd3b4f91c5e6b71df",
+    "configuration_sha256": "70fc4653fef906aa4d75e644126c5c9d9b9c704477bb8290071fb702007347cb",
+    "ready": true,
+    "scheduler_ready": true
+  },
+  "regressions": {
+    "source": {
+      "tests": 1003,
+      "passed_count": 1003,
+      "failed_count": 0,
+      "passed": true,
+      "output_sha256": "42cd172b48b6ea7367407cd7c87a7138ec9f2f97921c49ef869e03484c7238ea"
+    },
+    "benchmark": {
+      "tests": 13,
+      "passed_count": 13,
+      "failed_count": 0,
+      "passed": true,
+      "output_sha256": "d30798f4df4c593088673e9080f96724f50fa0f65cc684eab8c517e9a7a59177"
+    },
+    "lint": {
+      "passed": true,
+      "output_sha256": "4c06e2c5fd509d3f147046113b121fdb2f4b40e27ce221fece80fe5d3683e43b"
+    },
+    "architecture": {
+      "passed": true,
+      "output_sha256": "4b47b5f5418d0e1a5b3e37d612736ceb4feb9fed6537603e941f04ebaa47ad04"
+    },
+    "pipeline": {
+      "valid": true,
+      "total": 155,
+      "ok": 155,
+      "node": "v26.7.0",
+      "passed": true
+    }
+  },
+  "checks": {
+    "running_under_node26": true,
+    "source_contract_complete": true,
+    "installer_preflight_node26": true,
+    "p2_clean_tree_node26": true,
+    "service_uses_node26": true,
+    "service_binary_matches_auditor": true,
+    "service_ready": true,
+    "full_regression_node26": true
+  },
+  "checks_total": 8,
+  "checks_passed": 8,
+  "github_ci_changed": false,
+  "retained_failed_attempts": [
+    {
+      "stage": "qualification_artifact_serialization",
+      "runtime_judgment_completed": false,
+      "reason": "undefined_sanitizer_fields_rejected_by_canonical_json"
+    }
+  ],
+  "qualified": true,
+  "qualification_sha256": "7d43f603194d7858533a71bff56116a3336b34715cb0d4d6346194eba046662a"
+}

@@ -1,0 +1,185 @@
+{
+  "schema": "hom.aimos.mutmem-p2-closure-audit/v1",
+  "source_commit": "d6b99324f0df07449d1271f0c880f15545e9cc32",
+  "toolchain": {
+    "node": "v24.14.0",
+    "python": "3.14.2",
+    "cryptography": "49.0.0"
+  },
+  "source_files": [
+    {
+      "path": "verifiers/mutmem-v2/node/crypto-kernel.mjs",
+      "sha256": "d9423f66bad3eb8a690d86375c0e3b85ca50fbc6e8dde2699badf297fd072351"
+    },
+    {
+      "path": "verifiers/mutmem-v2/node/recall-verifier.mjs",
+      "sha256": "420791813394fbbfcea8cc547264edf3201d5ec8d5362d0ee9fae77225382e29"
+    },
+    {
+      "path": "verifiers/mutmem-v2/node/mutation-verifier.mjs",
+      "sha256": "17dc4c4a8d793d2926c2f62dbf80bb0068ff15f4a20e9839414005aff77971d1"
+    },
+    {
+      "path": "verifiers/mutmem-v2/python/crypto_kernel.py",
+      "sha256": "e414e14b01d9758cd9af6616d748b038968c6351a00730e9c3f98dd89f30d175"
+    },
+    {
+      "path": "verifiers/mutmem-v2/python/recall_verifier.py",
+      "sha256": "37d93d5362c20f6c15a7848a443a23a5567f18a1291d7f524e369ad450b62944"
+    },
+    {
+      "path": "verifiers/mutmem-v2/python/mutation_verifier.py",
+      "sha256": "986f83a0068d596f7b2fa6cd8c57e4fe5049a5c5e217ff27df73cbf75dafdb1d"
+    },
+    {
+      "path": "verifiers/mutmem-conformance/v2/p2-crypto-vectors.json",
+      "sha256": "0145cca96879adcae27c8909f11783d251842635c9400944106b4e7bcba2d184"
+    },
+    {
+      "path": "verifiers/mutmem-conformance/v2/p2-resource-measurement.json",
+      "sha256": "4436472084999c321c9f6d1893c0c68e18c3168acbaea8bcd606deab9f646cd8"
+    },
+    {
+      "path": "verifiers/mutmem-conformance/v2/p2-import-census.json",
+      "sha256": "275a10aa689ab9d991511fd4d879d5724a200111123fd6f6b080d1953b55cf20"
+    }
+  ],
+  "source_root_sha256": "4957840649ce432de2ca43c1766b6aacb7292456f49a3932d6285da33df997da",
+  "crypto_vectors": {
+    "file_sha256": "0145cca96879adcae27c8909f11783d251842635c9400944106b4e7bcba2d184",
+    "manifest_sha256": "8542e607f053b6e284b84ef4e2da3b8ece1aa91f79ee55e5f692e29ab48df034",
+    "recall_intended_n": 8,
+    "mutation_intended_n": 10
+  },
+  "resource_measurement": {
+    "root": "a704e7568bb1a586b29faa7030baa676a5e6ae18dc9e2ec176ae0fbf68570902",
+    "intended_n": 100000,
+    "passed": true
+  },
+  "import_census": {
+    "root": "f18361d42175fae88103f75b58161a65dab6e9bf011f11b5b796b20319a0bc77",
+    "source_commit": "d6b99324f0df07449d1271f0c880f15545e9cc32",
+    "source_file_count": 706,
+    "zero_production_runtime_importers": true
+  },
+  "clean_tree": {
+    "schema": "hom.aimos.mutmem-p2-clean-tree-audit/v1",
+    "lanes": [
+      {
+        "name": "recall_structural",
+        "intended_n": 39,
+        "node_exact": true,
+        "python_exact": true,
+        "cross_language_exact": true
+      },
+      {
+        "name": "mutation_structural",
+        "intended_n": 15,
+        "node_exact": true,
+        "python_exact": true,
+        "cross_language_exact": true
+      },
+      {
+        "name": "recall_cryptographic",
+        "intended_n": 8,
+        "node_exact": true,
+        "python_exact": true,
+        "cross_language_exact": true
+      },
+      {
+        "name": "mutation_cryptographic",
+        "intended_n": 10,
+        "node_exact": true,
+        "python_exact": true,
+        "cross_language_exact": true
+      }
+    ],
+    "intended_n": 72,
+    "passed": true,
+    "database_access": false,
+    "network_access": false,
+    "runtime_imports": false,
+    "output_sha256": "adf9edeb3bb3daa5d612d04bb7e80331621a7ab9cdb864003a4712bc5962a0f2"
+  },
+  "live": {
+    "recall_private_artifact_sha256": "f5b19f8cf5fc7ccd444f65417932cb53b6d4bf8e559047fc948b6cc85f2a9631",
+    "mutation_private_artifact_sha256": "64e723e3cae6c1bbdcdb7b0da7d5c0c4f80292f8e636c02d98200b41ee062c09",
+    "mutation_witness_set_sha256": "3860653fb82805e87b76ef7cdf47059555b1a645cf94f76dc2a2c92e00ba2910",
+    "recall_node_python_equal": true,
+    "recall_verified_signature_count": 6,
+    "mutations": [
+      {
+        "terminal_kind": "authorized_transition",
+        "bundle_sha256": "7b1302780672a97f5ff20e7db93cbc2312613f61749cc78077d5d9d2d9cd4a81",
+        "node_python_equal": true,
+        "verified_signature_count": 4
+      },
+      {
+        "terminal_kind": "signed_noop",
+        "bundle_sha256": "36e2c96fd9a6a4886e0801a7c762ba8a121179c9c8b86ec60e8d75af3ced2ba3",
+        "node_python_equal": true,
+        "verified_signature_count": 3
+      },
+      {
+        "terminal_kind": "occurrence_observation",
+        "bundle_sha256": "046a93589cb1ccbe7d95b0ddce932d68129d75fe559d0bfdea9100751e0e5971",
+        "node_python_equal": true,
+        "verified_signature_count": 3
+      }
+    ],
+    "passed": true
+  },
+  "regressions": {
+    "source": {
+      "tests": 1002,
+      "passed": true,
+      "failed": 0,
+      "output_sha256": "1378e27c8436ddfda6c18d401814123b6fd5543231c744c50f4fdcb9b77c9fc2"
+    },
+    "benchmark": {
+      "tests": 13,
+      "passed": true,
+      "failed": 0,
+      "output_sha256": "1558f1e11f3734e336a1eaea95afd954f538de54bed2229492c437f00839425c"
+    },
+    "lint": {
+      "passed": true,
+      "output_sha256": "4c06e2c5fd509d3f147046113b121fdb2f4b40e27ce221fece80fe5d3683e43b"
+    },
+    "architecture": {
+      "passed": true,
+      "output_sha256": "4b47b5f5418d0e1a5b3e37d612736ceb4feb9fed6537603e941f04ebaa47ad04"
+    },
+    "pipeline": {
+      "valid": true,
+      "total": 155,
+      "ok": 155,
+      "passed": true,
+      "output_sha256": "2799352c325ae654226c793ead738e1d13628b8c44ae1a587d802fb917be9e2c"
+    }
+  },
+  "retained_failed_attempts": [
+    {
+      "stage": "source_suite_toolchain_selection",
+      "observed_node": "v26.7.0",
+      "expected": "v20_or_v24",
+      "disposition": "failed_before_protocol_judgment_then_rerun_under_bound_node_24"
+    }
+  ],
+  "exit_criteria": {
+    "node_python_vector_parity": true,
+    "native_live_artifact_parity": true,
+    "runtime_database_independence": true,
+    "behavioral_not_regex": true,
+    "legacy_byte_parity": true,
+    "company_claim_exact": true,
+    "import_census_bound": true,
+    "clean_checkout_passed": true,
+    "complete_regression_passed": true,
+    "single_phase_status": true
+  },
+  "exit_criteria_total": 10,
+  "exit_criteria_passed": 10,
+  "p2_complete": true,
+  "closure_sha256": "49a555b94fa4ef99c9612b1037d538d2833d529bfa46a5764cb185d7a660927a"
+}

@@ -183,14 +183,8 @@ export async function detectRuleDivergence(companyId = COMPANY) {
  * Register a rule in the hierarchy.
  */
 export async function registerRule(id, description, level, isRepresented, isCausallyAccessible, companyId = COMPANY) {
-  await ensureSchema();
-  await query(
-    `INSERT INTO rule_hierarchy (id, company_id, description, level, is_represented, is_causally_accessible)
-     VALUES ($1, $2, $3, $4, $5, $6)
-     ON CONFLICT (id) DO UPDATE SET description = $3, level = $4,
-       is_represented = $5, is_causally_accessible = $6, last_modified_at = NOW()`,
-    [id, companyId, description, level, isRepresented, isCausallyAccessible]
-  );
+  void id; void description; void level; void isRepresented; void isCausallyAccessible; void companyId;
+  throw new Error('rule_hierarchy_mutation_retired_no_verified_caller');
 }
 
 /**

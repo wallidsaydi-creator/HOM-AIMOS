@@ -13,12 +13,13 @@
 // preference resolution is modified.
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Agnostic law: no hardcoded provider/model. Defaults resolve at runtime from
-// whichever adapter is configured via LLM_PROVIDER/LLM_MODEL env or provider-
-// specific env keys. "Whoever drives the car drives the car." — user.
+// Agnostic law: no hardcoded provider/model and no environment-owned selection.
+// The operator chooses a provider/model during onboarding; the master-signed
+// composite MODEL_PREFERENCE_* head is the only runtime selection authority.
+// Provider discovery verifies availability after selection and cannot choose.
 
-import { pickActiveProvider } from '../core/providers.js';
 import { systemConfigStore } from '../security/system-config-store.js';
+import { discoverActiveProviders } from '../core/providers.js';
 
 export const TASK_TYPES = Object.freeze(['chat', 'heavy', 'research', 'fast', 'coding']);
 export const FAST_HETEROGENEOUS_SERVING_SOURCE = 'Fast Heterogeneous Serving: Mixed-Scale LLM Allocation for SLO-Constrained Inference';
@@ -26,18 +27,6 @@ export const BRANCHLORA_SOURCE = 'Enhancing Multimodal Continual Instruction Tun
 export const DEEPSEEK_V32_SOURCE = 'DeepSeek-V3.2: Pushing the Frontier of Open Large Language Models';
 export const FRUGALGPT_PREFERENCE_SOURCE = 'FrugalGPT';
 export const SCALING_LAW_SOURCE = 'Scaling Laws for Neural Language Models';
-function activeDefault() {
-  try {
-    const { provider, model } = pickActiveProvider();
-    return {
-      provider: String(provider || '').trim().toLowerCase(),
-      model: String(model || '').trim()
-    };
-  } catch {
-    return { provider: '', model: '' };
-  }
-}
-
 function getAllowedTaskTypes() {
   return new Set(TASK_TYPES);
 }
@@ -55,7 +44,6 @@ export function getModelPreferences() {
 export function getModelPreference(taskType) {
   const normalized = normalizeTaskType(taskType);
   const prefix = `MODEL_PREFERENCE_${normalized.toUpperCase()}`;
-  const fallback = activeDefault();
   const signedComposite = systemConfigStore.readConfigString(prefix);
   if (signedComposite) {
     try {
@@ -71,9 +59,9 @@ export function getModelPreference(taskType) {
     }
   }
   return {
-    provider: String(fallback.provider || '').trim().toLowerCase(),
-    model: String(fallback.model || '').trim(),
-    authority: fallback.provider && fallback.model ? 'runtime_default' : 'unavailable',
+    provider: '',
+    model: '',
+    authority: 'unavailable',
   };
 }
 
@@ -92,8 +80,6 @@ export function buildModelAllocationDiagnostics({
   providerCapabilities = null,
 } = {}) {
   const inferredTaskType = classifyTaskType({ taskType, prompt });
-  const runtimeDefault = activeDefault();
-  const hasRuntimeDefault = Boolean(runtimeDefault?.provider && runtimeDefault?.model);
   const hasResolvedModel = Boolean(String(provider || '').trim() && String(model || '').trim());
   const capabilityProfile = providerCapabilities
     ? buildProviderCapabilityProfile({
@@ -114,12 +100,10 @@ export function buildModelAllocationDiagnostics({
     source_papers: [FAST_HETEROGENEOUS_SERVING_SOURCE, BRANCHLORA_SOURCE, DEEPSEEK_V32_SOURCE],
     allocation_source: preferenceFound === true
       ? 'signed_task_preference'
-      : hasRuntimeDefault
-        ? 'runtime_default'
-        : 'missing_provider_configuration',
+      : 'missing_signed_model_preference',
     task_type_inferred: inferredTaskType,
     preference_found: preferenceFound === null ? hasResolvedModel : Boolean(preferenceFound),
-    runtime_default_available: hasRuntimeDefault,
+    runtime_default_available: false,
     provider: provider || null,
     model: model || null,
     provider_capability_profile: capabilityProfile,
@@ -185,6 +169,7 @@ export function buildProviderCapabilityProfile({
       hardcoded_model_list_used: false,
       default_hidden_model_selected: false,
       live_discovery_required: true,
+      signed_selection_required: true,
       automatic_model_switching_enabled: false,
       model_weights_mutated: false,
     },
@@ -196,8 +181,13 @@ export function resolveModelForRequest({ taskType, prompt }) {
   const preference = getModelPreference(inferredTaskType);
   if (!preference.provider || !preference.model) {
     throw new Error(
-      '[resolveModelForRequest] No active provider configured. Set LLM_PROVIDER/LLM_MODEL or save a model preference first.'
+      `[resolveModelForRequest] No signed model preference for ${inferredTaskType}. Commit MODEL_PREFERENCE_${inferredTaskType.toUpperCase()} through set-system-config.js or installer onboarding.`
     );
+  }
+  const providerState = discoverActiveProviders()
+    .find((entry) => entry.provider === preference.provider);
+  if (!providerState?.active) {
+    throw new Error(`model_provider_unavailable:${preference.provider}:${providerState?.reason || 'unknown_provider'}`);
   }
   return {
     taskType: inferredTaskType,

@@ -22,7 +22,7 @@
  * material is reused so the certificate chain and signed history stay valid.
  *
  * The private-key path is
- * `os.homedir() + '/.aimos/agents/housekeeper.key'`, NEVER .env / process.env.
+ * the explicit installation context's agent-key root, NEVER .env / process.env.
  * Passphrase via keychain or interactive prompt at server boot (same pattern
  * as aimos_flag_signer + the original housekeeper).
  *
@@ -35,14 +35,14 @@
 
 import crypto from 'node:crypto';
 import path from 'node:path';
-import os from 'node:os';
+import { AIMOS_AGENT_KEY_ROOT } from '../core/runtime-config.js';
 import { loadAgentPrivkey, signPayload, signPayloadWithContext, getAgentCert, signRaw } from './agent-identity.js';
 import { cognitiveBaselineHash, cognitiveTransitionHash } from './protocol/mutmem-protocol.js';
 import { occurrenceSignatureMessageV3 } from './protocol/content-state-occurrence-v3.js';
 
 export const HOUSEKEEPER_SIGNER_CONSTANTS = Object.freeze({
   HOUSEKEEPER_AGENT_ID: 'housekeeper',
-  HOUSEKEEPER_KEY_PATH: path.join(os.homedir(), '.aimos', 'agents', 'housekeeper.key'),
+  HOUSEKEEPER_KEY_PATH: path.join(AIMOS_AGENT_KEY_ROOT, 'housekeeper.key'),
   IDENTITY_TIER_MASTER_SIGNED: 'T1',           // housekeeper cert signed by user master
   IDENTITY_TIER_SELF_SIGNED: 'T1_SYSTEM_SELF'  // housekeeper self-signed (genesis / pre-master)
 });
@@ -73,7 +73,7 @@ let cachedValidFromIso = null;
 
 /**
  * Load the housekeeper privkey from disk (cached after first call).
- * The path is derived from os.homedir(),
+ * The path is derived from the explicit installation context,
  * NEVER from process.env. Passphrase prompt handled inside loadAgentPrivkey
  * (keychain or interactive).
  *

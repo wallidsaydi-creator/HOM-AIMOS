@@ -34,11 +34,14 @@ const RESERVED = [9000, 9001];
 const SCANNED_EXTENSION = /\.(?:js|mjs|cjs|py|sh|sql|md|json|ya?ml)$/i;
 
 function isExactReservedPortGuard(rel, line) {
-  if (/!\[\s*9000,\s*9001(?:,\s*9100)?\s*\]\.includes\([A-Za-z_$][A-Za-z0-9_$.]*\)/.test(line.trim())) {
-    return true;
-  }
   if (rel === 'services/core/runtime-config.js') {
     return /^export const RESERVED_LEGACY_PORTS = Object\.freeze\(\[9000, 9001\]\);$/.test(line.trim());
+  }
+  if (rel === 'services/installation-context.js') {
+    return /^if \(!Number\.isInteger\(port\) \|\| port < 1024 \|\| port > 65535 \|\| \[9000, 9001, 9100\]\.includes\(port\)\) \{$/.test(line.trim());
+  }
+  if (rel === 'scripts/service/manage-user-service.mjs') {
+    return /^if \(!Number\.isInteger\(port\) \|\| port < 1024 \|\| port > 65535 \|\| \[9000, 9001\]\.includes\(port\)\) \{$/.test(line.trim());
   }
   if (rel === 'scripts/benchmark/run-isolated.mjs') {
     return /^if \(\[9000, 9001, 9100\]\.includes\(args\.port\)\) throw new Error\(`port \$\{args\.port\} is reserved by a live HOM service`\);$/.test(line.trim());

@@ -15,6 +15,7 @@
 import path from 'node:path';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
+import { createHash } from 'node:crypto';
 import { enrollMasterWithDeps, KC_SERVICE, KC_ACCOUNT_DEFAULT } from './lib.js';
 import { keychainGet, keychainSet } from './keychain.js';
 import * as identityDb from './db.js';
@@ -88,11 +89,29 @@ async function main() {
     kcService: KC_SERVICE,
     kcAccount,
     brainRoot: BRAIN_ROOT
-  });
+  }, { prepareOnly: true });
 
   if (!result.ok) {
     console.error(`[ERR] ${result.reason}`);
     process.exit(6);
+  }
+
+  const encryptedBlobSha256 = createHash('sha256').update(result.encryptedBlob, 'utf8').digest('hex');
+  const enrollmentStart = await identityDb.beginMasterEnrollment(result.masterRow, encryptedBlobSha256);
+  try {
+    if (result.needsKeychainWrite) {
+      await keychainSet(KC_SERVICE, kcAccount, result.encryptedBlob);
+    }
+    const observedBlob = await keychainGet(KC_SERVICE, kcAccount);
+    const observedHash = observedBlob
+      ? createHash('sha256').update(observedBlob, 'utf8').digest('hex')
+      : null;
+    if (observedHash !== encryptedBlobSha256) throw new Error('master_keychain_readback_mismatch');
+    await identityDb.commitMasterEnrollment(result.masterRow, enrollmentStart, observedHash);
+  } catch (error) {
+    try { await identityDb.markMasterEnrollmentIndeterminate(enrollmentStart, error); }
+    catch (traceError) { error.master_enrollment_terminal_error = traceError?.message || String(traceError); }
+    throw error;
   }
 
   console.log();

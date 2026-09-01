@@ -166,49 +166,7 @@ export async function initProjectionMatrix(
     console.error('[embedding-stability] initProjectionMatrix fetch error:', err.message);
   }
 
-  // Generate new matrix
-  const matrix = generateGaussianMatrix(dimensions, stableDimensions);
-  const hash = matrixHash(matrix);
-  let inserted;
-
-  try {
-    inserted = await query(
-      `INSERT INTO embedding_projections
-         (company_id, source_dimensions, stable_dimensions, matrix_data)
-       VALUES ($1, $2, $3, $4::jsonb)
-       ON CONFLICT (company_id, source_dimensions, stable_dimensions) DO NOTHING
-       RETURNING id, created_at`,
-      [cid, dimensions, stableDimensions, JSON.stringify(matrix)]
-    );
-  } catch (err) {
-    console.error('[embedding-stability] initProjectionMatrix insert error:', err.message);
-    throw err;
-  }
-
-  if (!inserted.rows.length) {
-    return initProjectionMatrix(dimensions, stableDimensions, cid);
-  }
-
-  await logEvent(cid, 'embedding-stability', 'projection_matrix_initialized', `embedding_projection:${dimensions}:${stableDimensions}`, {
-    reasoning: `Created fixed JL projection matrix for ${dimensions}->${stableDimensions} canonical embedding-space comparison.`,
-    source_knowledge: 'Johnson-Lindenstrauss random projection: k = O(log(n)/epsilon^2), distances preserved within 1 +/- epsilon with high probability',
-    sourceDims: dimensions,
-    stableDims: stableDimensions,
-    projection_id: inserted.rows[0].id,
-    matrix_hash: hash,
-    projection_table_mutated: true,
-    canonical_memory_changed: false,
-  }).catch(() => {});
-
-  return {
-    matrix,
-    sourceDims: dimensions,
-    stableDims: stableDimensions,
-    projectionId: inserted.rows[0].id,
-    createdAt: inserted.rows[0].created_at,
-    matrixHash: hash,
-    created: true
-  };
+  throw new Error('embedding_projection_missing_requires_signed_install_authority');
 }
 
 /**

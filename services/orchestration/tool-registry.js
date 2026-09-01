@@ -25,6 +25,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
+import { createHash } from 'node:crypto';
 import { runAgent } from './agent-runner.js';
 import { validateExecution, createExecutionPlan } from '../write/execution-interceptor.js';
 import { classifyIntent, enforceVerbPolicy } from '../write/intent-classifier.js';
@@ -53,7 +54,7 @@ import {
 } from '../integrations/integration-tools.js';
 import { createScheduledTask, listScheduledTasks } from './scheduler.js';
 import { query } from '../../db/connection.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeCanonicalSave, executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 import {
   claimToolApprovalExecution,
   createToolApprovalRequest,
@@ -64,8 +65,7 @@ import { scanToolExecution, scanToolResult } from '../security/canary-tracker.js
 import { buildToolRepresentation as buildToolRepresentationDiagnostic } from './tool-representation-diagnostics.js';
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { recallAuthorizationService } from '../security/recall-authorization.js';
-import { resolveNativeRecallAuthority } from '../retrieval/native-recall.js';
-import { executeNativeRecall } from '../retrieval/native-recall-pipeline.js';
+import { executeCanonicalRecall } from '../retrieval/native-recall-pipeline.js';
 import { masterPubkeyCache } from '../security/master-pubkey-cache.js';
 import { authorizePurposeLocalFileRead } from '../security/purpose-authorization.js';
 
@@ -107,17 +107,17 @@ async function aimosRecall(rawCommand = {}, options = {}) {
   if (!executionContext || !options.toolActionAuthority) {
     throw new Error('verified_tool_recall_authority_required');
   }
-  const recallAuthority = await resolveNativeRecallAuthority({
+  const result = await executeCanonicalRecall({
+    req: {
+      ip: 'native-tool-action',
+      headers: {},
+      originalUrl: 'tool:aimos_recall',
+    },
     rawCommand,
     executionContext,
     requestAuthority: options.toolActionAuthority,
     transportBinding: { transport: 'tool', toolName: 'aimos_recall' },
   });
-  const result = await executeNativeRecall({
-    ip: 'native-tool-action',
-    headers: {},
-    originalUrl: 'tool:aimos_recall',
-  }, recallAuthority);
   if (result.status !== 200) throw new Error(result.body?.error || 'native_tool_recall_failed');
   return result.body;
 }
@@ -168,7 +168,7 @@ async function aimosSave({ content, tags = [], agent_id = 'unknown' }, options =
   });
   let saved;
   try {
-    saved = await persistMemory({ ...saveSpec, mutation_authority: commitAction.authority });
+    saved = await executeCanonicalSave({ ...saveSpec, mutation_authority: commitAction.authority });
     if (saved?.rejected) throw new Error(saved.reason || 'tool_save_rejected');
     await finishToolAction({
       action: commitAction,
@@ -736,7 +736,7 @@ export const ALL_TOOL_DEFS = {
         }
       }
     },
-    fn: async ({ query: q }) => contactsSearch({ query: q })
+    fn: async ({ query: q }, options = {}) => contactsSearch({ query: q }, options.credentialUseContext || {})
   },
 
   imessage_chats: {
@@ -753,7 +753,7 @@ export const ALL_TOOL_DEFS = {
         }
       }
     },
-    fn: async ({ limit = 10 }) => imessageListChats({ limit })
+    fn: async ({ limit = 10 }, options = {}) => imessageListChats({ limit }, options.credentialUseContext || {})
   },
 
   imessage_search_contact: {
@@ -771,7 +771,7 @@ export const ALL_TOOL_DEFS = {
         }
       }
     },
-    fn: async ({ query: q }) => imessageSearchContact({ query: q })
+    fn: async ({ query: q }, options = {}) => imessageSearchContact({ query: q }, options.credentialUseContext || {})
   },
 
   imessage_send: {
@@ -790,7 +790,7 @@ export const ALL_TOOL_DEFS = {
         }
       }
     },
-    fn: async ({ to, message }) => imessageSend({ to, message })
+    fn: async ({ to, message }, options = {}) => imessageSend({ to, message }, options.credentialUseContext || {})
   },
 
   aimos_recall: {
@@ -906,9 +906,17 @@ export const ALL_TOOL_DEFS = {
           fs.mkdirSync(dir, { recursive: true });
         }
         fs.writeFileSync(resolved, content, 'utf8');
-        return { success: true, message: `Successfully wrote ${content.length} bytes to ${resolved}` };
+        const readback = fs.readFileSync(resolved);
+        const stat = fs.statSync(resolved);
+        return {
+          success: true,
+          message: `Successfully wrote ${readback.length} bytes to ${resolved}`,
+          content_sha256: createHash('sha256').update(readback).digest('hex'),
+          byte_length: readback.length,
+          mode: stat.mode & 0o777,
+        };
       } catch (err) {
-        return { error: `Failed to write file: ${err.message}` };
+        throw new Error(`Failed to write file: ${err.message}`);
       }
     }
   },
@@ -1065,15 +1073,15 @@ export const ALL_TOOL_DEFS = {
             };
 
             // Save result to Aimos for parent retrieval
-            await persistMemory({
+            await executeHousekeeperCanonicalSave({
               company_id: COMPANY,
+              agent_id,
               key: `delegation:${taskId}:result`,
               value: JSON.stringify(structured),
               scope: 'system',
               memory_type: 'delegation_result',
               clearance_level: 5,
               source: 'tool-registry',
-              mutation_authority: 'housekeeper'
             });
 
             console.log(`[orchestrator] Delegated task ${taskId} completed in ${elapsed}ms (status: 0)`);
@@ -1090,15 +1098,15 @@ export const ALL_TOOL_DEFS = {
             };
 
             // Save failure result
-            await persistMemory({
+            await executeHousekeeperCanonicalSave({
               company_id: COMPANY,
+              agent_id,
               key: `delegation:${taskId}:result`,
               value: JSON.stringify(structured),
               scope: 'system',
               memory_type: 'delegation_result',
               clearance_level: 5,
               source: 'tool-registry',
-              mutation_authority: 'housekeeper'
             }).catch(() => {});
 
             console.error(`[orchestrator] Delegated task ${taskId} failed after ${elapsed}ms (status: ${structured.status})`, err.message);
@@ -1823,7 +1831,7 @@ export async function executeTool(name, args, agentId, options = {}) {
     await finishToolAction({
       action: signedToolAction,
       executionContext,
-      succeeded: true,
+      disposition: 'SUCCEEDED',
       result,
     });
     terminalToolActionRecorded = true;
@@ -1849,7 +1857,9 @@ export async function executeTool(name, args, agentId, options = {}) {
         await finishToolAction({
           action: signedToolAction,
           executionContext: options.executionContext || options.credentialUseContext || null,
-          succeeded: false,
+          disposition: /(?:timed?\s*out|timeout)/i.test(String(error?.message || ''))
+            ? 'INDETERMINATE'
+            : 'FAILED',
           error: error?.message || error,
         });
       } catch (ledgerError) {

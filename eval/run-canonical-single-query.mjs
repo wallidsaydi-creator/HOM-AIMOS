@@ -23,11 +23,13 @@ import { runProvider } from '../services/core/providers.js';
 import { loadCredentialCache } from '../services/security/credential-cache.js';
 import { canonicalJson } from '../services/security/agent-identity.js';
 import { signAsHousekeeper } from '../services/security/housekeeper-signer.js';
+import { buildEnvelopeHeaders } from '../services/security/envelope-headers.js';
 import { systemConfigStore } from '../services/security/system-config-store.js';
 import { normalizeNativeRecallCommand } from '../services/retrieval/native-recall.js';
 import { recallMerkleRoot } from '../services/security/protocol/mutmem-protocol.js';
 import { resolveAimosDatabaseName } from '../services/core/runtime-config.js';
 import { validateReplayOrigin } from './replay-sessions.mjs';
+import { readInstalledUserServiceDefinition } from '../scripts/service/manage-user-service.mjs';
 import {
   LOCOMO_OFFICIAL_PROTOCOL,
   LOCOMO_OFFICIAL_TOP_K,
@@ -191,9 +193,16 @@ function parseArgs(argv) {
     if (selectionModes !== 1) throw new Error('exactly_one_question_selection_mode_required');
   }
   const databaseName = cliValue(argv, '--aimos-db');
-  if (phase === 'recall' && databaseName !== `aimos_benchmark_${runId}`) {
+  const installedService = cliFlag(argv, '--installed-service');
+  if (phase === 'recall' && !installedService && databaseName !== `aimos_benchmark_${runId}`) {
     throw new Error('benchmark_database_must_match_run_id');
   }
+  if (phase === 'recall' && installedService && !databaseName) {
+    throw new Error('installed_service_database_required');
+  }
+  const agentId = String(cliValue(argv, '--agent-id') || 'housekeeper').trim();
+  if (!/^[a-z0-9][a-z0-9_-]{1,62}$/i.test(agentId)) throw new Error('benchmark_agent_id_invalid');
+  if (installedService && agentId === 'housekeeper') throw new Error('installed_service_ordinary_agent_required');
   const judgeReasoning = String(cliValue(argv, '--judge-reasoning') || 'high').trim().toLowerCase();
   if (!['medium', 'high'].includes(judgeReasoning)) throw new Error('judge_reasoning_invalid');
   const recallK = integerArg(cliValue(argv, '--recall-k') || 20, 'recall_k', { min: 1, max: 200 });
@@ -218,6 +227,8 @@ function parseArgs(argv) {
       ? null
       : integerArg(questionLimitRaw, 'question_limit', { min: 1, max: 2486 }),
     databaseName,
+    installedService,
+    agentId,
     origin: phase === 'recall'
       ? validateReplayOrigin(cliValue(argv, '--aimos-base') || 'http://127.0.0.1:9200')
       : null,
@@ -424,7 +435,20 @@ function successfulAttempt(args, entry, phase) {
     .filter((item) => item.isDirectory() && /^attempt-\d{4}$/.test(item.name))
     .sort((left, right) => left.name.localeCompare(right.name))
     .map((item) => verifyCompletedAttempt(path.join(root, item.name)))
-    .filter(Boolean);
+    .filter(Boolean)
+    .filter((attempt) => {
+      if (!args.installedService || phase !== 'recall') return true;
+      const response = readJson(path.join(attempt.directory, 'recall-response.json'));
+      const receipt = response?.recall_receipt;
+      return Boolean(
+        receipt?.request_receipt_id
+        && /^[0-9a-f]{64}$/.test(String(receipt.request_receipt_mutation_hash || ''))
+        && receipt.request_admission_event_id
+        && /^[0-9a-f]{64}$/.test(String(receipt.request_admission_mutation_hash || ''))
+        && receipt.request_admission_authority_kind === 'housekeeper_observation_of_verified_request'
+        && receipt.event_receipt?.signed_body?.parent_event_id === receipt.request_admission_event_id
+      );
+    });
   if (completed.length > 1) throw new Error(`multiple_successful_attempts:${entry.question_id}:${phase}`);
   return completed[0] || null;
 }
@@ -504,15 +528,15 @@ function retryDelayMs(args, attempt) {
   return Math.min(30_000, base * (2 ** (attempt - 1)));
 }
 
-async function scratchHealth(args) {
+async function benchmarkHealth(args) {
   const response = await fetch(`${args.origin}/health`, { signal: AbortSignal.timeout(10_000) });
   const body = await response.json().catch(() => ({}));
   if (!response.ok
     || body.ready !== true
     || body.runtime?.database_name !== args.databaseName
-    || body.runtime?.benchmark_scratch !== true
+    || body.runtime?.benchmark_scratch !== !args.installedService
     || Number(body.runtime?.server_port) !== Number(new URL(args.origin).port)) {
-    throw new Error('scratch_server_runtime_identity_mismatch');
+    throw new Error('benchmark_server_runtime_identity_mismatch');
   }
   return body;
 }
@@ -548,6 +572,16 @@ export function verifyRecallReceipt({
   if (!receipt || !Array.isArray(receipt.evidence) || receipt.evidence.length !== memories.length) {
     throw new Error('recall_receipt_evidence_count_mismatch');
   }
+  const hasRequestAdmission = receipt.request_admission_event_id != null
+    || receipt.request_admission_mutation_hash != null;
+  if (hasRequestAdmission && (
+    !/^[0-9a-f-]{36}$/.test(String(receipt.request_admission_event_id || ''))
+    || !/^[0-9a-f]{64}$/.test(String(receipt.request_admission_mutation_hash || ''))
+    || receipt.request_admission_authority_kind !== 'housekeeper_observation_of_verified_request'
+    || receipt.event_receipt?.signed_body?.parent_event_id !== receipt.request_admission_event_id
+  )) {
+    throw new Error('recall_receipt_request_admission_binding_invalid');
+  }
   const unsignedRequest = { ...requestBody };
   const unsignedSignedBody = { ...signedBody };
   delete unsignedRequest.ts_signed;
@@ -560,15 +594,27 @@ export function verifyRecallReceipt({
   const expectedOuterHash = canonicalSha256(signedBody);
   let merkleEntries = receipt.evidence;
   if (receipt.merkle_schema != null) {
-    if (receipt.merkle_schema !== 'hom-aimos/recall-merkle/v2-epistemic-decision'
-      || !/^[0-9a-f]{64}$/.test(String(receipt.epistemic_decision_sha256 || ''))
+    const epistemicEntry = {
+      entry_type: 'epistemic_decision',
+      decision_sha256: receipt.epistemic_decision_sha256,
+    };
+    const v2 = receipt.merkle_schema === 'hom-aimos/recall-merkle/v2-epistemic-decision'
+      && receipt.merkle_entries?.length === receipt.evidence.length + 1
+      && canonicalJson(receipt.merkle_entries?.[0]) === canonicalJson(epistemicEntry)
+      && canonicalJson(receipt.merkle_entries?.slice(1)) === canonicalJson(receipt.evidence);
+    const canaryClosureEntry = {
+      entry_type: 'canary_final_security_closure',
+      decision_sha256: receipt.canary_final_security_closure_sha256,
+    };
+    const v3 = receipt.merkle_schema === 'hom-aimos/recall-merkle/v3-epistemic-and-security-closure'
+      && /^[0-9a-f]{64}$/.test(String(receipt.canary_final_security_closure_sha256 || ''))
+      && receipt.merkle_entries?.length === receipt.evidence.length + 2
+      && canonicalJson(receipt.merkle_entries?.[0]) === canonicalJson(epistemicEntry)
+      && canonicalJson(receipt.merkle_entries?.[1]) === canonicalJson(canaryClosureEntry)
+      && canonicalJson(receipt.merkle_entries?.slice(2)) === canonicalJson(receipt.evidence);
+    if (!/^[0-9a-f]{64}$/.test(String(receipt.epistemic_decision_sha256 || ''))
       || !Array.isArray(receipt.merkle_entries)
-      || receipt.merkle_entries.length !== receipt.evidence.length + 1
-      || canonicalJson(receipt.merkle_entries[0]) !== canonicalJson({
-        entry_type: 'epistemic_decision',
-        decision_sha256: receipt.epistemic_decision_sha256,
-      })
-      || canonicalJson(receipt.merkle_entries.slice(1)) !== canonicalJson(receipt.evidence)) {
+      || (!v2 && !v3)) {
       throw new Error('recall_receipt_epistemic_binding_invalid');
     }
     merkleEntries = receipt.merkle_entries;
@@ -610,10 +656,36 @@ export function verifyRecallReceipt({
   };
 }
 
-export function buildRecallRequestBody(input, recallK) {
+export function providerRequestAuthority(args, responseBody) {
+  const receipt = responseBody?.recall_receipt;
+  if (!args.installedService) return { subjectAgentId: args.agentId };
+  const actorValidFromIso = receipt?.event_receipt?.signed_body?.actor_valid_from;
+  if (!receipt?.request_receipt_id
+    || !/^[0-9a-f]{64}$/.test(String(receipt.request_receipt_mutation_hash || ''))
+    || !receipt.request_admission_event_id
+    || !/^[0-9a-f]{64}$/.test(String(receipt.request_admission_mutation_hash || ''))
+    || receipt.request_admission_authority_kind !== 'housekeeper_observation_of_verified_request'
+    || receipt.event_receipt?.signed_body?.actor_agent_id !== args.agentId
+    || receipt.event_receipt?.signed_body?.parent_event_id !== receipt.request_admission_event_id
+    || !actorValidFromIso
+    || Number.isNaN(Date.parse(actorValidFromIso))) {
+    throw new Error('provider_verified_request_authority_missing');
+  }
+  return Object.freeze({
+    actorAgentId: args.agentId,
+    actorValidFromIso,
+    subjectAgentId: args.agentId,
+    requestReceiptId: receipt.request_receipt_id,
+    requestReceiptMutationHash: receipt.request_receipt_mutation_hash,
+    requestAdmissionEventId: receipt.request_admission_event_id,
+    requestAdmissionMutationHash: receipt.request_admission_mutation_hash,
+  });
+}
+
+export function buildRecallRequestBody(input, recallK, agentId = 'housekeeper') {
   const body = {
     company_id: 'hom',
-    agent_id: 'housekeeper',
+    agent_id: agentId,
     q: input.question,
     source_filter: input.source_filter,
     memory_type_filter: 'session_exchange',
@@ -633,8 +705,19 @@ async function recallOne(args, entry) {
   if (canonicalSha256(input) !== entry.input_sha256) throw new Error('query_input_hash_mismatch');
   const directory = newAttempt(args, entry, 'recall');
   try {
-    const body = buildRecallRequestBody(input, args.recallK);
-    const signed = await signAsHousekeeper(body, { method: 'POST', path: '/aimos/recall' });
+    const body = buildRecallRequestBody(input, args.recallK, args.agentId);
+    let signed;
+    if (args.installedService) {
+      const headers = await buildEnvelopeHeaders(args.agentId, 'POST', '/aimos/recall', body);
+      signed = {
+        body,
+        certString: headers['Aimos-Agent-Cert'],
+        sigB64u: headers['Aimos-Agent-Signature'],
+        nonce: headers['Aimos-Agent-Nonce'],
+        signedTs: Number(headers['Aimos-Agent-Timestamp']),
+        sigForm: Number(headers['X-Aimos-Sig-Form']),
+      };
+    } else signed = await signAsHousekeeper(body, { method: 'POST', path: '/aimos/recall' });
     const started = performance.now();
     const response = await fetch(`${args.origin}/aimos/recall`, {
       method: 'POST',
@@ -882,8 +965,18 @@ export function validateJudgeOutputDetailed(output) {
   return { valid: true, reason: null };
 }
 
-export async function ensureProviderRuntime() {
-  if (resolveAimosDatabaseName() !== 'aimos') throw new Error('provider_phase_requires_canonical_aimos_database');
+export async function ensureProviderRuntime(args = {}) {
+  const databaseName = resolveAimosDatabaseName();
+  if (args.installedService) {
+    const instance = String(cliValue(process.argv, '--aimos-instance') || '').trim();
+    const definition = readInstalledUserServiceDefinition(instance);
+    if (definition.instance !== instance || definition.database !== databaseName
+      || definition.database !== args.databaseName || definition.instance === 'canonical') {
+      throw new Error('provider_phase_installed_service_mismatch');
+    }
+  } else if (databaseName !== 'aimos') {
+    throw new Error('provider_phase_requires_canonical_aimos_database');
+  }
   const loaded = await systemConfigStore.loadAll();
   if (!loaded.ok) throw new Error(`system_config_store_load_failed:${loaded.reason}`);
   await loadCredentialCache();
@@ -895,6 +988,7 @@ async function generateOne(args, entry) {
   const recall = successfulAttempt(args, entry, 'recall');
   if (!recall) throw new Error('verified_recall_attempt_missing');
   const responseBody = readJson(path.join(recall.directory, 'recall-response.json'));
+  const requestAuthority = providerRequestAuthority(args, responseBody);
   const evidence = evidenceForGenerator(responseBody);
   const directory = newAttempt(args, entry, 'generate');
   const officialProtocol = args.protocol === LOCOMO_OFFICIAL_PROTOCOL;
@@ -918,7 +1012,7 @@ async function generateOne(args, entry) {
         ? {}
         : { responseSchema: { name: 'hom_benchmark_generator', schema: GENERATOR_SCHEMA } }),
       returnMetadata: true,
-      useContext: { subjectAgentId: 'housekeeper' },
+      useContext: requestAuthority,
     });
     const latencyMs = Math.round((performance.now() - started) * 100) / 100;
     let output;
@@ -982,6 +1076,12 @@ async function judgeOne(args, entry) {
   const generated = successfulAttempt(args, entry, 'generate');
   if (!generated) throw new Error('generated_answer_attempt_missing');
   const answer = readJson(path.join(generated.directory, 'answer.json'));
+  const recall = successfulAttempt(args, entry, 'recall');
+  if (!recall) throw new Error('verified_recall_attempt_missing');
+  const requestAuthority = providerRequestAuthority(
+    args,
+    readJson(path.join(recall.directory, 'recall-response.json')),
+  );
   const directory = newAttempt(args, entry, 'judge');
   const userPrompt = buildJudgePrompt(input, gold, answer);
   let response = null;
@@ -997,7 +1097,7 @@ async function judgeOne(args, entry) {
       textVerbosity: 'low',
       responseSchema: { name: 'hom_benchmark_judge', schema: JUDGE_SCHEMA },
       returnMetadata: true,
-      useContext: { subjectAgentId: 'housekeeper' },
+      useContext: requestAuthority,
     });
     const latencyMs = Math.round((performance.now() - started) * 100) / 100;
     const output = strictObject(response.text, 'judge_response');
@@ -1058,8 +1158,8 @@ function stageSummary(args, selection, completed, reused, failures) {
 
 async function executePhase(args) {
   const selection = loadSelection(args);
-  if (args.phase === 'recall') await scratchHealth(args);
-  if (['generate', 'judge'].includes(args.phase)) await ensureProviderRuntime();
+  if (args.phase === 'recall') await benchmarkHealth(args);
+  if (['generate', 'judge'].includes(args.phase)) await ensureProviderRuntime(args);
   let completed = 0;
   let reused = 0;
   const failures = [];

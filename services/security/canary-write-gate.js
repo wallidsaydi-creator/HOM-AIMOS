@@ -9,9 +9,10 @@
  *
  * LOGIC GUIDE: A canary token (SECRET-[A-F0-9]{8}) in a save body means an
  * injection payload reached the write path. Aladdin retention forbids content
- * suppression, so detection forces retained active quarantine at the 0.1
- * retrieval floor. The signed request and the housekeeper scan receipt are
- * preserved; the content never gains ordinary retrieval authority.
+ * suppression, so detection forces retained active quarantine through a signed
+ * epistemic projection. The signed request and the housekeeper scan receipt are
+ * preserved; the content never gains ordinary retrieval authority and Canary
+ * does not mutate the certified cognitive-weight baseline.
  */
 
 import { logEvent } from '../observe/event-ledger.js';
@@ -78,7 +79,7 @@ export async function evaluateCanaryWrite(
       stage: detected ? 'retained_quarantine' : 'clean',
       kill_chain_diagnostics: scan?.kill_chain_diagnostics,
       reasoning: detected
-        ? 'Canary token detected in a signed save body; Aladdin retention preserves it as active quarantine at the 0.1 floor.'
+        ? 'Canary token detected in a signed save body; Aladdin retention preserves it under signed epistemic quarantine without an unsigned cognitive-weight mutation.'
         : 'Canary write-boundary scan completed without detecting a canary token.',
       source_knowledge: 'services/security/canary-write-gate.js — write-path canary gate',
     },

@@ -1,7 +1,7 @@
 # AIMOS public architecture map
 
 Status: source-derived public runtime map
-Service census: 300 JavaScript services across 17 groups
+Service census: 295 JavaScript services across 17 groups
 
 This document describes the released AIMOS backend. It contains no deployment
 state, retained memory, private product roadmap, machine path, operator record,
@@ -76,11 +76,11 @@ envelopes; bearer-only authentication is not an AIMOS authority path.
 ## Canonical pipelines
 
 `services/pipeline-manifest.js` declares the critical wiring for six pipelines.
-It declares 153 service connections across 6 pipelines.
+It declares 116 service connections across 6 pipelines.
 
 | Pipeline | Entrypoint | Responsibility |
 |---|---|---|
-| Save | `routes/aimos.js` | Admission, quality, write validation, epistemic classification, immutable persistence, provenance and lineage |
+| Save | `services/write/canonical-save-owner.js` | Fixed-order admission, security, validation, persistence, evidence and atomic signed terminal ownership |
 | Recall | `routes/aimos.js` | Query planning, retrieval, provenance admission, epistemic selection, calibration, bounded evidence and signed receipt |
 | Agent run | `services/orchestration/agent-runner.js` | Constitution, governance, model/tool execution, learning and evidence recording |
 | Dream | `jobs/nightly-dream.js` | Governed, non-destructive consolidation and learning projections |
@@ -95,29 +95,42 @@ the service census, and the public documentation diverge.
 
 ### Native save path
 
-All durable product writes converge on `services/write/persist-memory.js`.
-The external save route composes eight principal execution boundaries:
+All durable product writes converge on
+`services/write/canonical-save-owner.js`. Transports and autonomous callers
+submit authenticated intent to this owner; only it imports the lower-level
+`services/write/persist-memory.js` transaction/persistence primitive.
+The fixed execution order is:
 
 | # | Stage | Native owner |
 |---:|---|---|
-| 1 | Signed request and authorization | `routes/aimos.js` |
-| 2 | Write validation | `services/write/write-validator.js` |
-| 3 | Prediction-error routing gate | `services/write/rpe-gate.js` |
-| 4 | Mnemonic encoding | `services/context/mnemonic-encoder.js` |
-| 5 | Quality gate | `services/write/quality-gate.js` |
-| 6 | Embedding | `services/core/embeddings.js` |
-| 7 | Canonical persistence and provenance | `services/write/persist-memory.js` |
-| 8 | Signed retained-memory epistemic label | `services/security/memory-epistemic-classifier.js` |
+| 1–2 | AUTH → RECEIPT | certificate/request receipt or signed internal Housekeeper action |
+| 3–4 | CANARY → SE | native Canary and contextual security decision owners |
+| 5–8 | ALADDIN → VALIDATOR → QUALITY → SECRET_BOUNDARY | canonical policy, validation, quality and credential isolation owners |
+| 9–14 | EMBEDDING → PERSISTENCE → PROVENANCE → LINEAGE → GRAPH → EPISTEMIC | restricted `persistMemory` transaction and its database-local evidence owners |
+| 15 | TERMINAL | atomic Housekeeper-signed canonical SAVE terminal |
 
-`persistMemory()` is the canonical transaction owner. It repeats the quality
-gate for internal callers, creates an immutable version, commits provenance in
-the same transaction, and commits the retained-memory epistemic classification
-before returning the admitted memory.
+The canonical owner creates the restricted transaction and injects its client
+into `persistMemory()`. A successful terminal is inserted inside that same
+transaction after persistence, provenance, lineage, graph and epistemic
+evidence. Rejection keeps request/action evidence and appends a signed
+non-success terminal without a memory row; rollback cannot emit success.
+Verified requests and tool actions remain the operation authority for their
+derived saves. Autonomous callers use `executeHousekeeperCanonicalSave()`,
+which appends and database-verifies an exact action commitment before the same
+15 stages execute. The bare string `housekeeper` is rejected, and no route
+imports the autonomous entrypoint. Session turn, exchange and finalization
+preserve one selected authority; the public heartbeat surface is Housekeeper-
+only and delegates to the same internal heartbeat owner used by the scheduler.
 
 ### Native recall path
 
-`services/retrieval/native-recall-pipeline.js` is the canonical execution
-owner. The externally visible path has eight principal stages:
+`executeCanonicalRecall` in
+`services/retrieval/native-recall-pipeline.js` is the sole production
+execution owner. It resolves the signed command and locks the actor/grant in
+the same restricted repeatable-read transaction used for every candidate read
+and provenance admission. Optional gears use serialized savepoints within that
+snapshot; no production caller composes a predecessor authority transaction.
+The externally visible path has eight principal stages:
 
 | # | Stage | Native owner |
 |---:|---|---|
@@ -130,10 +143,14 @@ owner. The externally visible path has eight principal stages:
 | 7 | Pre-disclosure calibration | `services/retrieval/recall-calibrator.js` |
 | 8 | Bounded evidence and signed receipt | `services/retrieval/native-recall.js` |
 
-The 75 declared recall connections span exact-identifier, semantic, temporal,
+The 34 declared recall connections span exact-identifier, semantic, temporal,
 graph, procedural, lineage, cache, instrumentation, and ingestion-assisted
 paths. Candidate evidence passes provenance and authorization admission before
-epistemic selection and bounded disclosure.
+deduplication, scoring, graph/fusion influence, epistemic selection and bounded
+disclosure. A proposed-but-unadmitted row fails the request instead of silently
+changing another row's rank. Online recall performs no similarity-statistics or
+pheromone mutation; durable adaptation belongs to a separately signed action
+owner.
 
 MAGMA is retained dormant research. Its source, paper implementation, tests,
 and historical artifacts remain available, but it has no canonical recall
@@ -190,14 +207,14 @@ barrels, hidden directories, and the root infrastructure file
 
 | Group | Files | Public responsibility |
 |---|---:|---|
-| retrieval | 68 | Query modes, vector/sparse retrieval, temporal and graph paths, epistemic selection and calibration |
+| retrieval | 63 | Query modes, vector/sparse retrieval, temporal and graph paths, epistemic selection and calibration |
 | orchestration | 43 | Agent execution, tools, governance, scheduling, model selection and run state |
-| security | 48 | Identity, signed envelopes, authorization, provenance, credentials, canaries, purpose-bound non-memory authority, typed epistemic evidence assertions, graph-edge evidence, dormant edit certification and signed certificate custody |
-| temporal | 25 | Freshness, event order, supersession, time-aware retrieval and retained frequency |
+| security | 49 | Identity, signed envelopes, authorization, provenance, credentials, canaries, purpose-bound non-memory authority, typed epistemic evidence assertions, graph-edge evidence, dormant edit certification and signed certificate custody |
+| temporal | 22 | Freshness, event order, supersession, time-aware retrieval and retained frequency |
 | learning | 23 | Calibration, reflection, skill consolidation, STDP and bounded plasticity |
 | observe | 22 | Event ledger, explanation, drift, routing, quantitative gates and diagnostics |
 | core | 15 | Constitution, providers, permissions, embeddings, graph and runtime authority |
-| write | 13 | Canonical persistence, quality, intent, credential and validation lanes |
+| write | 15 | Canonical SAVE ownership, fixed trace contract, persistence, quality, intent, credential and validation lanes |
 | context | 9 | Scoped state, workspace partitions, continuity and active-memory policy |
 | integrations | 9 | Provider, search, messaging and application integrations |
 | governance | 7 | Retention law, configuration, valence and governance evidence |

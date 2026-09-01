@@ -31,6 +31,10 @@ import pg from 'pg';
 import { resolveAimosDatabaseUrl } from '../../services/core/runtime-config.js';
 import { selfHash } from '../../eval/poisonedrag/harness.mjs';
 import { writeImmutableJson } from '../../eval/poisonedrag/protocol.mjs';
+import {
+  buildUserServiceManifest,
+  readInstalledUserServiceDefinition,
+} from '../service/manage-user-service.mjs';
 
 const { Pool } = pg;
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -66,7 +70,8 @@ export function parseOrchestratorArgs(argv) {
   if (resumeRun && !/^\d{14}_[0-9a-f]{6}$/.test(resumeRun)) {
     throw new Error('ablation_resume_run_invalid');
   }
-  const port = Number(cliValue(argv, '--port') || 9200);
+  const portValue = cliValue(argv, '--port');
+  const port = Number(portValue || 9200);
   if (!Number.isInteger(port) || port < 1024 || port > 65535 || [9000, 9001, 9100].includes(port)) {
     throw new Error('ablation_port_invalid_or_reserved');
   }
@@ -74,7 +79,23 @@ export function parseOrchestratorArgs(argv) {
   if (!Number.isInteger(retries) || retries < 1 || retries > 10) {
     throw new Error('ablation_retries_invalid');
   }
-  return { resumeRun, port, retries, targetCount: 100 };
+  const installedInstance = String(cliValue(argv, '--installed-instance') || '').trim() || null;
+  const agentId = String(cliValue(argv, '--agent-id') || '').trim() || null;
+  const sourceRunId = String(cliValue(argv, '--source-run-id') || '').trim().toLowerCase() || null;
+  const targetCount = Number(cliValue(argv, '--target-count') || 100);
+  if (!Number.isInteger(targetCount) || targetCount < 1 || targetCount > 100) {
+    throw new Error('ablation_target_count_invalid');
+  }
+  if (installedInstance) {
+    if (!/^[a-z][a-z0-9_-]{0,62}$/.test(installedInstance)
+      || !/^\d{14}_[0-9a-f]{6}$/.test(sourceRunId || '')
+      || !/^[a-zA-Z0-9_-]{1,64}$/.test(agentId || '')
+      || ['housekeeper', 'aimos_flag_signer'].includes(agentId)) {
+      throw new Error('ablation_installed_source_binding_invalid');
+    }
+    if (portValue != null) throw new Error('ablation_installed_port_override_forbidden');
+  }
+  return { resumeRun, port, retries, targetCount, installedInstance, sourceRunId, agentId };
 }
 
 function sha256(value) {
@@ -90,15 +111,15 @@ function runIdNow() {
   return `${timestamp}_${randomBytes(3).toString('hex')}`;
 }
 
-function databaseUrl(name) {
-  const url = new URL(resolveAimosDatabaseUrl([]));
+function databaseUrl(name, runtimeArgs = []) {
+  const url = new URL(resolveAimosDatabaseUrl(runtimeArgs));
   url.pathname = `/${name}`;
   return url.toString();
 }
 
-async function withPool(databaseName, fn) {
+async function withPool(databaseName, fn, runtimeArgs = []) {
   const databasePool = new Pool({
-    connectionString: databaseUrl(databaseName),
+    connectionString: databaseUrl(databaseName, runtimeArgs),
     ssl: false,
     connectionTimeoutMillis: 10_000,
   });
@@ -138,7 +159,7 @@ async function cloneSourceDatabase(targetDatabase) {
   });
 }
 
-async function databaseEvidence(databaseName) {
+async function databaseEvidence(databaseName, runtimeArgs = []) {
   return withPool(databaseName, async (databasePool) => {
     const [memories, classifications, events, ablationEvents, databaseSize] = await Promise.all([
       databasePool.query(
@@ -178,7 +199,20 @@ async function databaseEvidence(databaseName) {
       event_rows: events.rows[0].count,
       ablation_decision_event_rows: ablationEvents.rows[0].count,
     };
-  });
+  }, runtimeArgs);
+}
+
+async function ablationRunDecisionCount(databaseName, runId, runtimeArgs = []) {
+  return withPool(databaseName, async (databasePool) => {
+    const result = await databasePool.query(
+      `SELECT count(*)::int AS count
+         FROM public.aimos_events
+        WHERE operation = 'poisonedrag_epistemic_ablation_decision'
+          AND left(key, length($1)) = $1`,
+      [`ablation:${runId}:`],
+    );
+    return Number(result.rows[0]?.count || 0);
+  }, runtimeArgs);
 }
 
 async function canonicalBenchmarkFootprint() {
@@ -616,8 +650,232 @@ function reconcileCompletedStatus(outputDir, runId, databaseName, evidence) {
   return reconciliation;
 }
 
+function installedRuntimeArgs(definition) {
+  return [
+    '--aimos-instance', definition.instance,
+    '--aimos-postgres-port', String(definition.postgres_port),
+  ];
+}
+
+async function requireInstalledService(definition) {
+  const origin = `http://127.0.0.1:${definition.port}`;
+  const response = await fetch(`${origin}/health`, { signal: AbortSignal.timeout(10_000) });
+  const health = await response.json().catch(() => ({}));
+  if (!response.ok || health.ready !== true
+    || health.runtime?.database_name !== definition.database
+    || Number(health.runtime?.server_port) !== Number(definition.port)
+    || health.runtime?.benchmark_scratch !== false) {
+    throw new Error('ablation_installed_service_health_mismatch');
+  }
+  return { origin, health };
+}
+
+async function runInstalledServiceAblation(args) {
+  const definition = readInstalledUserServiceDefinition(args.installedInstance);
+  const serviceManifest = buildUserServiceManifest(definition);
+  const runtimeArgs = installedRuntimeArgs(definition);
+  const { origin, health: healthBefore } = await requireInstalledService(definition);
+  const sourceDir = path.join(OUTPUT_ROOT, args.sourceRunId);
+  const sourceStatus = readJsonFile(path.join(sourceDir, 'run-status.json'), 'ablation_source_status_invalid');
+  const sourceSummary = readJsonFile(
+    path.join(sourceDir, 'poisonedrag', 'summary.json'),
+    'ablation_source_summary_invalid',
+  );
+  if (sourceStatus.state !== 'complete' || sourceStatus.phase !== 'complete'
+    || sourceStatus.terminal?.protocol !== 'poisonedrag-n100-v1'
+    || sourceStatus.terminal?.denominator_complete !== true
+    || sourceStatus.terminal?.intended_n !== sourceStatus.terminal?.completed_n
+    || sourceStatus.terminal?.failed_n !== 0
+    || sourceStatus.terminal?.incomplete_n !== 0
+    || sourceStatus.database_name !== definition.database
+    || sourceSummary.protocol !== 'poisonedrag-n100-v1'
+    || sourceSummary.run_id !== args.sourceRunId
+    || sourceSummary.completed_n < args.targetCount
+    || sourceSummary.denominator_complete !== true
+    || sourceSummary.summary_sha256 !== selfHash(sourceSummary, 'summary_sha256')) {
+    throw new Error('ablation_installed_source_run_not_complete');
+  }
+
+  const runId = args.resumeRun || runIdNow();
+  const outputDir = path.join(OUTPUT_ROOT, runId);
+  const logsDir = path.join(outputDir, 'logs');
+  mkdirSync(logsDir, { recursive: true, mode: 0o700 });
+  if (args.resumeRun) {
+    const priorStatusFile = path.join(outputDir, 'run-status.json');
+    const priorProofFile = path.join(outputDir, 'isolation-proof.json');
+    if (existsSync(priorStatusFile) && existsSync(priorProofFile)) {
+      const priorStatus = readJsonFile(priorStatusFile, 'ablation_installed_status_invalid');
+      const priorProof = readJsonFile(priorProofFile, 'ablation_installed_proof_invalid');
+      if (priorStatus.state === 'complete' && priorStatus.phase === 'complete') {
+        if (priorProof.schema !== 'hom.aimos.poisonedrag-installed-service-ablation/v1'
+          || priorProof.run_id !== runId
+          || priorProof.source_run_id !== args.sourceRunId
+          || priorProof.database_name !== definition.database
+          || priorProof.isolation_sha256 !== sha256(Buffer.from(JSON.stringify({
+            ...priorProof,
+            isolation_sha256: undefined,
+          }, (_key, value) => value === undefined ? undefined : value), 'utf8'))) {
+          throw new Error('ablation_installed_complete_proof_invalid');
+        }
+        console.log(JSON.stringify({ success: true, already_complete: true, output_dir: outputDir }, null, 2));
+        return;
+      }
+    }
+  }
+  const before = await databaseEvidence(definition.database, runtimeArgs);
+  const beforeRunDecisionRows = await ablationRunDecisionCount(definition.database, runId, runtimeArgs);
+  const sourceManifest = sourceFileManifest();
+  writeStatus(outputDir, {
+    run_id: runId,
+    database_name: definition.database,
+    source_run_id: args.sourceRunId,
+    state: 'running',
+    phase: 'installed-retrieval',
+    execution_mode: 'installed-service',
+    resumable: true,
+  });
+
+  const common = [
+    'eval/run-poisonedrag-epistemic-ablation.mjs',
+    '--run-id', runId,
+    '--run-dir', outputDir,
+    '--target-count', String(args.targetCount),
+    '--retries', String(args.retries),
+    '--aimos-db', definition.database,
+    '--installed-service',
+    '--agent-id', args.agentId,
+    '--source-run-id', args.sourceRunId,
+    ...runtimeArgs,
+  ];
+
+  try {
+    await spawnLogged(process.execPath, [
+      ...common,
+      '--phase', 'retrieve',
+      '--aimos-base', origin,
+    ], path.join(logsDir, 'ablation-retrieval.log'));
+    const afterRetrieval = await databaseEvidence(definition.database, runtimeArgs);
+    if (afterRetrieval.memory_root_sha256 !== before.memory_root_sha256
+      || afterRetrieval.classification_root_sha256 !== before.classification_root_sha256
+      || afterRetrieval.memory_rows !== before.memory_rows
+      || afterRetrieval.classification_rows !== before.classification_rows) {
+      throw new Error('ablation_installed_retrieval_mutated_memory_or_classification');
+    }
+    const expectedDecisionDelta = args.targetCount * 2 * 4;
+    const afterRunDecisionRows = await ablationRunDecisionCount(definition.database, runId, runtimeArgs);
+    if (afterRunDecisionRows !== expectedDecisionDelta || beforeRunDecisionRows > afterRunDecisionRows) {
+      throw new Error('ablation_installed_decision_event_delta_invalid');
+    }
+
+    const preflightReceipt = path.join(outputDir, 'model-access-preflight.json');
+    if (!existsSync(preflightReceipt)) {
+      await spawnLogged(process.execPath, [
+        'scripts/ceremony/benchmark-model-preflight.mjs',
+        '--live',
+        '--generator-model', 'gpt-5.5',
+        '--receipt-file', preflightReceipt,
+        '--aimos-db', definition.database,
+        '--installed-service',
+        ...runtimeArgs,
+      ], path.join(logsDir, 'model-access-preflight.log'));
+    }
+    writeStatus(outputDir, {
+      run_id: runId,
+      database_name: definition.database,
+      source_run_id: args.sourceRunId,
+      state: 'running',
+      phase: 'installed-model-aggregate',
+      execution_mode: 'installed-service',
+      resumable: true,
+    });
+    await spawnLogged(process.execPath, [
+      ...common,
+      '--phase', 'model-aggregate',
+    ], path.join(logsDir, 'ablation-model-aggregate.log'));
+
+    const after = await databaseEvidence(definition.database, runtimeArgs);
+    if (after.memory_root_sha256 !== before.memory_root_sha256
+      || after.classification_root_sha256 !== before.classification_root_sha256
+      || after.memory_rows !== before.memory_rows
+      || after.classification_rows !== before.classification_rows) {
+      throw new Error('ablation_installed_close_memory_or_classification_changed');
+    }
+    const { health: healthAfter } = await requireInstalledService(definition);
+    const isolation = {
+      schema: 'hom.aimos.poisonedrag-installed-service-ablation/v1',
+      protocol: PROTOCOL,
+      run_id: runId,
+      source_run_id: args.sourceRunId,
+      execution_mode: 'installed-service',
+      installed_instance: definition.instance,
+      service_configuration_sha256: serviceManifest.configuration_sha256,
+      database_name: definition.database,
+      postgres_port: definition.postgres_port,
+      http_port: definition.port,
+      agent_id: args.agentId,
+      target_count: args.targetCount,
+      lifecycle: {
+        database_clone: false,
+        database_create: false,
+        server_spawn: false,
+        service_stop_or_restart: false,
+        purge: false,
+      },
+      before,
+      after_retrieval: afterRetrieval,
+      after,
+      memory_root_unchanged: true,
+      classification_root_unchanged: true,
+      ablation_decision_event_rows: afterRunDecisionRows,
+      health_before: healthBefore,
+      health_after: healthAfter,
+      source_manifest: sourceManifest,
+    };
+    isolation.isolation_sha256 = sha256(Buffer.from(JSON.stringify(isolation), 'utf8'));
+    writeImmutableJson(path.join(outputDir, 'isolation-proof.json'), isolation);
+    writeFileSync(
+      path.join(outputDir, 'reproduce-command.txt'),
+      `node scripts/benchmark/run-poisonedrag-epistemic-ablation.mjs --installed-instance ${definition.instance} --agent-id ${args.agentId} --source-run-id ${args.sourceRunId} --target-count ${args.targetCount}\n`,
+      { mode: 0o600 },
+    );
+    writeFileSync(
+      path.join(outputDir, 'artifact-hashes.json'),
+      `${JSON.stringify(artifactHashes(outputDir), null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    writeStatus(outputDir, {
+      run_id: runId,
+      database_name: definition.database,
+      source_run_id: args.sourceRunId,
+      state: 'complete',
+      phase: 'complete',
+      execution_mode: 'installed-service',
+      resumable: false,
+      clone_created: false,
+      purge_required: false,
+    });
+    console.log(JSON.stringify({ success: true, output_dir: outputDir, isolation }, null, 2));
+  } catch (error) {
+    writeStatus(outputDir, {
+      run_id: runId,
+      database_name: definition.database,
+      source_run_id: args.sourceRunId,
+      state: 'failed',
+      phase: 'failed',
+      execution_mode: 'installed-service',
+      resumable: true,
+      error: { name: String(error?.name || 'Error'), message: String(error?.message || error) },
+    });
+    throw error;
+  }
+}
+
 async function main() {
   const args = parseOrchestratorArgs(process.argv);
+  if (args.installedInstance) {
+    await runInstalledServiceAblation(args);
+    return;
+  }
   const runId = args.resumeRun || runIdNow();
   const databaseName = `aimos_benchmark_${runId}`;
   const outputDir = path.join(OUTPUT_ROOT, runId);

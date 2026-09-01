@@ -6,6 +6,138 @@
 //       lives in architecture-authority.json + hom-architecture-manifest.json.
 // ─────────────────────────────────────────────────────────────────────────────
 
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { canonicalJson } from './security/protocol/canonical-json.js';
+
+const SOURCE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const SERVICES_ROOT = path.join(SOURCE_ROOT, 'services');
+
+export const EXECUTABLE_DISPOSITIONS = Object.freeze([
+  'ACTIVE',
+  'CONDITIONAL',
+  'DIAGNOSTIC',
+  'DORMANT',
+  'SUPERSEDED',
+  'ALTERNATE_PIPELINE',
+  'ORPHAN',
+]);
+
+export const EXECUTABLE_DISPOSITION_DEFINITIONS = Object.freeze({
+  ACTIVE: 'The owning entry invokes this connection on every admitted execution of the relevant stage.',
+  CONDITIONAL: 'The owning entry has a real call site gated by request shape, signed policy, corpus state, schedule, or failure branch.',
+  DIAGNOSTIC: 'The owning entry executes the connection for bounded observation only; it has no independent rank, disclosure, retention, or mutation authority.',
+  DORMANT: 'Deliberately absent from the owning executable call graph pending an explicit promotion gate.',
+  SUPERSEDED: 'Replaced by a named current owner and absent from the owning executable call graph; retained source is non-authoritative pending physical retirement.',
+  ALTERNATE_PIPELINE: 'Executable from a different named product pipeline, not from this owning entry.',
+  ORPHAN: 'No executable owner is established; removal or explicit ownership is required.',
+});
+
+const NON_EXECUTABLE_DISPOSITIONS = Object.freeze({
+  'save:./core/directive-claims.js': ['ALTERNATE_PIPELINE', 'directive and agent-execution routes own directive claims'],
+  'save:./retrieval/similarity-stats.js': ['ALTERNATE_PIPELINE', 'canonical RECALL owns the executable similarity-statistics caller; the Dream import is unused'],
+  'save:./governance/knowledge-gate-enforcer.js': ['ORPHAN', 'registry metadata and manifest declaration provide no executable caller'],
+  'save:./retrieval/pipeline-instrumentation.js': ['ORPHAN', 'native signed stage events and doctor telemetry replaced predecessor instrumentation'],
+  'recall:./temporal/retrieval-pheromone.js': ['DORMANT', 'online recall mutation lacks a signed atomic database-local owner'],
+  'recall:./retrieval/hmem-hierarchical-reasoning.js': ['DORMANT', 'unpromoted research kernel'],
+  'recall:./retrieval/hage-hybrid-agent-graph.js': ['DORMANT', 'unpromoted non-equivalent research adaptation'],
+  'recall:./retrieval/hindsight-memory-graph.js': ['DORMANT', 'retained research kernel outside the canonical graph family'],
+  'recall:./retrieval/hingemem-boundary-hypergraph.js': ['DORMANT', 'retained research kernel outside the canonical graph family'],
+  'recall:./retrieval/reconstructed-graph-memory.js': ['SUPERSEDED', 'active source-bound reconstructed-graph native candidate owns the production role'],
+  'recall:./retrieval/mnemis-dual-route-graph.js': ['DORMANT', 'retained research kernel outside the canonical graph family'],
+  'recall:./retrieval/pipeline-instrumentation.js': ['ORPHAN', 'native signed stage events and doctor telemetry replaced predecessor instrumentation'],
+  'recall:./ingestion/ingestion-orchestrator.js': ['ALTERNATE_PIPELINE', 'the signed v1 ASMR ingestion route owns this service'],
+  'recall:./ingestion/entity-extractor.js': ['ALTERNATE_PIPELINE', 'the signed v1 ASMR ingestion route owns this service'],
+  'recall:./ingestion/relationship-mapper.js': ['ALTERNATE_PIPELINE', 'the signed v1 ASMR ingestion route owns this service'],
+  'recall:./ingestion/temporal-marker.js': ['ALTERNATE_PIPELINE', 'the signed v1 ASMR ingestion route owns this service'],
+  'dream:./retrieval/similarity-stats.js': ['ALTERNATE_PIPELINE', 'canonical RECALL owns the executable similarity-statistics caller; the Dream import is unused'],
+  'governance:./core/brain-contract.js': ['ALTERNATE_PIPELINE', 'agent-run and persistent identity bootstrap own the executable brain-contract callers; the Governance import is unused'],
+  'governance:./observe/routing-monitor.js': ['ALTERNATE_PIPELINE', 'agent-run owns the executable routing-monitor caller; the Governance import is unused'],
+  'governance:./orchestration/graph-designer.js': ['ORPHAN', 'the only production import is unused and no executable caller is established'],
+  'governance:./orchestration/fallback-resolver.js': ['ORPHAN', 'the only production import is unused and no executable caller is established'],
+  'governance:./orchestration/trust-router.js': ['ORPHAN', 'the only production import is unused and no executable caller is established'],
+});
+
+const DIAGNOSTIC_CONNECTIONS = new Set([
+  'agent_run:./observe/coordination-audit.js',
+  'agent_run:./observe/agent-trace.js',
+  'agent_run:./observe/explainer.js',
+  'agent_run:./observe/architecture-registry.js',
+  'dream:./observe/retrieval-drift-monitor.js',
+  'dream:./observe/mastery-paradox-detector.js',
+  'dream:./observe/entanglement-monitor.js',
+  'dream:./observe/svdd-anomaly.js',
+  'dream:./temporal/temporal-fingerprinter.js',
+  'dream:./temporal/topic-budget.js',
+  'dream:./retrieval/embedding-stability.js',
+]);
+
+const ALWAYS_ACTIVE_CONNECTIONS = new Set([
+  'save:./write/canonical-save-owner.js',
+  'save:./write/canonical-save-contract.js',
+  'save:./write/quality-gate.js',
+  'save:./write/write-validator.js',
+  'save:./core/embeddings.js',
+  'save:./observe/event-ledger.js',
+  'save:./security/memory-epistemic-classifier.js',
+  'save:./dream/curator.js',
+  'save:./governance/aladdin-compliance.js',
+  'recall:./retrieval/native-recall-pipeline.js',
+  'recall:./retrieval/native-recall.js',
+  'recall:./retrieval/native-retrieval-fusion.js',
+  'recall:./security/recall-authorization.js',
+  'recall:./security/memory-provenance.js',
+  'recall:./retrieval/epistemic-trust-retrieval.js',
+  'recall:./core/embeddings.js',
+  'recall:./learning/trust-score.js',
+  'recall:./retrieval/query-entity-anchors.js',
+  'recall:./retrieval/recall-calibrator.js',
+  'recall:./observe/event-ledger.js',
+  'heartbeat:./observe/event-ledger.js',
+]);
+
+const PIPELINE_EXECUTION_CONTRACTS = Object.freeze({
+  save: Object.freeze({
+    authority: 'verified_agent_certificate_envelope_or_housekeeper_system_principal',
+    input_schema: 'hom.aimos.canonical-save-request/runtime-versioned',
+    output_schema: 'hom.aimos.canonical-save-trace/v1',
+    terminal_evidence: 'canonical_save_terminal',
+  }),
+  recall: Object.freeze({
+    authority: 'verified_agent_certificate_envelope_and_effective_recall_grant',
+    input_schema: 'hom.aimos.native-recall-command/runtime-versioned',
+    output_schema: 'hom.aimos.recall-return-projection/v1',
+    terminal_evidence: 'recall_receipt',
+  }),
+  agent_run: Object.freeze({
+    authority: 'verified_agent_identity_capability_and_model_policy',
+    input_schema: 'hom.aimos.agent-run-request/runtime-versioned',
+    output_schema: 'hom.aimos.agent-run-terminal/runtime-versioned',
+    terminal_evidence: 'agent_run_terminal_or_failure',
+  }),
+  dream: Object.freeze({
+    authority: 'housekeeper_scheduler_and_signed_governor_heads',
+    input_schema: 'hom.aimos.nightly-dream-job/runtime-versioned',
+    output_schema: 'hom.aimos.nightly-dream-terminal/runtime-versioned',
+    terminal_evidence: 'nightly_dream_terminal_or_subowner_terminals',
+  }),
+  heartbeat: Object.freeze({
+    authority: 'housekeeper_scheduler',
+    input_schema: 'hom.aimos.heartbeat-job/runtime-versioned',
+    output_schema: 'hom.aimos.heartbeat-observation/runtime-versioned',
+    terminal_evidence: 'heartbeat',
+  }),
+  governance: Object.freeze({
+    authority: 'verified_agent_identity_and_governance_policy',
+    input_schema: 'hom.aimos.governance-resolution-request/runtime-versioned',
+    output_schema: 'hom.aimos.governance-resolution/runtime-versioned',
+    terminal_evidence: 'governance_resolution_or_agent_run_terminal',
+  }),
+});
+
 /**
  * PIPELINE WIRING MANIFEST — Single source of truth
  *
@@ -21,9 +153,21 @@
 export const PIPELINES = {
   // ─── SAVE ────────────────────────────────────────────────────────────────────
   save: {
-    description: 'Memory persistence: request → quality gate → write-validator → rpe-gate → mnemonic-encoder → embedding → DB insert → signed retained-memory epistemic label',
-    entry: 'routes/aimos.js',
+    description: 'One canonical SAVE owner: AUTH → RECEIPT → CANARY → SE → ALADDIN → VALIDATOR → QUALITY → SECRET_BOUNDARY → EMBEDDING → PERSISTENCE → PROVENANCE → LINEAGE → GRAPH → EPISTEMIC → TERMINAL',
+    entry: 'services/write/canonical-save-owner.js',
     services: [
+      {
+        path: './write/canonical-save-owner.js',
+        exports: [
+          'executeCanonicalSave',
+          'executeHousekeeperCanonicalSave',
+          'createHousekeeperCanonicalSaveOwner',
+        ],
+      },
+      {
+        path: './write/canonical-save-contract.js',
+        exports: ['CANONICAL_SAVE_STAGE_ORDER', 'verifyCanonicalSaveTrace'],
+      },
       {
         path: './write/quality-gate.js',
         exports: ['assessQuality', 'wall1_form', 'wall2_filter', 'wall3_substance'],
@@ -82,16 +226,20 @@ export const PIPELINES = {
 
   // ─── RECALL ──────────────────────────────────────────────────────────────────
   recall: {
-    description: 'Memory retrieval: query → native dense/sparse/temporal/entity/QuIM/QMD/HyDE/concept gears → request-bound Canary/quarantine graph admission → one bounded Reconstructed-Graph G2 family channel → central RRF fusion → trust and signed epistemic projection → pre-disclosure Canary/Aladdin closure → decision-bound output receipt; MAGMA remains retained dormant research with no pipeline edge',
+    description: 'One canonical RECALL owner: signed authority + actor/grant lock → one restricted repeatable-read snapshot → per-lane provenance admission before influence → native dense/sparse/temporal/entity/QuIM/QMD/HyDE/concept gears → one bounded Reconstructed-Graph G2 family channel → central RRF fusion → signed epistemic and Canary/Aladdin closure → decision-bound output receipt; MAGMA remains retained dormant research with no pipeline edge',
     entry: 'services/retrieval/native-recall-pipeline.js',
     services: [
       {
         path: './retrieval/native-recall-pipeline.js',
-        exports: ['executeNativeRecall'],
+        exports: ['executeCanonicalRecall', 'executeNativeRecall'],
       },
       {
         path: './retrieval/native-recall.js',
-        exports: ['resolveNativeRecallAuthority', 'admitNativeRecallCandidates', 'finalizeNativeRecall'],
+        exports: [
+          'openNativeRecallRequestSession',
+          'admitNativeRecallCandidatesInVerifiedSession',
+          'finalizeNativeRecall',
+        ],
       },
       {
         path: './retrieval/native-retrieval-fusion.js',
@@ -176,132 +324,12 @@ export const PIPELINES = {
       },
       // ─── NATIVE PAPER-BACKED RECALL OPERATORS ─────────────────────────────
       {
-        path: './temporal/timex-normalizer.js',
-        exports: ['normalizeTemporalExpressions', 'temporalWindowFromTimex'],
-      },
-      {
-        path: './temporal/temporal-knowledge-base.js',
-        exports: ['normalizeTemporalKbFact', 'temporalFactState', 'classifyTemporalRelationArity'],
-      },
-      {
-        path: './temporal/temporal-kg-reasoning.js',
-        exports: ['classifyTemporalQuestion', 'makeNaryTemporalFact', 'buildAnswerGraph'],
-      },
-      {
-        path: './temporal/temporal-graph-fusion.js',
-        exports: ['createTemporalGraph', 'intervalRelation'],
-      },
-      {
-        path: './temporal/multi-view-timeline.js',
-        exports: ['createTimelineState', 'pairwiseTimeScoring', 'transitiveTimelineClosure'],
-      },
-      {
-        path: './temporal/recurrent-event-network.js',
-        exports: ['makeTemporalEvent', 'recurrentEventEncode', 'empiricalMarginals'],
-      },
-      {
-        path: './retrieval/interval-algebra-rag.js',
-        exports: ['createIntervalEventUnit', 'intervalAwareRetrieve', 'queryTemporalWindow'],
-      },
-      {
-        path: './retrieval/rag-ranking-verification.js',
-        exports: ['rankRagPipeline', 'ragvueEvaluate', 'reasonAndVerifyPipeline'],
-      },
-      {
-        path: './temporal/right-time-rag.js',
-        exports: ['buildTimeAlignedRuleGraph', 'personalizedTemporalPageRank', 'rightTimeEvidenceScores'],
-      },
-      {
-        path: './retrieval/situated-qa-context.js',
-        exports: ['parseSituatedContext', 'situatedContextScore', 'situatedQaEvaluate'],
-      },
-      {
-        path: './temporal/streaming-qa-horizon.js',
-        exports: ['streamingQuestionPeriod', 'buildStreamingQaModel', 'streamingHorizonScores'],
-      },
-      {
-        path: './retrieval/step-back-abstraction.js',
-        exports: ['deriveStepBackQuestion', 'extractAbstractionPrinciples', 'stepBackRetrieveSignals'],
-      },
-      {
-        path: './temporal/tcomplex-tntcomplex.js',
-        exports: ['tcomplexScore', 'tntcomplexScore', 'scoreTemporalKgFacts'],
-      },
-      {
-        path: './temporal/tempcourt-normalization.js',
-        exports: ['normalizeCourtDateExpression', 'bioTagTemporalTokens', 'tempCourtEvidenceScores'],
-      },
-      {
-        path: './temporal/tempeval-merge-closure.js',
-        exports: ['mergeTempEvalSystemOutputs', 'temporalClosure', 'tempEvalEvidenceScores'],
-      },
-      {
-        path: './temporal/tempquestions-intervals.js',
-        exports: ['coarsenAllenRelation', 'detectTemporalQuestion', 'tempQuestionsEvidenceScores'],
-      },
-      {
-        path: './retrieval/time-aware-representation.js',
-        exports: ['timeAwareRepresentationScores', 'tcScore', 'totalTimeAwareLoss'],
-      },
-      {
-        path: './temporal/time-aware-lm-kb.js',
-        exports: ['temporalPrefixInput', 'routeTemporalExpert', 'timeAwareLmKbScores'],
-      },
-      {
-        path: './retrieval/temporal-abstention-reward.js',
-        exports: ['answerReward', 'grpoObjective', 'temporalAbstentionEvidenceScores'],
-      },
-      {
-        path: './temporal/xerte-temporal-kg-explain.js',
-        exports: ['buildXerteInferenceGraph', 'segmentSoftmax', 'xerteEvidenceScores'],
-      },
-      {
-        path: './temporal/decoder-only-time-series-forecast.js',
-        exports: ['patchSeries', 'msMape', 'timeSeriesForecastScores'],
-      },
-      {
-        path: './retrieval/conversational-event-memory-baseline.js',
-        exports: ['buildEventMemoryGraph', 'personalizedPageRank', 'eventMemoryScores'],
-      },
-      {
-        path: './retrieval/aeon-atlas-memory.js',
-        exports: ['symmetricInt8Quantize', 'dequantizedSimilarity', 'aeonAtlasScores'],
-      },
-      {
-        path: './retrieval/artificial-hippocampus-memory.js',
-        exports: ['ahnGdnUpdate', 'maskedScaledDotProductAttention', 'ahnRecallScores'],
-      },
-      {
-        path: './learning/bayesian-continual-memory.js',
-        exports: ['combineGaussianPosterior', 'mesuMeanUpdate', 'bayesianContinualScores'],
-      },
-      {
-        path: './temporal/temporal-semantic-memory.js',
-        exports: ['constructDurativeMemories', 'semanticScore', 'temporalSemanticMemoryScores'],
-      },
-      {
-        path: './retrieval/xmemory-beyond-rag.js',
-        exports: ['groupingObjective', 'fanoBound', 'xmemoryScores'],
-      },
-      {
-        path: './retrieval/ember-retention-memory.js',
-        exports: ['budgetedRetentionSelect', 'f1Score', 'emberRetentionScores'],
-      },
-      {
-        path: './retrieval/contextual-intent-memory.js',
-        exports: ['contextualIntentTuple', 'queryIntentFilter', 'contextualIntentScores'],
-      },
-      {
         path: './retrieval/hmem-hierarchical-reasoning.js',
         exports: ['buildHierarchicalMemory', 'recursiveTopK', 'hmemScores'],
       },
       {
         path: './retrieval/hage-hybrid-agent-graph.js',
         exports: ['buildHageGraph', 'hageTraversalScores', 'hageScores'],
-      },
-      {
-        path: './learning/hebbian-orthogonal-projection.js',
-        exports: ['projectionMatrixRls', 'lifStep', 'hebbianProjectionScores'],
       },
       {
         path: './retrieval/hindsight-memory-graph.js',
@@ -312,56 +340,12 @@ export const PIPELINES = {
         exports: ['buildBoundaryHypergraph', 'fieldAwareJaccard', 'hingeMemScores'],
       },
       {
-        path: './retrieval/longmemeval-v2-context-gathering.js',
-        exports: ['buildKnowledgePools', 'topMPerQuery', 'longMemEvalV2Scores'],
-      },
-      {
-        path: './retrieval/memaudit-package-audit.js',
-        exports: ['semanticCoverageValue', 'branchAndBoundPackageOpt', 'memAuditScores'],
-      },
-      {
-        path: './retrieval/memmachine-retrieval-agent.js',
-        exports: ['routeQueryStructure', 'contextualizedEpisodeClusters', 'memMachineScores'],
-      },
-      {
         path: './retrieval/reconstructed-graph-memory.js',
         exports: ['buildCueTagContentGraph', 'reconstructMemoryState', 'reconstructedGraphMemoryScores'],
       },
       {
         path: './retrieval/mnemis-dual-route-graph.js',
         exports: ['buildMnemisBaseGraph', 'reciprocalRankFusionMnemis', 'mnemisScores'],
-      },
-      {
-        path: './learning/neuroplasticity-stability-control.js',
-        exports: ['bernoulliMask', 'dropoutActivation', 'neuroplasticityScores'],
-      },
-      {
-        path: './learning/neurogenesis-catastrophic-forgetting.js',
-        exports: ['bmuDistance', 'buildNeurogenesisState', 'neurogenesisScores'],
-      },
-      {
-        path: './retrieval/prism-typed-path-retrieval.js',
-        exports: ['buildPrismGraph', 'prismPathCost', 'prismScores'],
-      },
-      {
-        path: './learning/serena-self-regulated-neurogenesis.js',
-        exports: ['erkAllocation', 'recencyWeightedEnsemble', 'serenaScores'],
-      },
-      {
-        path: './retrieval/swiftmem-query-aware-index.js',
-        exports: ['buildSwiftMemTemporalIndex', 'buildSwiftMemDagTagIndex', 'swiftMemScores'],
-      },
-      {
-        path: './learning/tacos-neuromodulated-consolidation.js',
-        exports: ['lifMembraneUpdate', 'tacosWeightUpdate', 'tacosScores'],
-      },
-      {
-        path: './retrieval/ai-hippocampus-memory-system.js',
-        exports: ['classifyMemoryParadigm', 'buildHippocampalIndex', 'aiHippocampusScores'],
-      },
-      {
-        path: './learning/synaptic-consolidation-plasticity.js',
-        exports: ['hopfieldConnectivityMatrix', 'ewcSurrogateLoss', 'synapticConsolidationScores'],
       },
       // ─── PHASE 1-2 SPEED OPTIMIZATIONS ──────────────────────────────────────
       {
@@ -664,6 +648,14 @@ export const PIPELINES = {
         exports: ['runDreamConsolidation'],
       },
       {
+        path: './dream/hebbian-consensus.js',
+        exports: ['buildVerifiedHebbianAssociationSnapshot', 'runHebbianConsensusBatch'],
+      },
+      {
+        path: './learning/neuroplasticity-stability-control.js',
+        exports: ['controlCertifiedMutationProposal'],
+      },
+      {
         path: './learning/agent-learning.js',
         exports: [
           'scoreDueRecommendations',
@@ -847,59 +839,360 @@ export const PIPELINES = {
   },
 };
 
+function sourceRelative(filePath) {
+  return path.relative(SOURCE_ROOT, filePath).split(path.sep).join('/');
+}
+
+function lineNumberAt(source, index) {
+  return source.slice(0, index).split('\n').length;
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+function resolveLocalModule(importerPath, specifier) {
+  if (!specifier.startsWith('.')) return null;
+  const base = path.resolve(path.dirname(importerPath), specifier);
+  const candidates = path.extname(base)
+    ? [base]
+    : [base, `${base}.js`, path.join(base, 'index.js')];
+  for (const candidate of candidates) {
+    const relative = path.relative(SOURCE_ROOT, candidate);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) continue;
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) return candidate;
+  }
+  return null;
+}
+
+function parseImportBindings(clause) {
+  const bindings = [];
+  const trimmed = String(clause || '').trim();
+  if (!trimmed) return bindings;
+  const namespace = trimmed.match(/\*\s+as\s+([A-Za-z_$][\w$]*)/);
+  if (namespace) bindings.push({ imported: '*', local: namespace[1] });
+  const named = trimmed.match(/\{([\s\S]*?)\}/);
+  if (named) {
+    for (const item of named[1].split(',')) {
+      const match = item.trim().match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+      if (match) bindings.push({ imported: match[1], local: match[2] || match[1] });
+    }
+  }
+  const defaultPart = trimmed.split(',')[0].trim();
+  if (/^[A-Za-z_$][\w$]*$/.test(defaultPart)) {
+    bindings.push({ imported: 'default', local: defaultPart });
+  }
+  return bindings;
+}
+
+function findBindingUsages(source, record) {
+  if (!record.bindings.length) return [];
+  const masked = `${source.slice(0, record.start)}${' '.repeat(record.end - record.start)}${source.slice(record.end)}`;
+  const usages = [];
+  for (const binding of record.bindings) {
+    const escaped = escapeRegExp(binding.local);
+    const callPattern = new RegExp(`\\b${escaped}\\s*(?:\\?\\.)?\\s*\\(`, 'g');
+    const constructPattern = new RegExp(`\\bnew\\s+${escaped}\\s*\\(`, 'g');
+    const referencePattern = new RegExp(`\\b${escaped}\\b`, 'g');
+    let match = constructPattern.exec(masked);
+    let kind = 'CONSTRUCT';
+    if (!match) {
+      match = callPattern.exec(masked);
+      kind = 'CALL';
+    }
+    if (!match) {
+      match = referencePattern.exec(masked);
+      kind = 'REFERENCE';
+    }
+    if (match) {
+      usages.push({
+        imported: binding.imported,
+        local: binding.local,
+        kind,
+        line: lineNumberAt(masked, match.index),
+      });
+    }
+  }
+  return usages.sort((left, right) => left.line - right.line || left.local.localeCompare(right.local));
+}
+
+function parseLiteralModuleEdges(importerPath) {
+  const source = fs.readFileSync(importerPath, 'utf8');
+  const records = [];
+  const patterns = [
+    {
+      kind: 'IMPORT',
+      regex: /\bimport\s+([\s\S]*?)\s+from\s+(['"])([^'"]+)\2\s*;?/g,
+      clause: 1,
+      specifier: 3,
+    },
+    {
+      kind: 'REEXPORT',
+      regex: /\bexport\s+([\s\S]*?)\s+from\s+(['"])([^'"]+)\2\s*;?/g,
+      clause: null,
+      specifier: 3,
+    },
+    {
+      kind: 'SIDE_EFFECT_IMPORT',
+      regex: /\bimport\s+(['"])([^'"]+)\1\s*;?/g,
+      clause: null,
+      specifier: 2,
+    },
+    {
+      kind: 'DYNAMIC_IMPORT',
+      regex: /\bimport\s*\(\s*(['"])([^'"]+)\1\s*\)/g,
+      clause: null,
+      specifier: 2,
+    },
+  ];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.regex.exec(source)) !== null) {
+      const targetPath = resolveLocalModule(importerPath, match[pattern.specifier]);
+      if (!targetPath) continue;
+      const record = {
+        importer: sourceRelative(importerPath),
+        target: sourceRelative(targetPath),
+        kind: pattern.kind,
+        import_line: lineNumberAt(source, match.index),
+        start: match.index,
+        end: match.index + match[0].length,
+        bindings: pattern.clause ? parseImportBindings(match[pattern.clause]) : [],
+      };
+      record.usages = findBindingUsages(source, record);
+      record.executable_reference = record.kind === 'SIDE_EFFECT_IMPORT'
+        || record.kind === 'DYNAMIC_IMPORT'
+        || record.usages.length > 0;
+      records.push(record);
+    }
+  }
+  return records.sort((left, right) => left.import_line - right.import_line || left.target.localeCompare(right.target));
+}
+
+function buildLiteralImportGraph(entry) {
+  const entryPath = path.resolve(SOURCE_ROOT, entry);
+  if (!fs.existsSync(entryPath)) throw new Error(`pipeline_entry_missing:${entry}`);
+  const queue = [entryPath];
+  const visited = new Set();
+  const edges = [];
+  while (queue.length > 0) {
+    const current = queue.shift();
+    const relative = sourceRelative(current);
+    if (visited.has(relative)) continue;
+    visited.add(relative);
+    const currentEdges = parseLiteralModuleEdges(current);
+    for (const edge of currentEdges) {
+      edges.push(edge);
+      if (!visited.has(edge.target)) queue.push(path.resolve(SOURCE_ROOT, edge.target));
+    }
+  }
+  return {
+    entry,
+    literal_closure: [...visited].sort(),
+    edges,
+  };
+}
+
+function buildExecutableClosure(graph) {
+  const reached = new Set([graph.entry]);
+  const queue = [graph.entry];
+  while (queue.length > 0) {
+    const importer = queue.shift();
+    for (const edge of graph.edges) {
+      if (edge.importer !== importer || !edge.executable_reference || reached.has(edge.target)) continue;
+      reached.add(edge.target);
+      queue.push(edge.target);
+    }
+  }
+  return [...reached].sort();
+}
+
+function findExecutablePath(graph, executableSet, target) {
+  if (target === graph.entry) return [{ caller: graph.entry, target, kind: 'ENTRY', line: 1, bindings: [] }];
+  const queue = [{ node: graph.entry, path: [] }];
+  const visited = new Set([graph.entry]);
+  while (queue.length > 0) {
+    const current = queue.shift();
+    for (const edge of graph.edges) {
+      if (edge.importer !== current.node || !edge.executable_reference || !executableSet.has(edge.target)) continue;
+      const step = {
+        caller: edge.importer,
+        target: edge.target,
+        kind: edge.kind,
+        line: edge.import_line,
+        bindings: edge.usages,
+      };
+      const nextPath = [...current.path, step];
+      if (edge.target === target) return nextPath;
+      if (!visited.has(edge.target)) {
+        visited.add(edge.target);
+        queue.push({ node: edge.target, path: nextPath });
+      }
+    }
+  }
+  return [];
+}
+
+function manifestSourcePath(servicePath) {
+  return `services/${servicePath.replace(/^\.\//, '')}`;
+}
+
+function dispositionFor(pipelineName, servicePath, executable) {
+  const key = `${pipelineName}:${servicePath}`;
+  if (NON_EXECUTABLE_DISPOSITIONS[key]) return NON_EXECUTABLE_DISPOSITIONS[key];
+  if (!executable) return [null, 'unreachable declaration has no explicit disposition'];
+  if (DIAGNOSTIC_CONNECTIONS.has(key)) {
+    return ['DIAGNOSTIC', 'bounded observation is invoked by the owning pipeline without independent product authority'];
+  }
+  if (ALWAYS_ACTIVE_CONNECTIONS.has(key)) {
+    return ['ACTIVE', 'the owning pipeline invokes this connection on every admitted execution of its relevant stage'];
+  }
+  return ['CONDITIONAL', 'a real source call site is gated by runtime input, signed policy, state, schedule, or failure branch'];
+}
+
+export function buildExecutableTopology() {
+  const pipelines = {};
+  const records = [];
+  const declaredKeys = new Set();
+  for (const [pipelineName, pipeline] of Object.entries(PIPELINES)) {
+    const graph = buildLiteralImportGraph(pipeline.entry);
+    const executableClosure = buildExecutableClosure(graph);
+    const executableSet = new Set(executableClosure);
+    const declaredPaths = new Set(pipeline.services.map((service) => manifestSourcePath(service.path)));
+    for (const service of pipeline.services) {
+      const serviceSourcePath = manifestSourcePath(service.path);
+      const key = `${pipelineName}:${service.path}`;
+      if (declaredKeys.has(key)) throw new Error(`pipeline_service_duplicate:${key}`);
+      declaredKeys.add(key);
+      const executable = executableSet.has(serviceSourcePath);
+      const [disposition, reason] = dispositionFor(pipelineName, service.path, executable);
+      const executionPath = executable ? findExecutablePath(graph, executableSet, serviceSourcePath) : [];
+      records.push({
+        pipeline: pipelineName,
+        service: service.path,
+        source_path: serviceSourcePath,
+        declared_exports: [...service.exports].sort(),
+        disposition,
+        disposition_reason: reason,
+        executable_from_owning_entry: executable,
+        execution_path: executionPath,
+        activation_predicate: disposition === 'ACTIVE'
+          ? 'every admitted execution of the relevant owning stage'
+          : disposition === 'CONDITIONAL'
+            ? 'runtime input, signed policy, retained state, schedule, or failure branch'
+            : disposition === 'DIAGNOSTIC'
+              ? 'bounded owning-pipeline observation stage'
+              : 'none in the owning pipeline',
+        authority: PIPELINE_EXECUTION_CONTRACTS[pipelineName].authority,
+        input_schema: PIPELINE_EXECUTION_CONTRACTS[pipelineName].input_schema,
+        output_schema: PIPELINE_EXECUTION_CONTRACTS[pipelineName].output_schema,
+        terminal_evidence: PIPELINE_EXECUTION_CONTRACTS[pipelineName].terminal_evidence,
+      });
+    }
+    const reachableDeclared = [...declaredPaths].filter((servicePath) => executableSet.has(servicePath)).sort();
+    pipelines[pipelineName] = {
+      entry: pipeline.entry,
+      description: pipeline.description,
+      declared: pipeline.services.length,
+      executable_declared: reachableDeclared.length,
+      non_executable_declared: pipeline.services.length - reachableDeclared.length,
+      literal_closure_count: graph.literal_closure.length,
+      executable_closure_count: executableClosure.length,
+      executable_declared_paths: reachableDeclared,
+      non_executable_declared_paths: [...declaredPaths].filter((servicePath) => !executableSet.has(servicePath)).sort(),
+      executable_undeclared_paths: executableClosure.filter((servicePath) => servicePath.startsWith('services/') && !declaredPaths.has(servicePath)).sort(),
+    };
+  }
+  records.sort((left, right) => left.pipeline.localeCompare(right.pipeline) || left.service.localeCompare(right.service));
+  const dispositionCounts = Object.fromEntries(EXECUTABLE_DISPOSITIONS.map((name) => [name, 0]));
+  const dispositionMembers = Object.fromEntries(EXECUTABLE_DISPOSITIONS.map((name) => [name, []]));
+  for (const record of records) {
+    if (!record.disposition || !Object.hasOwn(dispositionCounts, record.disposition)) continue;
+    dispositionCounts[record.disposition] += 1;
+    dispositionMembers[record.disposition].push(`${record.pipeline}:${record.service}`);
+  }
+  const rootBody = {
+    schema: 'hom.aimos.executable-topology/v1',
+    dispositions: EXECUTABLE_DISPOSITION_DEFINITIONS,
+    pipeline_contracts: PIPELINE_EXECUTION_CONTRACTS,
+    pipelines,
+    records,
+  };
+  return {
+    ...rootBody,
+    declared_total: records.length,
+    disposition_counts: dispositionCounts,
+    disposition_members: dispositionMembers,
+    topology_root_sha256: createHash('sha256').update(canonicalJson(rootBody), 'utf8').digest('hex'),
+  };
+}
+
+export function validateExecutableTopology(topology = buildExecutableTopology()) {
+  const failures = [];
+  const expectedTotal = Object.values(PIPELINES).reduce((sum, pipeline) => sum + pipeline.services.length, 0);
+  if (topology.records.length !== expectedTotal) failures.push('executable_topology_record_count_invalid');
+  const seen = new Set();
+  for (const record of topology.records) {
+    const key = `${record.pipeline}:${record.service}`;
+    if (seen.has(key)) failures.push(`executable_topology_duplicate:${key}`);
+    seen.add(key);
+    if (!EXECUTABLE_DISPOSITIONS.includes(record.disposition)) {
+      failures.push(`executable_topology_disposition_invalid:${key}`);
+      continue;
+    }
+    const executableDisposition = ['ACTIVE', 'CONDITIONAL', 'DIAGNOSTIC'].includes(record.disposition);
+    if (executableDisposition && (!record.executable_from_owning_entry || record.execution_path.length === 0)) {
+      failures.push(`executable_topology_false_executable:${key}`);
+    }
+    if (!executableDisposition && record.executable_from_owning_entry) {
+      failures.push(`executable_topology_false_non_executable:${key}`);
+    }
+  }
+  const counted = Object.values(topology.disposition_counts).reduce((sum, count) => sum + count, 0);
+  if (counted !== expectedTotal) failures.push('executable_topology_disposition_partition_invalid');
+  if (!/^[0-9a-f]{64}$/.test(topology.topology_root_sha256)) failures.push('executable_topology_root_invalid');
+  return {
+    valid: failures.length === 0,
+    failures,
+    expected_total: expectedTotal,
+    classified_total: counted,
+    topology_root_sha256: topology.topology_root_sha256,
+  };
+}
+
 /**
- * Validate every pipeline connection at startup.
- * Dynamically imports every service and checks every named export.
- *
- * NOTE: paths in the manifest are relative to services/pipeline-manifest.js,
- * which is inside the `services/` directory. Dynamic import() resolves relative
- * to the calling module, so paths like './write/quality-gate.js' resolve correctly.
- *
- * Returns { valid: boolean, total: number, ok: number, results: Array }
+ * Validate module availability and the source-derived executable topology.
+ * A module that merely imports successfully is not reported as executable.
  */
 export async function validatePipelines() {
   const results = [];
-
   for (const [name, pipeline] of Object.entries(PIPELINES)) {
     for (const svc of pipeline.services) {
       try {
         const mod = await import(svc.path);
-        const missing = svc.exports.filter((e) => {
-          const val = mod[e];
-          // Accept functions, classes, constants (Map, Set, plain objects, strings, etc.)
-          return val === undefined;
-        });
-        if (missing.length > 0) {
-          results.push({
-            pipeline: name,
-            service: svc.path,
-            status: 'BROKEN',
-            missing,
-          });
-        } else {
-          results.push({
-            pipeline: name,
-            service: svc.path,
-            status: 'OK',
-            exports: svc.exports.length,
-          });
-        }
-      } catch (err) {
+        const missing = svc.exports.filter((exportName) => mod[exportName] === undefined);
+        results.push(missing.length > 0
+          ? { pipeline: name, service: svc.path, status: 'BROKEN', missing }
+          : { pipeline: name, service: svc.path, status: 'OK', exports: svc.exports.length });
+      } catch (error) {
         results.push({
           pipeline: name,
           service: svc.path,
           status: 'MISSING',
-          error: err.message.slice(0, 100),
+          error: error.message.slice(0, 100),
         });
       }
     }
   }
-
-  const valid = results.every((r) => r.status === 'OK');
+  const topology = buildExecutableTopology();
+  const topologyValidation = validateExecutableTopology(topology);
+  const availabilityValid = results.every((result) => result.status === 'OK');
   return {
-    valid,
+    valid: availabilityValid && topologyValidation.valid,
     total: results.length,
-    ok: results.filter((r) => r.status === 'OK').length,
+    ok: results.filter((result) => result.status === 'OK').length,
     results,
+    topology,
+    topology_validation: topologyValidation,
   };
 }

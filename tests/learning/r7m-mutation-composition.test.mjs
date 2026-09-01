@@ -39,14 +39,18 @@ test('SPICED collapses principal-state targets before locks and signed mutation'
   const mutateAt = source.indexOf('commitGovernorMutation({', resolveAt);
   assert.ok(resolveAt >= 0 && lockAt > resolveAt && mutateAt > lockAt);
   assert.match(source, /duplicate_occurrence_targets_collapsed/);
+  assert.match(source, /principal_state_key_sha256/);
+  assert.doesNotMatch(source, /principal_state_key:\s*resolvedTargets/);
 });
 
-test('Hebbian collapses both batch targets and semantic neighbours before future activation', () => {
+test('Hebbian collapses batch targets and reconstructs association only from verified recall co-activation', () => {
   const source = read('services/dream/hebbian-consensus.js');
-  assert.ok((source.match(/resolvePrincipalStateMutationTargets\(\{/g) || []).length >= 3);
-  assert.match(source, /uniquePrincipalStateNeighbors/);
-  assert.match(source, /duplicate_occurrence_targets_collapsed/);
-  assert.match(source, /if \(!on\) \{ stats\.enabled = false/);
+  assert.match(source, /resolvePrincipalStateMutationTargets\(\{/);
+  assert.match(source, /readVerifiedEventById/);
+  assert.match(source, /principalStateKey/);
+  assert.match(source, /coactivation_count/);
+  assert.doesNotMatch(source, /embedding <=>|semantic neighbourhood|ALIGN_LOW/);
+  assert.match(source, /signed_activation_head_not_enabled/);
 });
 
 test('migration 099 is append-only, v2-scoped, and does not authorize content-state mutation', () => {

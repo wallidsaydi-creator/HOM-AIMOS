@@ -6247,6 +6247,8 @@ function compactOriginalRecallMeta(meta = {}) {
     'compaction_handoff_recall',
     'graph_family_retrieval',
     'native_retrieval_fusion',
+    'native_structural_projection',
+    'native_embedding_continuity',
     'canary_magma_composition',
     'canary_clean_selection',
     'cache_revalidation',

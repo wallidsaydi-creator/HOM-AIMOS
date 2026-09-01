@@ -41,10 +41,8 @@
 import express from 'express';
 import { randomUUID } from 'crypto';
 import { AIMOS_MCP_TOOLS, findAimosMcpTool } from '../services/orchestration/aimos-mcp-catalog.js';
-import { appendSecurityDecision, evaluateSecurityContent } from '../services/security/se-gate.js';
-import { evaluateCanaryWrite } from '../services/security/canary-write-gate.js';
-import { resolveNativeRecallAuthority } from '../services/retrieval/native-recall.js';
-import { executeNativeRecall } from '../services/retrieval/native-recall-pipeline.js';
+import { executeCanonicalSave } from '../services/write/canonical-save-owner.js';
+import { executeCanonicalRecall } from '../services/retrieval/native-recall-pipeline.js';
 import {
   AIMOS_API_BASE_URL,
   AIMOS_COMPANY_ID,
@@ -318,8 +316,8 @@ function mcpErrorToHttp(code) {
 /**
  * Execute an Aimos MCP tool by name with arguments.
  * Delegates to the existing aimos.js /mcp/tools/call handler logic.
- * All gates (Quality, Knowledge, RPE, Sudo, Clearance) fire inside persistMemory
- * and recall services — this function just provides the MCP-shaped interface.
+ * All SAVE gates fire inside the canonical SAVE owner; this function only
+ * provides the MCP-shaped interface.
  *
  * NOTE: We call the service layer directly rather than forwarding to /aimos/mcp/tools/call
  * to avoid unnecessary HTTP overhead and to保持 identical behavior with the REST path.
@@ -345,7 +343,6 @@ async function executeAimosTool(name, args = {}, authContext = null, transportBi
 
   // Lazy-import the services we need (avoiding circular deps)
   const { query } = await import('../db/connection.js');
-  const { persistMemory } = await import('../services/write/persist-memory.js').catch(() => ({ persistMemory: null }));
 
   switch (name) {
     case 'aimos_status': {
@@ -399,25 +396,8 @@ async function executeAimosTool(name, args = {}, authContext = null, transportBi
       if (!authContext?.executionContext || !authContext?.mutationAuthority || !authContext?.request) {
         throw Object.assign(new Error('verified_recall_execution_context_required'), { code: -32001 });
       }
-      const securityDecision = evaluateSecurityContent({
-        text: `${q_ || ''} ${exactKey || ''} ${memoryId || ''}`,
-        operation: 'memory_recall',
-        contentType: name,
-        source: 'aimos-mcp-streamable',
-        transport: 'mcp',
-      });
-      const securityReceipt = await appendSecurityDecision(securityDecision, {
-        companyId,
-        subjectAgentId: agentId,
-        authority: authContext.mutationAuthority,
-      });
-      if (securityDecision.blockExecution) {
-        throw Object.assign(
-          new Error(`Social engineering gate blocked recall: ${securityDecision.liveSignals.map((signal) => signal.tag).join(', ')}`),
-          { code: -32013, data: { reason: securityDecision.reason, action: securityDecision.action, receipt: securityReceipt } }
-        );
-      }
-      const recallAuthority = await resolveNativeRecallAuthority({
+      const recallResult = await executeCanonicalRecall({
+        req: authContext.request,
         rawCommand: args,
         executionContext: authContext.executionContext,
         requestAuthority: authContext.mutationAuthority,
@@ -428,7 +408,6 @@ async function executeAimosTool(name, args = {}, authContext = null, transportBi
           batchIndex: transportBinding?.batchIndex,
         },
       });
-      const recallResult = await executeNativeRecall(authContext.request, recallAuthority);
       if (recallResult.status !== 200) {
         throw Object.assign(
           new Error(recallResult.body?.error || 'native_recall_failed'),
@@ -455,9 +434,6 @@ async function executeAimosTool(name, args = {}, authContext = null, transportBi
     }
 
     case 'aimos_save': {
-      if (!persistMemory) {
-        throw Object.assign(new Error('persistMemory service not available'), { code: -32603 });
-      }
       const { key, value } = args;
       if (!key || !value) {
         throw Object.assign(new Error('key and value are required'), { code: -32602 });
@@ -468,41 +444,7 @@ async function executeAimosTool(name, args = {}, authContext = null, transportBi
       if ((args.company_id && args.company_id !== companyId) || (args.agent_id && args.agent_id !== agentId)) {
         throw Object.assign(new Error('signed MCP save actor or company mismatch'), { code: -32001 });
       }
-      const renderedValue = typeof value === 'string' ? value : JSON.stringify(value);
-      const canaryDecision = await evaluateCanaryWrite({
-        key,
-        value,
-        companyId,
-        agentId,
-        runId: authContext.executionContext.requestReceiptId || '',
-        authority: authContext.mutationAuthority,
-        parentEventId: authContext.executionContext.requestAdmissionEventId || null,
-      });
-      let securityDecision = evaluateSecurityContent({
-        text: renderedValue,
-        operation: 'memory_save',
-        contentType: String(args.memory_type || 'declarative'),
-        key,
-        source: args.source == null ? 'aimos-mcp-streamable' : String(args.source),
-        transport: 'mcp',
-      });
-      if (canaryDecision.quarantine && !securityDecision.quarantine) {
-        securityDecision = {
-          ...securityDecision,
-          action: 'retain_quarantine',
-          reason: canaryDecision.reason,
-          severity: 'critical',
-          quarantine: true,
-          liveSignals: [...securityDecision.liveSignals, { tag: 'canary_persistence_boundary', severity: 'critical' }],
-        };
-      }
-      const securityReceipt = await appendSecurityDecision(securityDecision, {
-        companyId,
-        subjectAgentId: agentId,
-        authority: authContext.mutationAuthority,
-        parentEventId: canaryDecision.event_receipt?.event_id || null,
-      });
-      const saved = await persistMemory({
+      const saved = await executeCanonicalSave({
         company_id: companyId,
         agent_id: agentId,
         key,
@@ -511,11 +453,16 @@ async function executeAimosTool(name, args = {}, authContext = null, transportBi
         clearance_level: Number(args.clearance_level || 1),
         memory_type: String(args.memory_type || 'declarative').trim(),
         source: args.source == null ? undefined : String(args.source).trim(),
-        security_disposition: { decision: securityDecision, receipt: securityReceipt },
         mutation_authority: authContext.mutationAuthority
       });
       if (saved?.rejected) {
-        throw Object.assign(new Error(`Quality gate rejected: ${saved.reason}`), { code: -32603 });
+        throw Object.assign(new Error(saved.reason), {
+          code: -32603,
+          data: {
+            terminal_event_id: saved.terminal_receipt?.event_id || null,
+            stage_root_sha256: saved.canonical_save_trace?.stage_root_sha256 || null,
+          },
+        });
       }
       return {
         saved: true,
@@ -528,7 +475,10 @@ async function executeAimosTool(name, args = {}, authContext = null, transportBi
         occurrence_commitment: saved?.save_feedback?.occurrence_commitment || null,
         retrieval_vote_added: saved?.occurrence_reasserted === true ? false : null,
         quarantined: saved?.quarantined === true,
-        security_decision_event_id: saved?.security_decision_event_id || securityReceipt.event_id,
+        security_decision_event_id: saved?.security_decision_event_id || null,
+        terminal_event_id: saved?.terminal_receipt?.event_id || null,
+        terminal_mutation_hash: saved?.terminal_receipt?.mutation_hash || null,
+        stage_root_sha256: saved?.canonical_save_trace?.stage_root_sha256 || null,
       };
     }
 

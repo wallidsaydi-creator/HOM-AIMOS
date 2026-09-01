@@ -16,6 +16,7 @@ import {
 } from '../../services/security/agent-identity.js';
 import { genesisHashFor } from '../../services/security/identity-chain.js';
 import { persistMemory } from '../../services/write/persist-memory.js';
+import { createHousekeeperCanonicalSaveOwner } from '../../services/write/canonical-save-owner.js';
 import { recallAuthorizationService } from '../../services/security/recall-authorization.js';
 import { resolveNativeRecallAuthority } from '../../services/retrieval/native-recall.js';
 import { executeNativeRecall } from '../../services/retrieval/native-recall-pipeline.js';
@@ -39,7 +40,7 @@ function assert(condition, label, detail = '') {
   console.log(`  ✓ ${label}`);
 }
 
-function memorySpec({ key, value, source, supersedesId = null, authority = 'housekeeper' }) {
+function memorySpec({ key, value, source, supersedesId = null, authority = null }) {
   return {
     company_id: 'hom',
     agent_id: 'housekeeper',
@@ -50,8 +51,20 @@ function memorySpec({ key, value, source, supersedesId = null, authority = 'hous
     memory_type: 'test',
     source,
     supersedes_id: supersedesId,
-    mutation_authority: authority,
+    ...(authority ? { mutation_authority: authority } : {}),
   };
+}
+
+const mintHousekeeperPersistenceAuthority = createHousekeeperCanonicalSaveOwner({
+  executeCanonicalSave: async (spec) => spec,
+});
+
+async function authorizeHousekeeperSpec(spec) {
+  return mintHousekeeperPersistenceAuthority(spec);
+}
+
+async function persistHousekeeperMemory(spec) {
+  return persistMemory(await authorizeHousekeeperSpec(spec));
 }
 
 async function countByKey(key) {
@@ -295,7 +308,7 @@ async function testParallelLinearChain(runId) {
   console.log('\n[CONCURRENCY] parallel same-key saves form one retained linear chain');
   const key = `atomicity-linear-${runId}`;
   const source = `test:native-persistence-linear:${runId}`;
-  const writes = Array.from({ length: 5 }, (_, index) => persistMemory(memorySpec({
+  const writes = Array.from({ length: 5 }, (_, index) => persistHousekeeperMemory(memorySpec({
     key,
     value: `On 2026-07-11, atomicity.test.mjs created immutable parallel version ${index + 1} because every distinct save must remain retained in one verified chain.`,
     source,
@@ -349,22 +362,23 @@ async function testTransactionTimestampInversion(runId) {
     await oldClient.query('SELECT transaction_timestamp()');
     await new Promise((resolve) => setTimeout(resolve, 25));
 
-    const newerRoot = await persistMemory(memorySpec({
+    const newerRoot = await persistHousekeeperMemory(memorySpec({
       key,
       value: 'On 2026-07-11, this newer transaction commits first and becomes the retained topology root so the regression can distinguish transaction time from chain order.',
       source,
     }));
-    const olderTimestampSuccessor = await persistMemory({
-      ...memorySpec({
+    const olderTimestampSpec = await authorizeHousekeeperSpec(memorySpec({
         key,
         value: 'On 2026-07-11, this older transaction timestamp commits second and must supersede the topology root because the explicit predecessor link is canonical.',
         source,
-      }),
+      }));
+    const olderTimestampSuccessor = await persistMemory({
+      ...olderTimestampSpec,
       client: oldClient,
     });
     await oldClient.query('COMMIT');
 
-    const third = await persistMemory(memorySpec({
+    const third = await persistHousekeeperMemory(memorySpec({
       key,
       value: 'On 2026-07-11, this third save must follow the retained topology head regardless of created_at ordering, proving timestamps cannot redirect the immutable chain.',
       source,
@@ -401,20 +415,20 @@ async function testExplicitForkLoserRollsBack(runId) {
   console.log('\n[CONCURRENCY] an explicit predecessor fork has one winner and no residue');
   const key = `atomicity-fork-${runId}`;
   const source = `test:native-persistence-fork:${runId}`;
-  const root = await persistMemory(memorySpec({
+  const root = await persistHousekeeperMemory(memorySpec({
     key,
     value: 'On 2026-07-11, atomicity.test.mjs created this immutable fork root because database enforcement must permit exactly one successor.',
     source,
   }));
 
   const candidates = await Promise.allSettled([
-    persistMemory(memorySpec({
+    persistHousekeeperMemory(memorySpec({
       key,
       value: 'On 2026-07-11, atomicity.test.mjs created fork candidate alpha; evidence requires exactly one candidate to commit.',
       source,
       supersedesId: root.id,
     })),
-    persistMemory(memorySpec({
+    persistHousekeeperMemory(memorySpec({
       key,
       value: 'On 2026-07-11, atomicity.test.mjs created fork candidate beta; therefore the losing transaction must leave no canonical residue.',
       source,

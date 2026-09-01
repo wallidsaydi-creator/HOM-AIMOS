@@ -38,7 +38,7 @@ export async function telegramSendMessage({ chatId, text, parseMode = null, useC
   } catch (error) {
     await credentialLedger.finalizeCredentialUse({
       reservation,
-      outcome: 'failed',
+      outcome: 'indeterminate',
       outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'transport_error' }),
       outcomeClass: 'transport_error',
       errorClass: error?.name || 'transport_error',
@@ -46,19 +46,30 @@ export async function telegramSendMessage({ chatId, text, parseMode = null, useC
     throw error;
   }
   const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    await credentialLedger.finalizeCredentialUse({
+      reservation,
+      outcome: 'failed',
+      outcomeHash: credentialUseEvidenceHash({
+        status: response.status,
+        telegram_ok: payload?.ok === true,
+        response_hash: credentialUseEvidenceHash(payload),
+      }),
+      outcomeClass: `http_${response.status}`,
+      errorClass: String(payload?.description || `http_${response.status}`),
+    });
+    throw new Error(payload?.description || `Telegram API error (${response.status})`);
+  }
   await credentialLedger.finalizeCredentialUse({
     reservation,
     outcome: 'completed',
     outcomeHash: credentialUseEvidenceHash({
       status: response.status,
-      telegram_ok: payload?.ok === true,
+      telegram_ok: true,
       telegram_result_id: payload?.result?.message_id || null,
     }),
     outcomeClass: `http_${response.status}`,
   });
-  if (!response.ok || payload?.ok === false) {
-    throw new Error(payload?.description || `Telegram API error (${response.status})`);
-  }
   return payload;
 }
 
@@ -88,7 +99,7 @@ export async function telegramGetUpdates({ limit = 20, useContext = {} } = {}) {
   } catch (error) {
     await credentialLedger.finalizeCredentialUse({
       reservation,
-      outcome: 'failed',
+      outcome: 'indeterminate',
       outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'transport_error' }),
       outcomeClass: 'transport_error',
       errorClass: error?.name || 'transport_error',
@@ -96,18 +107,29 @@ export async function telegramGetUpdates({ limit = 20, useContext = {} } = {}) {
     throw error;
   }
   const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload?.ok === false) {
+    await credentialLedger.finalizeCredentialUse({
+      reservation,
+      outcome: 'failed',
+      outcomeHash: credentialUseEvidenceHash({
+        status: response.status,
+        telegram_ok: payload?.ok === true,
+        response_hash: credentialUseEvidenceHash(payload),
+      }),
+      outcomeClass: `http_${response.status}`,
+      errorClass: String(payload?.description || `http_${response.status}`),
+    });
+    throw new Error(payload?.description || `Telegram API error (${response.status})`);
+  }
   await credentialLedger.finalizeCredentialUse({
     reservation,
     outcome: 'completed',
     outcomeHash: credentialUseEvidenceHash({
       status: response.status,
-      telegram_ok: payload?.ok === true,
+      telegram_ok: true,
       update_count: Array.isArray(payload?.result) ? payload.result.length : null,
     }),
     outcomeClass: `http_${response.status}`,
   });
-  if (!response.ok || payload?.ok === false) {
-    throw new Error(payload?.description || `Telegram API error (${response.status})`);
-  }
   return payload;
 }

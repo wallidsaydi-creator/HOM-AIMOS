@@ -15,7 +15,7 @@
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { generateExplanation, EXPLANATION_LEVEL } from '../observe/explainer.js';
 import { logAIDecision } from '../observe/architecture-registry.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -273,7 +273,7 @@ export async function captureExplanationAndDecision({
       `  next: ${autonomy.action === 'escalate' ? 'human review' : rerouteCheck?.reroute ? 'review alternate route outcome' : 'continue session'}`
     ].join('\n');
 
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: COMPANY,
       agent_id: runtimeAgent.id,
       key: explanationKey,
@@ -282,7 +282,6 @@ export async function captureExplanationAndDecision({
       memory_type: 'event_log',
       clearance_level: 3,
       source: 'agent-runner',
-      mutation_authority: 'housekeeper',
     });
 
     const reasoningTraceKey = `session_reasoning:${runtimeAgent.id}:${runEndTime}`;
@@ -315,7 +314,7 @@ export async function captureExplanationAndDecision({
       created_at: new Date(runEndTime).toISOString(),
     };
 
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: COMPANY,
       agent_id: runtimeAgent.id,
       key: reasoningTraceKey,
@@ -324,7 +323,6 @@ export async function captureExplanationAndDecision({
       memory_type: 'session_reasoning',
       clearance_level: 4,
       source: 'agent-runner',
-      mutation_authority: 'housekeeper',
     });
 
     architectureDecision = await logAIDecision({

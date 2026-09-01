@@ -1,0 +1,62 @@
+{
+  "schema": "hom.aimos.mutmem-v2-environment-contract/v1",
+  "authority": "descriptive_evidence_only",
+  "supported_installation": {
+    "operating_system": "macOS >= 14",
+    "architectures": [
+      "arm64",
+      "x86_64"
+    ],
+    "node_majors": [
+      20,
+      24,
+      26
+    ],
+    "preferred_node_major": 26,
+    "qualified_node_version": "v26.8.1",
+    "postgresql_major": 18,
+    "required_extensions": [
+      "pgcrypto",
+      "pgsodium",
+      "vector"
+    ],
+    "pgsodium_source_version": "3.1.11"
+  },
+  "per_run_required_fields": {
+    "operating_system": [
+      "platform",
+      "release",
+      "architecture"
+    ],
+    "hardware": [
+      "cpu_model",
+      "logical_cpu_count",
+      "total_memory_bytes"
+    ],
+    "runtime": [
+      "node_version",
+      "node_executable_sha256",
+      "package_lock_version",
+      "package_json_sha256",
+      "package_lock_sha256",
+      "dependency_versions"
+    ],
+    "database": [
+      "server_version",
+      "extensions"
+    ],
+    "execution": [
+      "concurrency",
+      "protocol_configuration",
+      "native_surfaces",
+      "started_at",
+      "captured_at"
+    ]
+  },
+  "qualified_installer_evidence": {
+    "file": "verifiers/mutmem-conformance/v2/p3-clean-installer-qualification.json",
+    "qualification_sha256": "882e5fcdc403b0af3df555cbe24bc4f3f2ce9e9b02cd2cfa4b4a7de1358beea3",
+    "node_version": "v26.8.1"
+  },
+  "environment_contract_sha256": "5f5bca276c1af307510cc82a61b1a8976f277de4812ab85044d0648200149551"
+}

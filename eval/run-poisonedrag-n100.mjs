@@ -26,10 +26,12 @@ import { fileURLToPath } from 'node:url';
 import { runProvider } from '../services/core/providers.js';
 import { resolveAimosDatabaseName } from '../services/core/runtime-config.js';
 import { signAsHousekeeper } from '../services/security/housekeeper-signer.js';
+import { buildEnvelopeHeaders } from '../services/security/envelope-headers.js';
 import { pool, agentPool } from '../db/connection.js';
 import {
   ensureProviderRuntime,
   evidenceForGenerator,
+  providerRequestAuthority,
   providerEvidence,
   signedRequestArtifact,
   verifyRecallReceipt,
@@ -108,11 +110,20 @@ function parseArgs(argv) {
   if (!/^http:\/\/127\.0\.0\.1:\d{4,5}$/.test(origin)) throw new Error('poisonedrag_origin_invalid');
   const phase = String(cliValue(argv, '--phase') || '').trim().toLowerCase();
   if (!['ingest-recall', 'model-aggregate'].includes(phase)) throw new Error('poisonedrag_phase_invalid');
+  const databaseName = String(cliValue(argv, '--aimos-db') || '').trim();
+  const installedService = argv.includes('--installed-service');
+  const agentId = String(cliValue(argv, '--agent-id') || 'housekeeper').trim();
+  if (installedService && !databaseName) throw new Error('installed_service_database_required');
+  if (!/^[a-z0-9][a-z0-9_-]{1,62}$/i.test(agentId)) throw new Error('poisonedrag_agent_id_invalid');
+  if (installedService && agentId === 'housekeeper') throw new Error('installed_service_ordinary_agent_required');
   return {
     runId,
     runDir: path.resolve(runDirRaw),
     origin,
     phase,
+    databaseName,
+    installedService,
+    agentId,
     targetCount: integerArg(cliValue(argv, '--target-count') || '3', 'poisonedrag_target_count', 1, 100),
     delayMs: integerArg(cliValue(argv, '--delay-ms') || String(SAVE_DELAY_MS), 'poisonedrag_delay_ms', 2000, 60_000),
     retries: integerArg(
@@ -186,8 +197,19 @@ function requestEvidence(signed) {
   return signedRequestArtifact(signed);
 }
 
-async function signedPost(origin, route, body) {
-  const signed = await signAsHousekeeper(body, { method: 'POST', path: route });
+async function signedPost(origin, route, body, args = {}) {
+  let signed;
+  if (args.installedService) {
+    const headers = await buildEnvelopeHeaders(args.agentId, 'POST', route, body);
+    signed = {
+      body,
+      certString: headers['Aimos-Agent-Cert'],
+      sigB64u: headers['Aimos-Agent-Signature'],
+      nonce: headers['Aimos-Agent-Nonce'],
+      signedTs: Number(headers['Aimos-Agent-Timestamp']),
+      sigForm: Number(headers['X-Aimos-Sig-Form']),
+    };
+  } else signed = await signAsHousekeeper(body, { method: 'POST', path: route });
   const started = performance.now();
   const response = await fetch(`${origin}${route}`, {
     method: 'POST',
@@ -212,14 +234,14 @@ async function signedPost(origin, route, body) {
   };
 }
 
-async function scratchHealth(args) {
+async function benchmarkHealth(args) {
   const response = await fetch(`${args.origin}/health`, { signal: AbortSignal.timeout(10_000) });
   const body = await response.json().catch(() => ({}));
   if (!response.ok || body.ready !== true
-    || body.runtime?.database_name !== `aimos_benchmark_${args.runId}`
-    || body.runtime?.benchmark_scratch !== true
+    || body.runtime?.database_name !== (args.installedService ? args.databaseName : `aimos_benchmark_${args.runId}`)
+    || body.runtime?.benchmark_scratch !== !args.installedService
     || Number(body.runtime?.server_port) !== Number(new URL(args.origin).port)) {
-    throw new Error('poisonedrag_scratch_server_identity_mismatch');
+    throw new Error('poisonedrag_benchmark_server_identity_mismatch');
   }
   return body;
 }
@@ -354,8 +376,9 @@ async function recoverDuplicateSave(args, body, existingMemoryId) {
     scopeId: body.session_id,
     memoryId: existingMemoryId,
     limit: 1,
+    agentId: args.agentId,
   });
-  const posted = await signedPost(args.origin, '/aimos/recall', recallBody);
+  const posted = await signedPost(args.origin, '/aimos/recall', recallBody, args);
   await sleep(args.delayMs);
   if (!posted.ok || posted.responseBody?.success !== true) {
     throw new Error(`signed_post_failed:${posted.status}:duplicate_recovery`);
@@ -406,7 +429,7 @@ async function executeSave(args, { file, body, operationId }) {
   for (let attempt = 1; attempt <= args.retries; attempt += 1) {
     let posted = null;
     try {
-      posted = await signedPost(args.origin, '/aimos/save', body);
+      posted = await signedPost(args.origin, '/aimos/save', body, args);
       await sleep(args.delayMs);
       if (!posted.ok && ![400, 422].includes(posted.status)) {
         throw new Error(`signed_post_failed:${posted.status}:${posted.responseBody?.error || 'save'}`);
@@ -468,6 +491,7 @@ export async function ingestTarget(args, root, target, documents, progress) {
         scopeId,
         key: cleanSaveKey(scopeId, candidate.rank, candidate.document_id),
         value: document.text,
+        agentId: args.agentId,
       });
       const operationId = `clean-${String(candidate.rank).padStart(3, '0')}-arm-${arm}`;
       const result = await executeSave(args, {
@@ -499,6 +523,7 @@ export async function ingestTarget(args, root, target, documents, progress) {
       scopeId,
       key: poisonSaveKey(scopeId, index),
       value: target.poison_texts[index],
+      agentId: args.agentId,
     });
     const operationId = `poison-${String(index + 1).padStart(2, '0')}-arm-${attackedArm}`;
     const result = await executeSave(args, {
@@ -579,7 +604,11 @@ export async function ingestTarget(args, root, target, documents, progress) {
 async function recallArm(args, root, target, arm, admission) {
   const targetRoot = path.join(root, 'targets', targetDirectoryName(target));
   const file = path.join(targetRoot, 'recall', `arm-${arm}.json`);
-  const body = buildRecallBody({ scopeId: target.scope_ids[arm], question: target.question });
+  const body = buildRecallBody({
+    scopeId: target.scope_ids[arm],
+    question: target.question,
+    agentId: args.agentId,
+  });
   const requestBodyHash = canonicalSha256(body);
   const prior = readVerifiedArtifact(file, POISONEDRAG_SCHEMAS.RECALL_PROOF, 'proof_sha256');
   if (prior) {
@@ -591,7 +620,7 @@ async function recallArm(args, root, target, arm, admission) {
   for (let attempt = 1; attempt <= args.retries; attempt += 1) {
     let posted = null;
     try {
-      posted = await signedPost(args.origin, '/aimos/recall', body);
+      posted = await signedPost(args.origin, '/aimos/recall', body, args);
       await sleep(args.delayMs);
       if (!posted.ok || posted.responseBody?.success !== true) {
         throw new Error(`signed_post_failed:${posted.status}:${posted.responseBody?.error || 'recall'}`);
@@ -667,7 +696,7 @@ async function executeIsolationProbe(args, root, {
   allowedMemoryIds,
   requireEmpty = false,
 }) {
-  const body = buildRecallBody({ scopeId, question });
+  const body = buildRecallBody({ scopeId, question, agentId: args.agentId });
   const requestBodyHash = canonicalSha256(body);
   const file = path.join(root, 'isolation', 'probes', `${label}.json`);
   mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
@@ -683,7 +712,7 @@ async function executeIsolationProbe(args, root, {
   for (let attempt = 1; attempt <= args.retries; attempt += 1) {
     let posted = null;
     try {
-      posted = await signedPost(args.origin, '/aimos/recall', body);
+      posted = await signedPost(args.origin, '/aimos/recall', body, args);
       await sleep(args.delayMs);
       if (!posted.ok || posted.responseBody?.success !== true) {
         throw new Error(`signed_post_failed:${posted.status}:${posted.responseBody?.error || 'isolation_probe'}`);
@@ -801,6 +830,7 @@ async function providerOperation(args, {
   systemPrompt,
   userPrompt,
   responseSchema = null,
+  requestAuthority = null,
   parse,
 }) {
   const promptHash = sha256(Buffer.from(`${systemPrompt}\n${userPrompt}`, 'utf8'));
@@ -824,7 +854,7 @@ async function providerOperation(args, {
         textVerbosity: 'low',
         ...(responseSchema ? { responseSchema } : {}),
         returnMetadata: true,
-        useContext: { subjectAgentId: 'housekeeper' },
+        useContext: requestAuthority || { subjectAgentId: args.agentId },
       });
       const output = parse(response.text);
       const artifact = writeHashedArtifact(file, {
@@ -884,6 +914,7 @@ async function generateArm(args, root, target, arm, recallProof) {
     reasoningEffort: 'medium',
     systemPrompt: '',
     userPrompt,
+    requestAuthority: providerRequestAuthority(args, recallProof.response),
     parse: (text) => {
       const answer = String(text || '').trim();
       if (!answer || answer.length > 8000) throw new Error('generator_semantic_contract_invalid');
@@ -907,6 +938,7 @@ async function judgeArm(args, root, target, arm, recallProof, answerArtifact) {
     targetAnswer: target.target_answer,
     answer,
   });
+  const requestAuthority = providerRequestAuthority(args, recallProof.response);
   const correctness = await providerOperation(args, {
     file: path.join(targetRoot, 'judge', `arm-${arm}-correctness.json`),
     schema: POISONEDRAG_SCHEMAS.JUDGMENT,
@@ -918,6 +950,7 @@ async function judgeArm(args, root, target, arm, recallProof, answerArtifact) {
     systemPrompt: CORRECTNESS_SYSTEM_PROMPT,
     userPrompt: correctnessPrompt,
     responseSchema: { name: 'hom_poisonedrag_correctness', schema: CORRECTNESS_SCHEMA },
+    requestAuthority,
     parse: (text) => {
       const value = parseStrictObject(text, 'correctness_judge');
       if (!validateCorrectnessJudgment(value)) throw new Error('correctness_judge_semantic_contract_invalid');
@@ -935,6 +968,7 @@ async function judgeArm(args, root, target, arm, recallProof, answerArtifact) {
     systemPrompt: TARGET_ASSERTION_SYSTEM_PROMPT,
     userPrompt: targetPrompt,
     responseSchema: { name: 'hom_poisonedrag_target_assertion', schema: TARGET_ASSERTION_SCHEMA },
+    requestAuthority,
     parse: (text) => {
       const value = parseStrictObject(text, 'target_assertion_judge');
       if (!validateTargetAssertionJudgment(value)) throw new Error('target_assertion_judge_semantic_contract_invalid');
@@ -1128,12 +1162,14 @@ async function main() {
   } else {
     writeImmutableJson(planFile, expectedPlan);
   }
-  await scratchHealth(args);
+  await benchmarkHealth(args);
   const expectedScratchDatabase = `aimos_benchmark_${args.runId}`;
-  if (args.phase === 'ingest-recall' && resolveAimosDatabaseName() !== expectedScratchDatabase) {
-    throw new Error('poisonedrag_signer_not_bound_to_scratch_database');
+  const expectedExecutionDatabase = args.installedService ? args.databaseName : expectedScratchDatabase;
+  if (args.phase === 'ingest-recall' && resolveAimosDatabaseName() !== expectedExecutionDatabase) {
+    throw new Error('poisonedrag_signer_not_bound_to_execution_database');
   }
-  if (args.phase === 'model-aggregate' && resolveAimosDatabaseName() !== 'aimos') {
+  if (args.phase === 'model-aggregate'
+    && resolveAimosDatabaseName() !== (args.installedService ? args.databaseName : 'aimos')) {
     throw new Error('poisonedrag_provider_not_bound_to_canonical_custody');
   }
   const initialProgress = {
@@ -1250,7 +1286,7 @@ async function main() {
   progress.judgments_reused = 0;
   progress.phase = 'model-access';
   writeProgress(root, progress);
-  await ensureProviderRuntime();
+  await ensureProviderRuntime(args);
   const answerByTarget = new Map();
   for (const target of inputs.targets) {
     const answers = [];

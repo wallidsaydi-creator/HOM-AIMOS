@@ -1,151 +1,245 @@
 /**
- * Native neuroplasticity stability-control recall operator from:
- * - Neuroplasticity in Artificial Intelligence.pdf
+ * neuroplasticity-stability-control.js — certified trajectory controller
  *
- * Implemented formulas / techniques:
- * - convergence gate `Delta loss = |loss_epoch - loss_epoch-1| < delta`
- * - dropin activation for new data or stalled loss
- * - dropout mask `m(l) ~ Bernoulli(1-p)`
- * - dropout activation `h(l)=m(l) o f(W(l)h(l-1))`
- * - inference scaling `h(l)=f(W(l)h(l-1))*(1-p)`
- * - validation decrease gate and surprise-threshold plasticity gate
- * - LRP-style relevance thresholding as read diagnostics
+ * This native cognitive-mutation primitive consumes the real,
+ * database-verified append-only retrieval-weight trajectory and bounds the next
+ * proposed transition. It never scores recall text, invents a lexical loss,
+ * masks candidates, prunes memory, changes content, or writes state.
  *
- * Aimos adaptation:
- * - dropout/pruning are diagnostic masks over transient candidate scores only
- * - no canonical memory is pruned, decayed, deleted, or rewritten
- * - dropin means adding transient explanatory capacity for scoring evidence
+ * Paper boundary:
+ * - Neuroplasticity in Artificial Intelligence (2025) motivates dynamic
+ *   stability/plasticity control, but its dropin/dropout algorithms operate on
+ *   neural-network architecture and require empirical validation.
+ * - HOM-AIMOS does not claim those algorithms. Its native state is a certified
+ *   scalar trajectory, so the system adaptation is a trajectory-dependent
+ *   trust region over log-weight motion.
+ *
+ * Let x_t = log(w_t), V_t = sum_i |x_i-x_{i-1}| and rho_t be the observed
+ * direction-reversal rate. The permitted log step is
+ *
+ *   b_t = max(b_min, b_0 / (1 + V_t/log(3) + rho_t)).
+ *
+ * The controlled proposal is
+ *
+ *   x_{t+1} = x_t + sign(x*-x_t) min(|x*-x_t|, b_t).
+ *
+ * This preserves plasticity (b_t is never zero), reduces oscillatory movement,
+ * and remains inside the database's independent [0.1,3.0] Aladdin bound.
  */
 
 import { createHash } from 'node:crypto';
+import { canonicalJson } from '../security/protocol/canonical-json.js';
 
 export const NEUROPLASTICITY_CONSTANTS = Object.freeze({
-  convergence_delta: 0.04,
-  dropout_p: 0.18,
-  surprise_threshold: 0.62,
-  lrp_threshold: 0.08,
+  schema: 'hom.aimos.certified-neuroplasticity-control/v1',
+  minimum_weight_milli: 100,
+  maximum_weight_milli: 3000,
+  base_log_step: Math.log(1.3),
+  minimum_log_step: Math.log(1.005),
+  variation_scale: Math.log(3),
 });
 
 export const NEUROPLASTICITY_GUARDRAILS = Object.freeze({
-  mutates_canonical_memory: false,
-  prunes_canonical_memory: false,
-  applies_decay: false,
-  deletes_memory: false,
-  injects_answers: false,
-  pruning_is_transient_mask_only: true,
+  canonical_content: 'immutable',
+  memory_existence: 'immutable',
+  controlled_state: 'retrieval_weight_only',
+  direct_database_write: false,
+  input_requires_verified_cognitive_trajectory: true,
 });
 
-const STOPWORDS = new Set([
-  'about', 'after', 'again', 'also', 'among', 'before', 'being', 'between',
-  'could', 'current', 'during', 'from', 'have', 'many', 'more', 'most',
-  'that', 'their', 'there', 'these', 'this', 'those', 'through', 'what',
-  'when', 'where', 'which', 'while', 'with', 'would',
-]);
+const HEX_32 = /^[0-9a-f]{64}$/;
 
-function clamp01(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(0, Math.min(1, n));
+function asMilli(value, code) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) throw new Error(code);
+  const milli = Math.round(number * 1000);
+  if (milli < NEUROPLASTICITY_CONSTANTS.minimum_weight_milli
+      || milli > NEUROPLASTICITY_CONSTANTS.maximum_weight_milli) {
+    throw new Error(code);
+  }
+  return milli;
 }
 
-function normalizeText(value = '') {
-  return String(value || '')
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[^\p{L}\p{N}\s-]+/gu, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+function direction(delta) {
+  return delta > 0 ? 1 : delta < 0 ? -1 : 0;
 }
 
-function tokens(value = '') {
-  return normalizeText(value)
-    .split(/\s+/)
-    .filter((token) => token.length >= 3 && !STOPWORDS.has(token));
+function hashDecision(body) {
+  return createHash('sha256')
+    .update(Buffer.from(canonicalJson(body), 'utf8'))
+    .digest('hex');
 }
 
-function hashUnit(value = '') {
-  const digest = createHash('sha256').update(String(value || '')).digest();
-  return digest.readUInt32BE(0) / 0xffffffff;
-}
+export function summarizeCertifiedTrajectory(rows = [], {
+  currentWeight,
+  expectedChainLength = null,
+} = {}) {
+  if (!Array.isArray(rows)) throw new Error('neuroplasticity_trajectory_rows_required');
+  const currentMilli = asMilli(currentWeight, 'neuroplasticity_current_weight_invalid');
+  if (expectedChainLength != null && Number(expectedChainLength) !== rows.length) {
+    throw new Error('neuroplasticity_chain_length_mismatch');
+  }
+  let previousNewMilli = null;
+  let previousDirection = 0;
+  let reversals = 0;
+  let totalVariation = 0;
+  let headProjectionHash = '0'.repeat(64);
 
-function lexicalOverlap(query = '', text = '') {
-  const q = new Set(tokens(query));
-  const t = new Set(tokens(text));
-  if (!q.size || !t.size) return 0;
-  let hits = 0;
-  for (const token of q) if (t.has(token)) hits += 1;
-  return hits / q.size;
-}
-
-function stateText(state = {}) {
-  return String(state.text || state.memory?.value || '').trim();
-}
-
-export function convergenceDelta(currentLoss = 0, previousLoss = 0) {
-  return Math.abs((Number(currentLoss) || 0) - (Number(previousLoss) || 0));
-}
-
-export function shouldDropin({ currentLoss = 0, previousLoss = 0, hasNewData = false, delta = NEUROPLASTICITY_CONSTANTS.convergence_delta } = {}) {
-  const d = convergenceDelta(currentLoss, previousLoss);
-  return Boolean(hasNewData) || d < delta;
-}
-
-export function bernoulliMask(values = [], keepProbability = 1 - NEUROPLASTICITY_CONSTANTS.dropout_p, seed = 'aimos') {
-  const keep = clamp01(keepProbability);
-  return values.map((_, index) => (hashUnit(`${seed}:${index}`) <= keep ? 1 : 0));
-}
-
-export function dropoutActivation(values = [], mask = [], activation = (x) => Math.max(0, Number(x) || 0)) {
-  return values.map((value, index) => (Number(mask[index]) ? activation(value) : 0));
-}
-
-export function inferenceScaledActivation(values = [], p = NEUROPLASTICITY_CONSTANTS.dropout_p, activation = (x) => Math.max(0, Number(x) || 0)) {
-  const scale = 1 - clamp01(p);
-  return values.map((value) => activation(value) * scale);
-}
-
-export function lrpRelevantIndices(values = [], threshold = NEUROPLASTICITY_CONSTANTS.lrp_threshold) {
-  return values
-    .map((value, index) => ({ index, relevance: clamp01(value) }))
-    .filter((row) => row.relevance >= threshold)
-    .map((row) => row.index);
-}
-
-function validationDecreaseGate(values = []) {
-  if (values.length < 2) return false;
-  const first = values[0];
-  const last = values[values.length - 1];
-  return last < first;
-}
-
-export function neuroplasticityScores({ queryText = '', states = [] } = {}) {
-  const base = (states || []).map((state) => lexicalOverlap(queryText, stateText(state)));
-  const currentLoss = 1 - (base.reduce((sum, value) => sum + value, 0) / Math.max(1, base.length));
-  const previousLoss = 1 - (base.slice(0, Math.max(1, base.length - 1)).reduce((sum, value) => sum + value, 0) / Math.max(1, base.length - 1));
-  const dropinGate = shouldDropin({ currentLoss, previousLoss, hasNewData: /\b(new|recent|currently|now|last)\b/i.test(queryText) });
-  const mask = bernoulliMask(base, 1 - NEUROPLASTICITY_CONSTANTS.dropout_p, queryText);
-  const dropout = dropoutActivation(base, mask);
-  const inference = inferenceScaledActivation(base);
-  const relevant = new Set(lrpRelevantIndices(base));
-  const validationDecreases = validationDecreaseGate(base);
-  const scoreById = new Map();
-
-  (states || []).forEach((state, index) => {
-    const surprise = 1 - base[index];
-    const plasticityBoost = dropinGate || surprise >= NEUROPLASTICITY_CONSTANTS.surprise_threshold ? 0.18 : 0;
-    const relevanceBoost = relevant.has(index) ? 0.12 : 0;
-    const stability = validationDecreases ? inference[index] : Math.max(inference[index], dropout[index]);
-    scoreById.set(String(state.id), clamp01((0.58 * base[index]) + (0.24 * stability) + plasticityBoost + relevanceBoost));
+  rows.forEach((row, index) => {
+    const oldMilli = Number(row.old_weight_milli);
+    const newMilli = Number(row.new_weight_milli);
+    const projectionHash = Buffer.isBuffer(row.projection_hash)
+      ? row.projection_hash.toString('hex')
+      : String(row.projection_hash || '').toLowerCase();
+    if (!Number.isInteger(oldMilli) || !Number.isInteger(newMilli)
+        || oldMilli < NEUROPLASTICITY_CONSTANTS.minimum_weight_milli
+        || oldMilli > NEUROPLASTICITY_CONSTANTS.maximum_weight_milli
+        || newMilli < NEUROPLASTICITY_CONSTANTS.minimum_weight_milli
+        || newMilli > NEUROPLASTICITY_CONSTANTS.maximum_weight_milli
+        || oldMilli === newMilli || !HEX_32.test(projectionHash)) {
+      throw new Error('neuroplasticity_trajectory_row_invalid');
+    }
+    if (index > 0 && oldMilli !== previousNewMilli) {
+      throw new Error('neuroplasticity_trajectory_continuity_invalid');
+    }
+    const stepDirection = direction(newMilli - oldMilli);
+    if (previousDirection !== 0 && stepDirection !== previousDirection) reversals += 1;
+    totalVariation += Math.abs(Math.log(newMilli / oldMilli));
+    previousDirection = stepDirection;
+    previousNewMilli = newMilli;
+    headProjectionHash = projectionHash;
   });
 
-  return {
-    scoreById,
-    dropin_gate_count: dropinGate ? states.length : 0,
-    dropout_mask_count: mask.filter(Boolean).length,
-    relevant_index_count: relevant.size,
-    plasticity_mode: dropinGate ? 'dropin_read_capacity' : 'stable_inference',
-    validation_decrease_gate: validationDecreases,
-    formula: 'Delta=|loss_t-loss_t-1|; h=m o f(Wh); inference=f(Wh)*(1-p)',
-    guardrails: NEUROPLASTICITY_GUARDRAILS,
-  };
+  if (rows.length > 0 && previousNewMilli !== currentMilli) {
+    throw new Error('neuroplasticity_trajectory_terminal_mismatch');
+  }
+  const reversalRate = rows.length > 1 ? reversals / (rows.length - 1) : 0;
+  return Object.freeze({
+    chain_length: rows.length,
+    current_weight_milli: currentMilli,
+    head_projection_hash: headProjectionHash,
+    total_log_variation_ppm: Math.round(totalVariation * 1_000_000),
+    reversal_count: reversals,
+    reversal_rate_ppm: Math.round(reversalRate * 1_000_000),
+  });
+}
+
+export function controlCertifiedTrajectoryProposal({
+  memoryId,
+  currentWeight,
+  proposedWeight,
+  trajectory,
+  mutationOwner,
+} = {}) {
+  const currentMilli = asMilli(currentWeight, 'neuroplasticity_current_weight_invalid');
+  const proposedMilli = asMilli(proposedWeight, 'neuroplasticity_proposed_weight_invalid');
+  if (!trajectory || Number(trajectory.current_weight_milli) !== currentMilli
+      || !HEX_32.test(String(trajectory.head_projection_hash || ''))) {
+    throw new Error('neuroplasticity_verified_trajectory_required');
+  }
+  const totalVariation = Number(trajectory.total_log_variation_ppm) / 1_000_000;
+  const reversalRate = Number(trajectory.reversal_rate_ppm) / 1_000_000;
+  if (!Number.isFinite(totalVariation) || totalVariation < 0
+      || !Number.isFinite(reversalRate) || reversalRate < 0 || reversalRate > 1) {
+    throw new Error('neuroplasticity_trajectory_summary_invalid');
+  }
+
+  const current = currentMilli / 1000;
+  const proposed = proposedMilli / 1000;
+  const requestedLogStep = Math.log(proposed / current);
+  const trustRadius = Math.max(
+    NEUROPLASTICITY_CONSTANTS.minimum_log_step,
+    NEUROPLASTICITY_CONSTANTS.base_log_step
+      / (1 + (totalVariation / NEUROPLASTICITY_CONSTANTS.variation_scale) + reversalRate),
+  );
+  const controlledLogStep = direction(requestedLogStep)
+    * Math.min(Math.abs(requestedLogStep), trustRadius);
+  const controlled = Math.max(
+    NEUROPLASTICITY_CONSTANTS.minimum_weight_milli / 1000,
+    Math.min(
+      NEUROPLASTICITY_CONSTANTS.maximum_weight_milli / 1000,
+      current * Math.exp(controlledLogStep),
+    ),
+  );
+  const controlledMilli = Math.max(
+    NEUROPLASTICITY_CONSTANTS.minimum_weight_milli,
+    Math.min(NEUROPLASTICITY_CONSTANTS.maximum_weight_milli, Math.round(controlled * 1000)),
+  );
+  const body = Object.freeze({
+    schema: NEUROPLASTICITY_CONSTANTS.schema,
+    memory_id: String(memoryId || ''),
+    mutation_owner: String(mutationOwner || ''),
+    trajectory_head_projection_hash: trajectory.head_projection_hash,
+    trajectory_chain_length: Number(trajectory.chain_length),
+    current_weight_milli: currentMilli,
+    proposed_weight_milli: proposedMilli,
+    controlled_weight_milli: controlledMilli,
+    total_log_variation_ppm: Number(trajectory.total_log_variation_ppm),
+    reversal_count: Number(trajectory.reversal_count),
+    reversal_rate_ppm: Number(trajectory.reversal_rate_ppm),
+    trust_radius_log_ppm: Math.round(trustRadius * 1_000_000),
+    requested_log_step_ppm: Math.round(requestedLogStep * 1_000_000),
+    controlled_log_step_ppm: Math.round(Math.log((controlledMilli / 1000) / current) * 1_000_000),
+    canonical_content: 'immutable',
+    memory_existence: 'immutable',
+    controlled_state: 'retrieval_weight_only',
+  });
+  return Object.freeze({
+    controlled_weight: controlledMilli / 1000,
+    changed_by_controller: controlledMilli !== proposedMilli,
+    decision: body,
+    decision_sha256: hashDecision(body),
+  });
+}
+
+export async function readCertifiedMutationTrajectory({
+  client,
+  companyId,
+  memoryId,
+} = {}) {
+  if (!client || typeof client.query !== 'function' || !companyId || !memoryId) {
+    throw new Error('neuroplasticity_trajectory_reader_input_invalid');
+  }
+  const verification = await client.query(
+    'SELECT * FROM public.verify_cognitive_weight_chain($1::uuid)',
+    [memoryId],
+  );
+  const verified = verification.rows[0];
+  if (!verified || verified.ok !== true) {
+    throw new Error(`neuroplasticity_cognitive_chain_invalid:${verified?.reason || 'missing'}`);
+  }
+  const live = await client.query(
+    'SELECT retrieval_weight FROM aimos_memories WHERE company_id=$1 AND id=$2::uuid',
+    [companyId, memoryId],
+  );
+  if (live.rowCount !== 1) throw new Error('neuroplasticity_memory_missing');
+  const history = await client.query(
+    `SELECT old_weight_milli,new_weight_milli,projection_hash
+       FROM aimos_cognitive_weight_projections
+      WHERE company_id=$1 AND memory_id=$2::uuid
+      ORDER BY applied_at,projection_id`,
+    [companyId, memoryId],
+  );
+  return summarizeCertifiedTrajectory(history.rows, {
+    currentWeight: Number(live.rows[0].retrieval_weight),
+    expectedChainLength: Number(verified.chain_length),
+  });
+}
+
+export async function controlCertifiedMutationProposal({
+  client,
+  companyId,
+  memoryId,
+  currentWeight,
+  proposedWeight,
+  mutationOwner,
+} = {}) {
+  const trajectory = await readCertifiedMutationTrajectory({ client, companyId, memoryId });
+  return controlCertifiedTrajectoryProposal({
+    memoryId,
+    currentWeight,
+    proposedWeight,
+    trajectory,
+    mutationOwner,
+  });
 }

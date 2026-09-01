@@ -50,7 +50,7 @@ async function stripeRequest(path, params = {}, useContext = {}) {
   } catch (error) {
     await credentialLedger.finalizeCredentialUse({
       reservation,
-      outcome: 'failed',
+      outcome: 'indeterminate',
       outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'transport_error' }),
       outcomeClass: 'transport_error',
       errorClass: error?.name || 'transport_error',
@@ -58,21 +58,32 @@ async function stripeRequest(path, params = {}, useContext = {}) {
     throw error;
   }
 
+  if (!response.ok) {
+    const json = await response.json().catch(async () => ({ error: { message: await response.text() } }));
+    await credentialLedger.finalizeCredentialUse({
+      reservation,
+      outcome: 'failed',
+      outcomeHash: credentialUseEvidenceHash({
+        status: response.status,
+        stripe_request_id: response.headers.get('request-id') || null,
+        response_hash: credentialUseEvidenceHash(json),
+      }),
+      outcomeClass: `http_${response.status}`,
+      errorClass: `http_${response.status}`,
+    });
+    throw new Error(json?.error?.message || `Stripe error (${response.status})`);
+  }
+  const json = await response.json();
   await credentialLedger.finalizeCredentialUse({
     reservation,
     outcome: 'completed',
     outcomeHash: credentialUseEvidenceHash({
       status: response.status,
       stripe_request_id: response.headers.get('request-id') || null,
+      response_hash: credentialUseEvidenceHash(json),
     }),
     outcomeClass: `http_${response.status}`,
   });
-
-  if (!response.ok) {
-    const json = await response.json().catch(async () => ({ error: { message: await response.text() } }));
-    throw new Error(json?.error?.message || `Stripe error (${response.status})`);
-  }
-  const json = await response.json();
   return json;
 }
 

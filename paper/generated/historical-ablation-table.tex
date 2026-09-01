@@ -1,0 +1,16 @@
+\begin{table}[t]
+\centering
+\caption{Historical V1 fixed-corpus PoisonedRAG ablation. Each arm contains 100 paired targets.}
+\label{tab:v1-ablation}
+\small
+\begin{tabular}{@{}lrrr@{}}
+\toprule
+Arm & poison retrieval@5 & clean accuracy & attacked accuracy \\
+\midrule
+A0 & \MutMemAblationAZeroRetrievalCount/\MutMemAblationAZeroRetrievalTotal & \MutMemAblationAZeroCleanPercent\% & \MutMemAblationAZeroAttackedPercent\% \\
+A1 & \MutMemAblationAOneRetrievalCount/\MutMemAblationAOneRetrievalTotal & \MutMemAblationAOneCleanPercent\% & \MutMemAblationAOneAttackedPercent\% \\
+A2 & \MutMemAblationATwoRetrievalCount/\MutMemAblationATwoRetrievalTotal & \MutMemAblationATwoCleanPercent\% & \MutMemAblationATwoAttackedPercent\% \\
+A3 & \MutMemAblationAThreeRetrievalCount/\MutMemAblationAThreeRetrievalTotal & \MutMemAblationAThreeCleanPercent\% & \MutMemAblationAThreeAttackedPercent\% \\
+\bottomrule
+\end{tabular}
+\end{table}

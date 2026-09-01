@@ -96,15 +96,19 @@ test('R6 source binds scope and closure on every native return path', async () =
   assert.match(tracker, /hom-aimos\/canary-recall-final-closure\/v2-epistemic-scope/);
 });
 
-test('R6 REST, MCP, v1, and native tool recall converge on executeNativeRecall', async () => {
+test('R6 REST, MCP, v1, and native tool recall converge on executeCanonicalRecall', async () => {
   const [rest, mcp, v1, tool] = await Promise.all([
     readFile(new URL('../../routes/aimos.js', import.meta.url), 'utf8'),
     readFile(new URL('../../routes/aimos-mcp-streamable.js', import.meta.url), 'utf8'),
     readFile(new URL('../../routes/v1-api.js', import.meta.url), 'utf8'),
     readFile(new URL('../../tests/security/native-tool-action-db.test.mjs', import.meta.url), 'utf8'),
   ]);
-  assert.match(rest, /executeNativeRecall\(req, recallAuthority\)/);
-  assert.match(mcp, /executeNativeRecall\(authContext\.request, recallAuthority\)/);
-  assert.match(v1, /executeNativeRecall\(req, recallAuthority\)/);
-  assert.match(tool, /executeNativeRecall\(/);
+  assert.match(rest, /executeCanonicalRecall\(\{/);
+  assert.match(mcp, /executeCanonicalRecall\(\{/);
+  assert.match(v1, /executeCanonicalRecall\(\{/);
+  assert.match(tool, /executeCanonicalRecall\(\{/);
+  for (const productionSource of [rest, mcp, v1, tool]) {
+    assert.doesNotMatch(productionSource, /resolveNativeRecallAuthority/);
+    assert.doesNotMatch(productionSource, /executeNativeRecall\(/);
+  }
 });

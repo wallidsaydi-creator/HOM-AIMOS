@@ -147,7 +147,7 @@ async function mintBearerFromKeySecret(useContext = {}) {
       const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
         credentialLedger.finalizeCredentialUse({
           reservation,
-          outcome: 'failed',
+          outcome: 'indeterminate',
           outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'transport_error' }),
           outcomeClass: 'transport_error',
           errorClass: error?.name || 'transport_error',
@@ -158,22 +158,25 @@ async function mintBearerFromKeySecret(useContext = {}) {
       continue;
     }
 
+    const data = await response.json().catch(() => ({}));
+    const responseSucceeded = response.ok && Boolean(data.access_token);
     const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
       credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'completed',
+        outcome: responseSucceeded ? 'completed' : 'failed',
         outcomeHash: credentialUseEvidenceHash({
           status: response.status,
           x_request_id: response.headers.get('x-request-id') || null,
+          response_hash: credentialUseEvidenceHash(data),
         }),
         outcomeClass: `http_${response.status}`,
+        errorClass: responseSucceeded ? null : `http_${response.status}`,
       })
     )));
     const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
     if (terminalFailure) throw terminalFailure.reason;
 
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok || !data.access_token) continue;
+    if (!responseSucceeded) continue;
     cachedBearerFromKeys = Object.freeze({
       value: data.access_token,
       credentials: Object.freeze([key, secret]),
@@ -274,7 +277,7 @@ async function xGet(path, useContext = {}) {
       const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
         credentialLedger.finalizeCredentialUse({
           reservation,
-          outcome: 'failed',
+          outcome: 'indeterminate',
           outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'transport_error' }),
           outcomeClass: 'transport_error',
           errorClass: error?.name || 'transport_error',
@@ -289,7 +292,7 @@ async function xGet(path, useContext = {}) {
     const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
       credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'completed',
+        outcome: response.ok ? 'completed' : 'failed',
         outcomeHash: credentialUseEvidenceHash({
           status: response.status,
           x_request_id: response.headers.get('x-request-id') || null,
@@ -429,7 +432,7 @@ export async function xPostTweet({ text, useContext = {} }) {
       const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
         credentialLedger.finalizeCredentialUse({
           reservation,
-          outcome: 'failed',
+          outcome: 'indeterminate',
           outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'transport_error' }),
           outcomeClass: 'transport_error',
           errorClass: error?.name || 'transport_error',
@@ -444,7 +447,7 @@ export async function xPostTweet({ text, useContext = {} }) {
     const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
       credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'completed',
+        outcome: response.ok ? 'completed' : 'failed',
         outcomeHash: credentialUseEvidenceHash({
           status: response.status,
           x_request_id: response.headers.get('x-request-id') || null,
@@ -533,7 +536,7 @@ export async function xReplyToTweet({ text, replyToTweetId, useContext = {} }) {
       const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
         credentialLedger.finalizeCredentialUse({
           reservation,
-          outcome: 'failed',
+          outcome: 'indeterminate',
           outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'transport_error' }),
           outcomeClass: 'transport_error',
           errorClass: error?.name || 'transport_error',
@@ -548,7 +551,7 @@ export async function xReplyToTweet({ text, replyToTweetId, useContext = {} }) {
     const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
       credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'completed',
+        outcome: response.ok ? 'completed' : 'failed',
         outcomeHash: credentialUseEvidenceHash({
           status: response.status,
           x_request_id: response.headers.get('x-request-id') || null,
@@ -637,7 +640,7 @@ export async function xQuoteTweet({ text, quoteTweetId, useContext = {} }) {
       const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
         credentialLedger.finalizeCredentialUse({
           reservation,
-          outcome: 'failed',
+          outcome: 'indeterminate',
           outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'transport_error' }),
           outcomeClass: 'transport_error',
           errorClass: error?.name || 'transport_error',
@@ -652,7 +655,7 @@ export async function xQuoteTweet({ text, quoteTweetId, useContext = {} }) {
     const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
       credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'completed',
+        outcome: response.ok ? 'completed' : 'failed',
         outcomeHash: credentialUseEvidenceHash({
           status: response.status,
           x_request_id: response.headers.get('x-request-id') || null,

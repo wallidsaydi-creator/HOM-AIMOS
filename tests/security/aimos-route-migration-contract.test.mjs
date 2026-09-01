@@ -16,21 +16,18 @@ test('aimos routes never perform runtime schema DDL', () => {
 test('live route schemas are verified read-only and fail closed', () => {
   for (const functionName of [
     'ensureMedallionColumn',
-    'ensureAgentStateTable',
   ]) {
     assert.match(source, new RegExp(`async function ${functionName}\\(\\)`));
   }
 
   for (const relation of [
     'aimos_memories',
-    'agent_state',
   ]) {
     assert.match(source, new RegExp(`to_regclass\\('public\\.${relation}'\\)`));
   }
 
   for (const index of [
     'idx_memories_medallion',
-    'agent_state_pkey',
   ]) {
     assert.match(source, new RegExp(index));
   }
@@ -39,4 +36,6 @@ test('live route schemas are verified read-only and fail closed', () => {
   assert.match(source, /MIGRATION_SCHEMA_MISSING/);
   assert.match(source, /error\.statusCode = 503/);
   assert.doesNotMatch(source, /ensureAgentMessagesTable|public\.agent_messages|idx_agent_msg_/);
+  assert.doesNotMatch(source, /INSERT INTO agent_state|UPDATE agent_state/);
+  assert.match(source, /updateAgentState/);
 });

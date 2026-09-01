@@ -71,17 +71,8 @@ function genId(type) {
  * @returns {Promise<string>} skill ID
  */
 export async function depositSkill(skillType, principle, whenToApply, retrievalKey, companyId = COMPANY) {
-  await ensureSchema();
-  const id = genId(skillType);
-  const embedding = await getEmbedding(retrievalKey);
-
-  await query(
-    `INSERT INTO skill_bank (id, company_id, skill_type, principle, when_to_apply, retrieval_key, retrieval_embedding, utility)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, 0.5)`,
-    [id, companyId, skillType, principle, whenToApply, retrievalKey, embedding ? JSON.stringify(embedding) : null]
-  );
-
-  return id;
+  void skillType; void principle; void whenToApply; void retrievalKey; void companyId;
+  throw new Error('dual_skill_deposit_retired_use_canonical_procedural_save');
 }
 
 /**
@@ -135,14 +126,6 @@ export async function retrieveSkills(queryText, skillType, topK = 3, companyId =
     .sort((a, b) => b.score - a.score)
     .slice(0, topK);
 
-  // Increment retrieval counts (fire-and-forget)
-  for (const skill of scored) {
-    query(
-      `UPDATE skill_bank SET retrieval_count = retrieval_count + 1, updated_at = NOW() WHERE id = $1`,
-      [skill.id]
-    ).catch(() => {});
-  }
-
   return scored;
 }
 
@@ -157,26 +140,8 @@ export async function retrieveSkills(queryText, skillType, topK = 3, companyId =
  * @param {'task'|'step'} skillType
  */
 export async function updateUtility(skillId, credit, skillType = 'task') {
-  await ensureSchema();
-  const beta = skillType === 'task' ? BETA_TASK : BETA_STEP;
-
-  const current = await query(
-    `SELECT utility FROM skill_bank WHERE id = $1`,
-    [skillId]
-  );
-  if (current.rows.length === 0) return;
-
-  const currentUtility = parseFloat(current.rows[0].utility);
-  const newUtility = Math.max(0, Math.min(1, (1 - beta) * currentUtility + beta * credit));
-
-  const successDelta = credit > 0 ? 1 : 0;
-  const failureDelta = credit < 0 ? 1 : 0;
-
-  await query(
-    `UPDATE skill_bank SET utility = $1, success_count = success_count + $2,
-     failure_count = failure_count + $3, updated_at = NOW() WHERE id = $4`,
-    [newUtility, successDelta, failureDelta, skillId]
-  );
+  void skillId; void credit; void skillType;
+  throw new Error('dual_skill_utility_mutation_retired_use_signed_outcome_events');
 }
 
 /**

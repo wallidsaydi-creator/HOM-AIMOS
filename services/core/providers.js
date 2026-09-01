@@ -26,6 +26,7 @@ import { checkoutCachedCredential, peekCachedCredential } from '../security/cred
 import { credentialLedger, credentialUseEvidenceHash } from '../security/credential-ledger.js';
 import { systemConfigStore } from '../security/system-config-store.js';
 import { AIMOS_COMPANY_ID } from './runtime-config.js';
+import { materialEffectOwner } from '../security/material-effect-owner.js';
 
 const PROVIDER_REQUEST_TIMEOUT_MS = 60_000;
 const CODEX_REQUEST_TIMEOUT_MS = 180_000;
@@ -49,11 +50,34 @@ async function probeLocalProvider(provider) {
     ? `${OLLAMA_BASE_URL}/api/tags`
     : `${LMSTUDIO_BASE_URL}/models`;
 
+  let effect = null;
   try {
+    effect = await materialEffectOwner.begin({
+      kind: 'external',
+      operation: 'local_provider_health_probe',
+      targetIdentifier: provider,
+      inputProjection: { provider, method: 'GET' },
+    });
     const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 3_000);
     state.available = response.ok;
-  } catch {
+    await materialEffectOwner.finish({
+      action: effect,
+      disposition: 'SUCCEEDED',
+      resultProjection: { status: response.status, ok: response.ok },
+      resultClass: 'provider_probe_response',
+    });
+  } catch (error) {
     state.available = false;
+    if (effect) {
+      try {
+        await materialEffectOwner.finish({
+          action: effect,
+          disposition: 'INDETERMINATE',
+          resultProjection: { error_class: error?.name || 'provider_probe_error' },
+          resultClass: 'provider_probe_completion_not_proven',
+        });
+      } catch { /* the open signed start is recovered by CR7-R6 */ }
+    }
   } finally {
     state.checkedAt = Date.now();
     state.probing = false;
@@ -885,8 +909,18 @@ export async function listProviderModels(providerId, useContext = {}) {
     throw new Error(`Unknown provider '${provider}'`);
   }
 
+  const effect = await materialEffectOwner.begin({
+    kind: 'external',
+    operation: 'model_provider_catalog',
+    targetIdentifier: provider,
+    inputProjection: { provider, method: 'GET' },
+    subjectAgentId: useContext?.actorAgentId || 'housekeeper',
+    authority: useContext,
+    parentEventId: useContext?.autonomousActionEventId || useContext?.requestAdmissionEventId || null,
+  });
   try {
     let models = [];
+    let credentialUseEvidence = null;
     if (provider === 'anthropic') {
       models = await listAnthropicModels(useContext);
     } else if (provider === 'gemini') {
@@ -896,32 +930,43 @@ export async function listProviderModels(providerId, useContext = {}) {
     } else if (provider === 'codex') {
       const catalog = await listCodexModels(useContext);
       models = catalog.models;
-      if (useContext?.includeCredentialUseEvidence) {
-        return {
-          providerId: provider,
-          available: true,
-          error: null,
-          models: dedupeModels(models),
-          credentialUseEvidence: catalog.credentialUseEvidence,
-        };
-      }
+      credentialUseEvidence = catalog.credentialUseEvidence;
     } else {
       models = await listOpenAiCompatibleModels(provider, PROVIDER_REGISTRY[provider], useContext);
     }
 
-    return {
+    const result = {
       providerId: provider,
       available: true,
       error: null,
-      models: dedupeModels(models)
+      models: dedupeModels(models),
+      ...(useContext?.includeCredentialUseEvidence ? { credentialUseEvidence } : {}),
     };
+    await materialEffectOwner.finish({
+      action: effect,
+      disposition: 'SUCCEEDED',
+      resultProjection: { provider, models: result.models },
+      resultClass: 'provider_catalog_response',
+    });
+    return result;
   } catch (error) {
-    return {
+    const result = {
       providerId: provider,
       available: false,
       error: error?.message || String(error),
       models: []
     };
+    try {
+      await materialEffectOwner.finish({
+        action: effect,
+        disposition: 'INDETERMINATE',
+        resultProjection: { provider, error_class: error?.name || 'provider_catalog_error' },
+        resultClass: 'provider_catalog_completion_not_proven',
+      });
+    } catch (terminalError) {
+      error.materialEffectTerminalError = terminalError?.message || String(terminalError);
+    }
+    return result;
   }
 }
 
@@ -957,12 +1002,34 @@ export async function runProvider({
       '[runProvider] No provider resolved. Set LLM_PROVIDER (anthropic|gemini|ollama|codex|openai|openrouter|groq|deepseek|together|xai|venice|perplexity) and LLM_MODEL.'
     );
   }
-
-  switch (providerKey) {
-    case 'gemini':
-      return runGemini(prompt, resolvedModel, onToken, useContext);
-    case 'perplexity':
-      return runPerplexity({
+  const effect = await materialEffectOwner.begin({
+    kind: 'external',
+    operation: 'model_provider_inference',
+    targetIdentifier: providerKey,
+    inputProjection: {
+      provider: providerKey,
+      model: resolvedModel,
+      prompt: prompt ?? null,
+      messages,
+      systemPrompt: systemPrompt ?? null,
+      userPrompt: userPrompt ?? null,
+      reasoningEffort: reasoningEffort ?? null,
+      textVerbosity: textVerbosity ?? null,
+      maxOutputTokens: maxOutputTokens ?? null,
+      responseSchema: responseSchema ?? null,
+    },
+    subjectAgentId: useContext?.actorAgentId || 'housekeeper',
+    authority: useContext,
+    parentEventId: useContext?.autonomousActionEventId || useContext?.requestAdmissionEventId || null,
+  });
+  try {
+    let result;
+    switch (providerKey) {
+      case 'gemini':
+        result = await runGemini(prompt, resolvedModel, onToken, useContext);
+        break;
+      case 'perplexity':
+        result = await runPerplexity({
         prompt,
         messages,
         systemPrompt,
@@ -972,12 +1039,13 @@ export async function runProvider({
         toolExecutionOptions,
         onToken,
         useContext,
-      });
-    case 'anthropic': {
-      const credentialCheckout = PROVIDER_REGISTRY.anthropic.credentialCheckout();
-      const apiKey = credentialCheckout?.value || '';
-      const baseUrl = PROVIDER_REGISTRY.anthropic.baseUrl();
-      return runAnthropic({
+        });
+        break;
+      case 'anthropic': {
+        const credentialCheckout = PROVIDER_REGISTRY.anthropic.credentialCheckout();
+        const apiKey = credentialCheckout?.value || '';
+        const baseUrl = PROVIDER_REGISTRY.anthropic.baseUrl();
+        result = await runAnthropic({
         prompt,
         messages,
         systemPrompt,
@@ -988,10 +1056,11 @@ export async function runProvider({
         baseUrl,
         onToken,
         useContext,
-      });
-    }
-    case 'codex':
-      return runCodex({
+        });
+        break;
+      }
+      case 'codex':
+        result = await runCodex({
         prompt,
         messages,
         systemPrompt,
@@ -1004,18 +1073,20 @@ export async function runProvider({
         maxOutputTokens,
         responseSchema,
         returnMetadata,
-      });
-    case 'ollama':
-      return runOllama({ prompt, messages, systemPrompt, userPrompt, model: resolvedModel, onToken });
-    case 'openai':
-    case 'openrouter':
-    case 'groq':
-    case 'deepseek':
-    case 'together':
-    case 'xai':
-    case 'venice': {
-      const config = getOpenAICompatConfig(providerKey);
-      return runOpenAICompat({
+        });
+        break;
+      case 'ollama':
+        result = await runOllama({ prompt, messages, systemPrompt, userPrompt, model: resolvedModel, onToken });
+        break;
+      case 'openai':
+      case 'openrouter':
+      case 'groq':
+      case 'deepseek':
+      case 'together':
+      case 'xai':
+      case 'venice': {
+        const config = getOpenAICompatConfig(providerKey);
+        result = await runOpenAICompat({
         provider: providerKey,
         config,
         prompt,
@@ -1027,10 +1098,31 @@ export async function runProvider({
         toolExecutionOptions,
         onToken,
         useContext,
-      });
+        });
+        break;
+      }
+      default:
+        throw new Error(`Unknown provider: ${provider}`);
     }
-    default:
-      throw new Error(`Unknown provider: ${provider}`);
+    await materialEffectOwner.finish({
+      action: effect,
+      disposition: 'SUCCEEDED',
+      resultProjection: result,
+      resultClass: 'provider_response_complete',
+    });
+    return result;
+  } catch (error) {
+    try {
+      await materialEffectOwner.finish({
+        action: effect,
+        disposition: 'INDETERMINATE',
+        resultProjection: { error_class: error?.name || 'provider_error' },
+        resultClass: 'provider_completion_not_proven',
+      });
+    } catch (terminalError) {
+      error.materialEffectTerminalError = terminalError?.message || String(terminalError);
+    }
+    throw error;
   }
 }
 

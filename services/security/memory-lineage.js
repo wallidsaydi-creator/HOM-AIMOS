@@ -80,7 +80,7 @@ import {
 } from './agent-identity.js';
 import { contentHash } from './identity-chain.js';
 import { signAsHousekeeper } from './housekeeper-signer.js';
-import { pool as defaultPool } from '../../db/connection.js';
+import { agentPool as defaultPool } from '../../db/connection.js';
 
 const DERIVATION_TYPE_PHASE_4 = 'agent_reasoning';
 const ATTESTATION_TIER_D3 = 'D3';

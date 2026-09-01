@@ -45,6 +45,7 @@ function admittedDeps() {
     logEvent: async () => ({
       event_id: 'admission-event-test',
       mutation_hash: '3'.repeat(64),
+      signed_body: { authority_kind: 'housekeeper_observation_of_verified_request' },
     }),
   };
 }
@@ -69,6 +70,10 @@ test('auth gate emits one frozen actor/company execution context', async () => {
   assert.equal(req.executionContext.authSource, 'envelope');
   assert.equal(req.executionContext.requestAdmissionEventId, 'admission-event-test');
   assert.equal(req.executionContext.requestAdmissionMutationHash, '3'.repeat(64));
+  assert.equal(
+    req.executionContext.requestAdmissionAuthorityKind,
+    'housekeeper_observation_of_verified_request',
+  );
   assert.equal(Object.isFrozen(req.executionContext), true);
 });
 

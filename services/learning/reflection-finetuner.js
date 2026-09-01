@@ -43,7 +43,7 @@
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { query } from '../../db/connection.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -333,16 +333,16 @@ export async function saveTransaction(agentId, trajectory, reflections, companyI
       createdAt: new Date().toISOString()
     });
 
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: companyId,
       agent_id: agentId,
-      mutation_authority: 'housekeeper',
       key: transactionId,
       value: payload,
       scope: 'agent',
       memory_type: 'reflection_transaction',
       memory_tier: 'long-term',
-      clearance_level: 5
+      clearance_level: 5,
+      source: 'reflection-finetuner',
     });
 
     return { saved: true, transactionId };

@@ -322,9 +322,10 @@ export async function commitMemoryEpistemicClassification({
   authority = null,
   provenance = null,
   evidenceAssertions = null,
+  forceInitial = false,
 }) {
   if (!client) throw new Error('epistemic_classification_client_required');
-  if (!shouldAppendTransition(currentLabel, currentConfidenceMilli, classification)) {
+  if (!forceInitial && !shouldAppendTransition(currentLabel, currentConfidenceMilli, classification)) {
     return { appended: false, classification };
   }
   if (!/^[0-9a-f]{64}$/.test(classification.live_content_hash)) {
@@ -438,7 +439,8 @@ export async function classifyAndCommitRetainedMemoryGroup({
   const sourceName = String(source || '').trim();
   const rows = await client.query(
     `SELECT id, key, value, source, memory_type, content_hash,
-            current_epistemic_label, current_epistemic_confidence_milli
+            current_epistemic_label, current_epistemic_confidence_milli,
+            current_epistemic_event_id
        FROM public.aimos_memories
       WHERE company_id = $1
         AND (
@@ -466,9 +468,11 @@ export async function classifyAndCommitRetainedMemoryGroup({
   const commits = [];
 
   for (const classification of decisions) {
-    if (!['poison_suspect', 'poison_likely'].includes(classification.label)) continue;
     const row = byId.get(classification.memory_id);
     if (!row) continue;
+    const isCurrent = classification.memory_id === String(memoryId);
+    const requiresInitial = isCurrent && row.current_epistemic_event_id === null;
+    if (!requiresInitial && !['poison_suspect', 'poison_likely'].includes(classification.label)) continue;
     const commit = await commitMemoryEpistemicClassification({
       client,
       companyId,
@@ -482,6 +486,7 @@ export async function classifyAndCommitRetainedMemoryGroup({
         ...(provenance || {}),
         classification_trigger_memory_id: String(memoryId),
       },
+      forceInitial: requiresInitial,
     });
     if (commit.appended) commits.push(commit);
   }

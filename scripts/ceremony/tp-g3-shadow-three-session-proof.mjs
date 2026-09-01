@@ -305,7 +305,7 @@ async function appendAndFinalizeSessions(sessions, source) {
       companyId: AIMOS_COMPANY_ID,
       agentId: 'housekeeper',
       clearanceLevel: 12,
-      mutationAuthority: 'housekeeper',
+      autonomousHousekeeper: true,
       source,
     };
     const user = await sessionMemoryOwner.appendTurn({

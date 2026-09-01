@@ -1,0 +1,207 @@
+{
+  "schema": "hom.aimos.p3-clean-installer-qualification/v3",
+  "source_commit": "d6835dd9685a74b01f08f94a0077a0bceb71baf4",
+  "node_version": "v26.8.1",
+  "node_executable_sha256": "902b6a6984d5d825829ea9064ab73b734548df37bc0683990dca31c8dc2a9253",
+  "installation_context_sha256": "65657373a9202d2542c777f3bb5e4747dc92a08a61590086c30a397a6e7be666",
+  "instance": "installer_qual_d6835dd9",
+  "database": "aimos_installer_qual_d6835dd9",
+  "postgres_port": 25432,
+  "http_port": 19303,
+  "installer_invocation_sha256": "d2e56791f3edb87502df99a0e16de58d7dd0857c6f00b63efd06e458348d5ad0",
+  "service_configuration_sha256": "8194a3ca7f6d343f47e57eced46b28c39120aff6007e533c18335bb23fb3e2ba",
+  "first_ready": true,
+  "restart_ready": true,
+  "scheduler_ready": true,
+  "counts": {
+    "memories": 8,
+    "guide_memories": 8,
+    "experimental_memories": 0,
+    "identities": 2,
+    "housekeepers": 1,
+    "masters": 1,
+    "selected_grant_clearance": 10,
+    "selected_grant_data_class": "confidential"
+  },
+  "selected_agent_id": "codex-auditor",
+  "selected_model": {
+    "provider": "codex",
+    "model": "gpt-5.6-sol"
+  },
+  "public_agent_clearance_maximum": 10,
+  "signed_terminal": {
+    "schema": "hom.aimos.p3-installer-qualification-terminal-receipt/v1",
+    "event_id": "05e5ad9d-1903-4ea2-a7ce-246aebeda7ec",
+    "proof_required": true,
+    "ledger_version": 1,
+    "ledger_seq": 78,
+    "signed_body": {
+      "ledger_version": 1,
+      "event_id": "05e5ad9d-1903-4ea2-a7ce-246aebeda7ec",
+      "company_id": "hom",
+      "subject_agent_id": "housekeeper",
+      "actor_agent_id": null,
+      "actor_valid_from": null,
+      "signer_agent_id": "housekeeper",
+      "signer_valid_from": "2026-09-01T04:44:32.000Z",
+      "cert_fingerprint": "c4f20787aa854aed7c017a10a71322650779f64cc664307d36c4f03bc42f56f2",
+      "identity_tier": "T1_SYSTEM_SELF",
+      "authority_kind": "housekeeper_autonomous",
+      "request_envelope_digest": null,
+      "operation": "p3_installer_qualification_terminal",
+      "key": "installer_qual_d6835dd9",
+      "metadata": {
+        "schema": "hom.aimos.p3-installer-qualification-terminal/v1",
+        "installation_context_sha256": "65657373a9202d2542c777f3bb5e4747dc92a08a61590086c30a397a6e7be666",
+        "instance": "installer_qual_d6835dd9",
+        "source_commit": "d6835dd9685a74b01f08f94a0077a0bceb71baf4",
+        "node_version": "v26.8.1",
+        "counts": {
+          "memories": 8,
+          "provenance": 16,
+          "identities": 2,
+          "housekeepers": 1,
+          "masters": 1,
+          "guide_memories": 8,
+          "experimental_memories": 0
+        },
+        "canonical_save_owner": true,
+        "canonical_recall_owner": true,
+        "memory_write": false,
+        "reasoning": "The public installer created and restarted one isolated same-user HOM-AIMOS namespace with a fresh Housekeeper and no experimental data."
+      },
+      "parent_event_id": null,
+      "ledger_seq": 78,
+      "prev_mutation_hash": "f9363577504584ff237faf09b1c67e633d3f086e0a7f1ad7f7b5c0809974c8d7",
+      "ts_signed": 1788237928
+    },
+    "content_hash": "34bd8715fa46c5301b017bafe2dad28c062e0d62e6fc4e1dc08c040c0d826ffc",
+    "mutation_hash": "42eaa940a8ba2c35c240add919892f2f61bbb58c7ae580068bb4767d7a556c12",
+    "prev_mutation_hash": "f9363577504584ff237faf09b1c67e633d3f086e0a7f1ad7f7b5c0809974c8d7",
+    "signer_agent_id": "housekeeper",
+    "signer_valid_from": "2026-09-01T04:44:32.000Z",
+    "cert_fingerprint": "c4f20787aa854aed7c017a10a71322650779f64cc664307d36c4f03bc42f56f2",
+    "signer_certificate": "eyJib2R5Ijp7ImFnZW50X2lkIjoiaG91c2VrZWVwZXIiLCJkZXZpY2VfZnAiOiI4YzQ2NGUwNDBkNDM0NDVjNWJjMGE1NWMzMzU5YjcxMjIwOTZlNGRmOTg0ZjgyNTU2ZDA3MjFmZjk5NjE3YzgwIiwiaXNzdWVkX2F0IjoxNzg4MjM3ODcyLCJpc3N1ZXIiOiJob3VzZWtlZXBlciIsInB1YmtleSI6Ik1Db3dCUVlESzJWd0F5RUExRndxWkh5M01ldDNfWlhObklVaUhyNThYLXFUNWhjcl9za28xYjlGODZZIiwidiI6MSwidmFsaWRfZnJvbSI6MTc4ODIzNzg3MiwidmFsaWRfdW50aWwiOjI1MzQwMjMwMDc5OX0sInNpZyI6IlFiRXBnZmdkU01hNXh5VzNaZTlSSTJFdFBHbHpSWFl2OG5SaWJPbWNFZDlkbjI4Xy1MdHBPUzZlVkVLaWlnZmkzeThNb3psSFVtWkktUTYxdnB6REF3In0",
+    "identity_tier": "T1_SYSTEM_SELF",
+    "ts_signed": 1788237928,
+    "nonce": "Ow3w7dx_bqVVxKVlX1aILg",
+    "signature": "k34WDtEUmVwEdACjmqV-AkRh5LhTJhZUhHPM7fqXK6ESQsDeka6ZVE0uC_uPRbLmxUJ6ZlhQGwCgk6jhLQujAw",
+    "metadata": {
+      "schema": "hom.aimos.p3-installer-qualification-terminal/v1",
+      "installation_context_sha256": "65657373a9202d2542c777f3bb5e4747dc92a08a61590086c30a397a6e7be666",
+      "instance": "installer_qual_d6835dd9",
+      "source_commit": "d6835dd9685a74b01f08f94a0077a0bceb71baf4",
+      "node_version": "v26.8.1",
+      "counts": {
+        "memories": 8,
+        "provenance": 16,
+        "identities": 2,
+        "housekeepers": 1,
+        "masters": 1,
+        "guide_memories": 8,
+        "experimental_memories": 0
+      },
+      "canonical_save_owner": true,
+      "canonical_recall_owner": true,
+      "memory_write": false,
+      "reasoning": "The public installer created and restarted one isolated same-user HOM-AIMOS namespace with a fresh Housekeeper and no experimental data."
+    },
+    "independently_verified": true,
+    "portable_proof_complete": true,
+    "receipt_sha256": "3bb18fa5d443ada406e6ecbe2ffd18e8ffc08528ffcf8dfed47f9feb55ca0f39"
+  },
+  "canonical_runtime_not_manipulated": true,
+  "canonical_health_before": {
+    "service": "FORGE Memory Aimos",
+    "version": "1.0.0",
+    "ready": true,
+    "bootError": null,
+    "readiness": {
+      "scheduler": {
+        "ready": true,
+        "state": "ready",
+        "required_jobs": 5,
+        "registered_required_jobs": 5,
+        "delegated_jobs": 0,
+        "boot_recovery_complete": true,
+        "orphan_reconciled": 0,
+        "genesis_manifest_version": 25,
+        "genesis_corpus_root": "ad73f36b86ed424d56749fa9886ed0f3bf046d5c196c6f772a2af719f3f092de",
+        "local_model_required": false,
+        "tenant_dependency": false
+      }
+    },
+    "uptimeSec": 32880,
+    "runtime": {
+      "company_id": "hom",
+      "database_name": "aimos",
+      "server_port": 9100,
+      "benchmark_scratch": false
+    }
+  },
+  "canonical_before": {
+    "housekeeper_key_sha256": "7b503a233c7e481b4fc1c013c318ea47c91a2cc23d9cf9895ac47f3915f497d7",
+    "service_manifest_sha256": "a45520a55ad86c3cbcaee66e64f152d69c923d57947edc1b5a2e1cd11b9aa564",
+    "database_invariant_sha256": "4755eedbb68b9687fa40668d5b3ce386a7156d89d959ea6e0b8d93918bd99cf1",
+    "event_checkpoint_root_sha256": "f2948f794562cc0ff3724d717ab8b64853094d793247468948c3767702bd366e",
+    "event_count": 35692,
+    "keychain_inventory_sha256": "9e3da30facde7d64114e738eed6b8e3e437add9b64e2d733294b80978653918f"
+  },
+  "canonical_after": {
+    "housekeeper_key_sha256": "7b503a233c7e481b4fc1c013c318ea47c91a2cc23d9cf9895ac47f3915f497d7",
+    "service_manifest_sha256": "a45520a55ad86c3cbcaee66e64f152d69c923d57947edc1b5a2e1cd11b9aa564",
+    "database_invariant_sha256": "4755eedbb68b9687fa40668d5b3ce386a7156d89d959ea6e0b8d93918bd99cf1",
+    "event_checkpoint_root_sha256": "f2948f794562cc0ff3724d717ab8b64853094d793247468948c3767702bd366e",
+    "event_count": 35692,
+    "keychain_inventory_sha256": "9e3da30facde7d64114e738eed6b8e3e437add9b64e2d733294b80978653918f"
+  },
+  "canonical_health_after": {
+    "service": "FORGE Memory Aimos",
+    "version": "1.0.0",
+    "ready": true,
+    "bootError": null,
+    "readiness": {
+      "scheduler": {
+        "ready": true,
+        "state": "ready",
+        "required_jobs": 5,
+        "registered_required_jobs": 5,
+        "delegated_jobs": 0,
+        "boot_recovery_complete": true,
+        "orphan_reconciled": 0,
+        "genesis_manifest_version": 25,
+        "genesis_corpus_root": "ad73f36b86ed424d56749fa9886ed0f3bf046d5c196c6f772a2af719f3f092de",
+        "local_model_required": false,
+        "tenant_dependency": false
+      }
+    },
+    "uptimeSec": 32940,
+    "runtime": {
+      "company_id": "hom",
+      "database_name": "aimos",
+      "server_port": 9100,
+      "benchmark_scratch": false
+    }
+  },
+  "canonical_invariants_unchanged": true,
+  "canonical_event_prefix_preserved": true,
+  "canonical_event_delta": 0,
+  "canonical_unchanged": true,
+  "retained_installation": {
+    "state_root_present": true,
+    "source_root_present": true,
+    "postgres_root_present": true,
+    "service_manifest_present": true,
+    "service_unit_present": true,
+    "service_loaded": true,
+    "postgres_port_listening": true,
+    "http_port_listening": true,
+    "credential_items_present": true,
+    "master_slot_present": true,
+    "ready": true
+  },
+  "retained_installation_ready": true,
+  "failed_attempt_cleanup": null,
+  "qualified": true,
+  "qualification_sha256": "882e5fcdc403b0af3df555cbe24bc4f3f2ce9e9b02cd2cfa4b4a7de1358beea3"
+}

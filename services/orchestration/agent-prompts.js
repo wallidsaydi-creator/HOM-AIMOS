@@ -460,19 +460,36 @@ export async function loadProceduralSkills(agentId, userPrompt) {
     let usedEmbedding = false;
     try {
       const promptEmbedding = await getEmbedding(userPrompt);
-      const embResult = await query(
-        `SELECT id, skill_name, trigger_pattern, steps, expected_outcome, success_count, fail_count, tags,
-                (skill_embedding <=> $3::vector) as distance
-         FROM procedural_skills
-         WHERE company_id = $1
-           AND (agent_id = $2 OR agent_id = 'system')
-           AND skill_embedding IS NOT NULL
-         ORDER BY (skill_embedding <=> $3::vector) ASC
-         LIMIT 5`,
+      const nativeResult = await query(
+        `SELECT id, key, value, (embedding <=> $3::vector) AS distance
+           FROM aimos_memories
+          WHERE company_id = $1 AND (agent_id = $2 OR agent_id = 'system')
+            AND memory_type = 'procedural' AND embedding IS NOT NULL
+          ORDER BY embedding <=> $3::vector ASC LIMIT 5`,
         [COMPANY, agentId, JSON.stringify(promptEmbedding)]
       );
+      matched = nativeResult.rows
+        .filter((row) => parseFloat(row.distance) < 0.7)
+        .map((row) => {
+          let value = {};
+          try { value = JSON.parse(row.value); } catch { value = { skill_name: row.key, steps: [], expected_outcome: row.value }; }
+          return { id: row.id, success_count: 0, fail_count: 0, ...value, distance: row.distance };
+        });
+      if (!matched.length) {
+        const embResult = await query(
+          `SELECT id, skill_name, trigger_pattern, steps, expected_outcome, success_count, fail_count, tags,
+                  (skill_embedding <=> $3::vector) as distance
+           FROM procedural_skills
+           WHERE company_id = $1
+             AND (agent_id = $2 OR agent_id = 'system')
+             AND skill_embedding IS NOT NULL
+           ORDER BY (skill_embedding <=> $3::vector) ASC
+           LIMIT 5`,
+          [COMPANY, agentId, JSON.stringify(promptEmbedding)]
+        );
+        matched = embResult.rows.filter(r => parseFloat(r.distance) < 0.7);
+      }
       // Only use embedding matches with distance < 0.7 (reasonably similar)
-      matched = embResult.rows.filter(r => parseFloat(r.distance) < 0.7);
       if (matched.length > 0) usedEmbedding = true;
     } catch { /* embedding retrieval failed — fall back to regex */ }
 

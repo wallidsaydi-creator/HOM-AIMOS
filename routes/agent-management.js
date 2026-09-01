@@ -21,6 +21,7 @@ import {
 import {
   getAllSessionStats
 } from '../services/orchestration/session-runner.js';
+import { listVerifiedRunStates } from '../services/orchestration/run-metadata.js';
 import {
   COMPANY,
   TOOL_SUITES,
@@ -101,16 +102,9 @@ router.get('/statuses', async (req, res) => {
   );
 
   try {
-    const running = await query(
-      `SELECT resolved_agent_id, status
-       FROM agent_runs
-       WHERE company_id = $1
-         AND created_at >= NOW() - INTERVAL '30 minutes'
-         AND status IN ('running', 'awaiting_approval')
-       ORDER BY updated_at DESC`,
-      [COMPANY]
-    );
-    for (const row of running.rows) {
+    const running = await listVerifiedRunStates({ companyId: COMPANY, sinceMs: Date.now() - 30 * 60_000 });
+    for (const row of running) {
+      if (!['running', 'awaiting_approval'].includes(row.status)) continue;
       const agentId = String(row.resolved_agent_id || '').trim();
       if (!agentId) continue;
       statuses[agentId] = row.status === 'awaiting_approval' ? 'awaiting_approval' : 'running';
@@ -154,23 +148,10 @@ router.get('/delegation-chain', async (req, res) => {
   }
 
   try {
-    const rows = await query(
-      `SELECT
-         source_agent_id,
-         delegated_to,
-         status,
-         model_resolved,
-         created_at
-       FROM agent_runs
-       WHERE company_id = $1
-         AND delegated_to IS NOT NULL
-         AND (source_agent_id = $2 OR delegated_to = $2)
-       ORDER BY created_at DESC
-       LIMIT $3`,
-      [COMPANY, agentId, limit]
-    );
-
-    const chain = rows.rows.map((row) => ({
+    const rows = await listVerifiedRunStates({ companyId: COMPANY, limit: Math.max(limit, 200) });
+    const chain = rows.filter((row) => row.delegated_to
+      && (row.source_agent_id === agentId || row.delegated_to === agentId))
+      .slice(0, limit).map((row) => ({
       from: String(row.source_agent_id || ''),
       to: String(row.delegated_to || ''),
       status: String(row.status || 'unknown'),
@@ -196,18 +177,10 @@ router.get('/:id/status', async (req, res) => {
   if (!agent) return res.status(404).json({ success: false, error: 'Agent not found' });
 
   try {
-    const runs = await query(
-      `SELECT
-         COUNT(*) FILTER (WHERE status = 'running')::int AS running,
-         COUNT(*) FILTER (WHERE status = 'awaiting_approval')::int AS awaiting_approval
-       FROM agent_runs
-       WHERE company_id = $1
-         AND (source_agent_id = $2 OR resolved_agent_id = $2)
-         AND created_at >= NOW() - INTERVAL '30 minutes'`,
-      [COMPANY, agent.id]
-    );
-    const running = Number(runs.rows[0]?.running || 0);
-    const awaiting = Number(runs.rows[0]?.awaiting_approval || 0);
+    const runs = await listVerifiedRunStates({ companyId: COMPANY, sinceMs: Date.now() - 30 * 60_000 });
+    const relevant = runs.filter((row) => row.source_agent_id === agent.id || row.resolved_agent_id === agent.id);
+    const running = relevant.filter((row) => row.status === 'running').length;
+    const awaiting = relevant.filter((row) => row.status === 'awaiting_approval').length;
     const status = awaiting > 0
       ? 'awaiting_approval'
       : (running > 0 ? 'running' : (agent.isActive ? 'active' : 'idle'));

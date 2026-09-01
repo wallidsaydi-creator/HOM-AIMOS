@@ -5,9 +5,11 @@ import {
   toggleSkill,
   executeSkill,
   getSkillPolicy,
-  updateSkillPolicy
+  updateSkillPolicy,
+  readSkillPersistenceProjection,
 } from '../services/orchestration/skills-runtime.js';
 import { requireCapability } from '../services/security/require-capability.js';
+import { materialEffectOwner } from '../services/security/material-effect-owner.js';
 
 const router = express.Router();
 
@@ -55,9 +57,26 @@ router.get('/:name/policy', requireCapability('admin_override'), async (req, res
 });
 
 router.put('/:name/policy', requireCapability('admin_override'), async (req, res) => {
+  let effect = null;
   try {
     const policy = req.body?.policy ?? req.body;
+    effect = await materialEffectOwner.begin({
+      kind: 'filesystem',
+      operation: 'skill_policy_snapshot',
+      targetIdentifier: `skill-policy:${String(req.params.name || '').trim()}`,
+      inputProjection: { name: req.params.name, policy },
+      subjectAgentId: req.executionContext?.actorAgentId,
+      authority: req.executionContext,
+      parentEventId: req.executionContext?.requestAdmissionEventId || null,
+    });
     const skill = updateSkillPolicy(req.params.name, policy, { persist: true });
+    const projection = readSkillPersistenceProjection(skill.name);
+    await materialEffectOwner.finish({
+      action: effect,
+      disposition: 'SUCCEEDED',
+      resultProjection: projection,
+      resultClass: 'skill_policy_readback_verified',
+    });
     res.json({
       success: true,
       name: skill.name,
@@ -65,6 +84,18 @@ router.put('/:name/policy', requireCapability('admin_override'), async (req, res
       enabled: skill.enabled !== false
     });
   } catch (error) {
+    if (effect) {
+      try {
+        await materialEffectOwner.finish({
+          action: effect,
+          disposition: 'INDETERMINATE',
+          resultProjection: { error_class: error?.name || 'skill_policy_write_error' },
+          resultClass: 'skill_policy_file_state_not_proven',
+        });
+      } catch (terminalError) {
+        error.materialEffectTerminalError = terminalError?.message || String(terminalError);
+      }
+    }
     const message = error?.message || String(error);
     if (/not found/i.test(message)) {
       return res.status(404).json({ success: false, error: message });

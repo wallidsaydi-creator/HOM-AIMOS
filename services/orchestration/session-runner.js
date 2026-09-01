@@ -5,14 +5,15 @@
 // Source: Session Management patterns, TTL-based caching (Redis patterns)
 // ─────────────────────────────────────────────────────────────────────────────
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
-import { pool, query } from '../../db/connection.js';
 import { sessionMemoryOwner } from './session-memory-owner.js';
+import { logEvent, readVerifiedEventHistory } from '../observe/event-ledger.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 const MAX_CONCURRENT_RUNS = 6;
 const CONVERSATION_TTL_MS = 5 * 60 * 1000;
 const CONVERSATION_MAX_TURNS = 20;
 const SESSION_TURNS_CHAR_BUDGET = 30_000;
+const MAX_RECOVERY_EVENTS = 100_000;
 export const AGENTPULSE_SOURCE = 'AgentPulse: A Continuous Multi-Signal Framework for Evaluating AI Agents in Deployment';
 export const AGENTICCACHE_SOURCE = 'AGENTICCACHE: Cache-Driven Asynchronous Planning for Embodied AI Agents';
 
@@ -153,7 +154,8 @@ export async function addConversationTurn(sessionKey, role, content, options = {
     }, {
       companyId: options.companyId || COMPANY,
       agentId: options.agentId,
-      mutationAuthority: 'housekeeper',
+      requestAuthority: options.requestAuthority || null,
+      autonomousHousekeeper: options.autonomousHousekeeper === true,
     });
   }
   const session = ensureConversationSession(sessionKey);
@@ -177,6 +179,7 @@ export async function finalizeConversationSession(sessionKey, options = {}) {
     companyId: options.companyId || COMPANY,
     agentId: options.agentId,
     requestAuthority: options.requestAuthority || null,
+    autonomousHousekeeper: options.autonomousHousekeeper === true,
   });
   conversationSessions.delete(key);
   return result;
@@ -291,36 +294,128 @@ async function withSessionMutex(sessionKey, fn) {
   }
 }
 
-async function markSessionLane(client, { companyId, sessionKey, runId, agentId, model }) {
-  await client.query(
-    `INSERT INTO session_lanes
-       (company_id, session_key, run_status, active_run_id, last_agent_id, last_model, last_run_at, updated_at)
-     VALUES ($1, $2, 'running', $3, $4, $5, NOW(), NOW())
-     ON CONFLICT (company_id, session_key) DO UPDATE
-     SET run_status = 'running',
-         active_run_id = EXCLUDED.active_run_id,
-         last_agent_id = EXCLUDED.last_agent_id,
-         last_model = EXCLUDED.last_model,
-         last_run_at = NOW(),
-         updated_at = NOW()`,
-    [companyId, sessionKey, runId, agentId, model || null]
-  );
+async function markSessionLane({ companyId, sessionKey, runId, agentId, model, authority }) {
+  return logEvent(companyId, agentId || 'housekeeper', 'session_lane_started', `${sessionKey}:${runId}`, {
+    schema: 'hom.aimos.session-lane-transition/v1',
+    company_id: companyId,
+    session_key: sessionKey,
+    run_id: runId,
+    agent_id: agentId || null,
+    model: model || null,
+    status: 'running',
+    reasoning: 'The verified run acquired the bounded in-process session mutex before execution.',
+  }, authority?.requestAdmissionEventId || null, {
+    authority,
+    exclusiveOperationKey: true,
+    returnReceipt: true,
+  });
 }
 
-async function clearSessionLane(client, { companyId, sessionKey, runId, agentId, model }) {
-  await client.query(
-    `UPDATE session_lanes
-     SET run_status = 'idle',
-         active_run_id = NULL,
-         last_agent_id = $4,
-         last_model = $5,
-         last_run_at = NOW(),
-         updated_at = NOW()
-     WHERE company_id = $1
-       AND session_key = $2
-       AND ($3::text IS NULL OR active_run_id = $3::text OR run_status = 'running')`,
-    [companyId, sessionKey, runId || null, agentId || null, model || null]
-  );
+async function clearSessionLane({ companyId, sessionKey, runId, agentId, model, authority, disposition, startEventId, startMutationHash }) {
+  return logEvent(companyId, agentId || 'housekeeper', 'session_lane_terminal', `${sessionKey}:${runId}`, {
+    schema: 'hom.aimos.session-lane-transition/v1',
+    company_id: companyId,
+    session_key: sessionKey,
+    run_id: runId,
+    start_event_id: startEventId,
+    start_mutation_hash: startMutationHash,
+    agent_id: agentId || null,
+    model: model || null,
+    status: 'idle',
+    disposition,
+    reasoning: `The bounded session mutex was released after ${String(disposition).toLowerCase()} execution.`,
+  }, startEventId, {
+    authority,
+    exclusiveOperationKey: true,
+    returnReceipt: true,
+  });
+}
+
+function sessionEventMetadata(event) {
+  if (event?.metadata && typeof event.metadata === 'object') return event.metadata;
+  try { return JSON.parse(event?.metadata || '{}'); } catch { return {}; }
+}
+
+function sessionEventMutationHash(event) {
+  return typeof event?.mutation_hash === 'string'
+    ? event.mutation_hash
+    : Buffer.from(event?.mutation_hash || []).toString('hex');
+}
+
+export function reconstructSessionLaneTraces(events = []) {
+  if (!Array.isArray(events) || events.length > MAX_RECOVERY_EVENTS) throw new Error('session_lane_recovery_limit');
+  const lanes = new Map();
+  for (const event of events) {
+    if (!['session_lane_started', 'session_lane_terminal'].includes(event?.operation)) continue;
+    const metadata = sessionEventMetadata(event);
+    if (metadata.schema !== 'hom.aimos.session-lane-transition/v1') continue;
+    const laneId = `${metadata.session_key}:${metadata.run_id}`;
+    if (!metadata.session_key || !metadata.run_id || String(event.key || '') !== laneId) {
+      throw new Error('session_lane_key_mismatch');
+    }
+    const trace = lanes.get(laneId) || { laneId, start: null, terminal: null };
+    if (event.operation === 'session_lane_started') {
+      if (trace.start) throw new Error('session_lane_start_fork');
+      trace.start = event;
+    } else {
+      if (trace.terminal) throw new Error('session_lane_terminal_fork');
+      trace.terminal = event;
+    }
+    lanes.set(laneId, trace);
+  }
+  const ordered = [...lanes.values()].sort((left, right) => left.laneId.localeCompare(right.laneId));
+  for (const trace of ordered) {
+    if (!trace.start) throw new Error('session_lane_terminal_without_start');
+    if (!trace.terminal) continue;
+    const metadata = sessionEventMetadata(trace.terminal);
+    const startId = String(trace.start.id || trace.start.event_id || '');
+    if (String(trace.terminal.parent_event_id || '') !== startId
+        || metadata.start_event_id !== startId
+        || metadata.start_mutation_hash !== sessionEventMutationHash(trace.start)) {
+      throw new Error('session_lane_terminal_start_binding_invalid');
+    }
+  }
+  return Object.freeze({
+    complete: Object.freeze(ordered.filter((trace) => trace.terminal)),
+    open: Object.freeze(ordered.filter((trace) => !trace.terminal)),
+    timeComplexity: 'O(n)',
+    spaceComplexity: 'O(n)',
+  });
+}
+
+export async function reconcileOpenSessionLanes({
+  companyId = COMPANY,
+  events = null,
+  readHistoryFn = readVerifiedEventHistory,
+  terminalFn = clearSessionLane,
+} = {}) {
+  const load = async () => events || readHistoryFn(companyId, { signerAgentId: 'housekeeper' });
+  const before = reconstructSessionLaneTraces(await load());
+  const reconciled = [];
+  for (const trace of before.open) {
+    const start = sessionEventMetadata(trace.start);
+    const receipt = await terminalFn({
+      companyId,
+      sessionKey: start.session_key,
+      runId: start.run_id,
+      agentId: trace.start.agent_id || start.agent_id || 'housekeeper',
+      model: start.model || null,
+      authority: null,
+      disposition: 'INDETERMINATE_PROCESS_RESTART',
+      startEventId: String(trace.start.id || trace.start.event_id || ''),
+      startMutationHash: sessionEventMutationHash(trace.start),
+    });
+    reconciled.push(Object.freeze({ laneId: trace.laneId, receipt }));
+  }
+  const after = reconstructSessionLaneTraces(await load());
+  return Object.freeze({
+    scanned: before.complete.length + before.open.length,
+    reconciled: Object.freeze(reconciled),
+    remainingOpen: after.open.length,
+    sessionCallbacksReplayed: 0,
+    timeComplexity: 'O(n)',
+    spaceComplexity: 'O(n)',
+  });
 }
 
 export async function withSessionLane({
@@ -328,53 +423,47 @@ export async function withSessionLane({
   sessionKey,
   runId,
   agentId,
-  model
+  model,
+  authority = null,
 }, fn) {
   const effectiveSessionKey = sessionKey || `agent:${agentId || 'unknown'}`;
   await acquireGlobalSlot();
 
   try {
     return await withSessionMutex(effectiveSessionKey, async ({ queueWaitMs, sessionKey: lockedSessionKey }) => {
-      const client = await pool.connect();
-      try {
-        await markSessionLane(client, {
-          companyId,
-          sessionKey: lockedSessionKey,
-          runId,
-          agentId,
-          model
-        });
-      } catch (markError) {
-        // Keep agent execution healthy even if telemetry state fails.
-        console.warn('[session-runner] Failed to mark session lane:', markError?.message || String(markError));
-      } finally {
-        client.release();
-      }
+      const startReceipt = await markSessionLane({
+        companyId,
+        sessionKey: lockedSessionKey,
+        runId,
+        agentId,
+        model,
+        authority,
+      });
 
+      let disposition = 'FAILED';
       try {
         const result = await fn({ queueWaitMs, sessionKey: lockedSessionKey });
+        disposition = 'COMPLETED';
         return {
           result,
           queueWaitMs,
           sessionKey: lockedSessionKey
         };
       } catch (error) {
+        disposition = String(error?.message || '').includes('timed out') ? 'TIMEOUT' : 'FAILED';
         throw error;
       } finally {
-        const clearClient = await pool.connect();
-        try {
-          await clearSessionLane(clearClient, {
-            companyId,
-            sessionKey: lockedSessionKey,
-            runId,
-            agentId,
-            model
-          });
-        } catch (clearError) {
-          console.warn('[session-runner] Failed to clear session lane:', clearError?.message || String(clearError));
-        } finally {
-          clearClient.release();
-        }
+        await clearSessionLane({
+          companyId,
+          sessionKey: lockedSessionKey,
+          runId,
+          agentId,
+          model,
+          authority,
+          disposition,
+          startEventId: startReceipt.event_id,
+          startMutationHash: startReceipt.mutation_hash,
+        });
       }
     });
   } finally {
@@ -383,14 +472,6 @@ export async function withSessionLane({
 }
 
 export async function getSessionRunnerStats(companyId = COMPANY) {
-  const laneRows = await query(
-    `SELECT COUNT(*)::int AS total,
-            COUNT(*) FILTER (WHERE run_status = 'running')::int AS running
-     FROM session_lanes
-     WHERE company_id = $1`,
-    [companyId]
-  );
-
   const waiterStats = getWaiterStats();
   return {
     maxConcurrency: MAX_CONCURRENT_RUNS,
@@ -399,8 +480,8 @@ export async function getSessionRunnerStats(companyId = COMPANY) {
     waitingOldestMs: waiterStats.waitingOldestMs,
     waitingAverageMs: waiterStats.waitingAverageMs,
     activeSessionMutexes: sessionLaneTails.size,
-    trackedSessionLanes: laneRows.rows[0]?.total || 0,
-    runningSessionLanes: laneRows.rows[0]?.running || 0,
+    trackedSessionLanes: sessionLaneTails.size,
+    runningSessionLanes: activeRuns,
     conversationSessions: conversationSessions.size,
     conversationTtlMs: CONVERSATION_TTL_MS,
     conversationMaxTurns: CONVERSATION_MAX_TURNS,

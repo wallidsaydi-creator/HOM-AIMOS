@@ -11,8 +11,10 @@ lifecycle evidence.
 The housekeeper is the autonomous system operational identity. Genesis creates
 its Ed25519 identity and `T1_SYSTEM_SELF` certificate before Guide ingestion.
 Heartbeat, scheduling, dreams, calibration, and maintenance do not depend on a
-user agent. Master and user-agent enrollment are optional additions for
-human-directed work; they never replace the housekeeper.
+user agent. The public installer then performs generic first-launch onboarding:
+it asks the operator to name an ordinary agent, creates the post-Genesis
+operator root, enrolls that agent and grants its exact epoch ordinary memory
+access. These identities never replace the Housekeeper.
 
 ## Supported platform and prerequisites
 
@@ -21,7 +23,7 @@ or later with:
 
 - macOS Keychain access;
 - Apple Command Line Tools, including `git`, `curl`, a compiler, and `make`;
-- Node.js 20 or 24 and `npm`;
+- Node.js 20, 24, or 26 and `npm`; the clean installer prefers Node 26;
 - PostgreSQL 18, reachable through the current OS account on port `5432`; the
   account must be allowed to create the `aimos` database and restricted
   `agent_runtime` role;
@@ -59,8 +61,11 @@ The clean-machine installation path is:
 ./install-macos.sh
 ```
 
-It displays the provisioning and Genesis plan and asks before changing machine
-state. It never downloads or executes the Homebrew installer. When Homebrew is
+It displays the provisioning, Genesis and generic onboarding plan and asks
+before changing machine state. Onboarding reads one operator passphrase once,
+asks for a user-selected agent identifier, and offers optional provider/model
+selection. It never installs a benchmark-specific identity. It never downloads
+or executes the Homebrew installer. When Homebrew is
 absent and provisioning is required, it prints the official informational
 command and stops so the operator can review the Homebrew trust boundary at
 <https://brew.sh>.
@@ -93,7 +98,7 @@ Before creating the database, Genesis:
 1. verifies every byte in `Guide/GENESIS-MANIFEST.json` and its deterministic
    corpus root;
 2. rejects `.env*`, dotenv, and environment-owned runtime authority;
-3. verifies Node.js 20 or 24, PostgreSQL 18, and pgvector availability; and
+3. verifies Node.js 20, 24, or 26, PostgreSQL 18, and pgvector availability; and
 4. verifies or installs the checksum-locked pgsodium `3.1.11` artifact set.
 
 It then creates the database and restricted role, applies every migration,
@@ -104,10 +109,25 @@ eight Guide files through the real signed `/aimos/save` path.
 Genesis is successful only if all eight current Guide heads are manifest-bound,
 provenance-verifiable, recallable to the housekeeper, and non-quarantined.
 
-## 3. Start AIMOS
+## 3. AIMOS user service
 
 ```sh
-npm start -- --aimos-db aimos --aimos-port 9100
+npm run service:status
+```
+
+`install-macos.sh` installs and starts AIMOS as the current user's persistent
+service after generic onboarding completes. It starts at login, restarts only after failure, and uses no root
+privileges. The platform-neutral owner also renders a systemd user unit on
+Linux; unsupported platforms fail explicitly.
+
+Lifecycle commands:
+
+```sh
+npm run service:start
+npm run service:stop
+npm run service:restart
+npm run service:status
+npm run service:uninstall
 ```
 
 Expected topology:
@@ -116,23 +136,22 @@ Expected topology:
 - any separately installed legacy runtime: outside AIMOS and never an AIMOS target.
 - no ART sidecar and no second AIMOS authority server.
 
-The server verifies signed configuration and credentials, checks Guide and
+The supervised server verifies signed configuration and credentials, checks Guide and
 housekeeper readiness, listens on 9100, and only then starts autonomous
 background services. A missing user agent does not disable the housekeeper.
 The post-listen verifier is `jobs/boot-integrity.js`.
 
-## 4. Optionally enroll a master and user agent
+## 4. Enroll additional agents when needed
 
-Human-directed signed calls require an enrolled user identity. The autonomous
-housekeeper does not.
+The installer creates the first human-directed identity. Additional agents use
+the same ordinary protocol; the autonomous Housekeeper remains separate.
 
 ```sh
-node scripts/identity/enroll-master.js
 node scripts/identity/enroll-agent.js <agent-id> --validity-days=30
 ```
 
-Use the same Keychain account name in both prompts. The master private key is
-encrypted in Keychain. The agent private key is written to
+Use the Keychain account retained by first-launch onboarding. The master private
+key is encrypted in Keychain. The agent private key is written to
 `~/.aimos/agents/<agent-id>.key` with mode `0600`; its master-signed certificate
 is cached beside it.
 

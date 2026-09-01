@@ -242,7 +242,9 @@ export async function completeDirectiveClaim({
     const eventId = await logEvent(companyId, agentId, 'directive_terminal', directiveId, {
       directive_id: directiveId,
       status: safeStatus,
-      result_hash: resultData == null ? null : Buffer.from(JSON.stringify(resultData)).toString('base64url'),
+      result_hash: resultData == null
+        ? null
+        : createHash('sha256').update(JSON.stringify(resultData), 'utf8').digest('hex'),
       reasoning: `Directive ${directiveId} entered retained terminal projection ${safeStatus}.`,
       source_knowledge: 'directive-claims.js retained signed terminal transition',
     }, null, { client, authority });

@@ -8,7 +8,6 @@
 
 import { existsSync, readFileSync } from 'fs';
 import { createHash } from 'crypto';
-import { query } from '../../db/connection.js';
 import { logEvent } from '../observe/event-ledger.js';
 import { detectRefusal, shouldRetryWithoutAuth, classifyTaskCategory } from './refusal-detector.js';
 import {
@@ -186,14 +185,6 @@ async function generateAndPersistProof(state) {
   // Make the proof usable immediately inside this process, even if persistence
   // fails and we need to fall back to the in-memory value for the current run.
   state.currentProof = proofHash;
-
-  await query(
-    `INSERT INTO security.active_proofs (proof_hash, session_id, nonce, created_at, expires_at)
-     VALUES ($1, $2, $3, NOW(), NOW() + INTERVAL '30 minutes')
-     ON CONFLICT (proof_hash) DO UPDATE
-       SET expires_at = NOW() + INTERVAL '30 minutes'`,
-    [proofHash, sessionId, rotatingNonce]
-  );
 
   return proofHash;
 }

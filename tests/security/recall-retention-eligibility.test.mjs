@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  isNativeRecallCandidateMetadataEligible,
   isNativeRecallCandidateWithinCommand,
   isNativeRecallProofAllowed,
   normalizeNativeRecallCommand,
@@ -37,6 +38,22 @@ test('retention never weakens tenant, ownership, or clearance boundaries', () =>
   assert.equal(isNativeRecallProofAllowed(proof({ company_id: 'other' }), authority), false);
   assert.equal(isNativeRecallProofAllowed(proof({ clearance_level: 13 }), authority), false);
   assert.equal(isNativeRecallProofAllowed(proof({ cube_scope: 'private', subject_agent_id: 'other' }), authority), false);
+});
+
+test('retrieval gears prefilter only visibly ineligible proposals before proof admission', () => {
+  assert.equal(isNativeRecallCandidateMetadataEligible(proof(), authority), true);
+  assert.equal(isNativeRecallCandidateMetadataEligible(proof({ scope: 'company' }), authority), false);
+  assert.equal(isNativeRecallCandidateMetadataEligible(proof({
+    scope: 'agent',
+    subject_agent_id: 'other',
+  }), authority), false);
+  assert.equal(isNativeRecallCandidateMetadataEligible(proof({
+    data_class: 'restricted',
+  }), { ...authority, dataClassCeiling: 'confidential' }), false);
+  assert.equal(isNativeRecallCandidateMetadataEligible(proof({
+    scope: 'quarantine',
+    memory_type: 'quarantine',
+  }), authority), true);
 });
 
 test('signed source, type, and session filters are enforced at native evidence admission', () => {

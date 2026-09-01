@@ -52,6 +52,7 @@ import {
   verifyOutcomeMutationEvidence,
 } from './mutation-composition/outcome-authority.js';
 import { validateOutcomeMutationEvidence } from './mutation-composition/principal-state.js';
+import { controlCertifiedMutationProposal } from './neuroplasticity-stability-control.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -314,6 +315,7 @@ export async function applyRewardSignal(memoryId, rewardSign, context = {}) {
   let newWeight = 1;
   let valence = 0;
   let valenceCommit = null;
+  let neuroplasticityControl = null;
 
   await withTransaction(async (client) => {
     // The runtime role deliberately has no table UPDATE privilege, so
@@ -365,7 +367,16 @@ export async function applyRewardSignal(memoryId, rewardSign, context = {}) {
     }
     valence = await computeValence(memoryId, { client });
     oldWeight = Number(current.rows[0].retrieval_weight || R_TARGET);
-    newWeight = referencePointWeightUpdate(oldWeight, valence, eta);
+    const proposedWeight = referencePointWeightUpdate(oldWeight, valence, eta);
+    neuroplasticityControl = await controlCertifiedMutationProposal({
+      client,
+      companyId: COMPANY,
+      memoryId,
+      currentWeight: oldWeight,
+      proposedWeight,
+      mutationOwner: 'SIGNED_VALENCE_REFERENCE_POINT',
+    });
+    newWeight = neuroplasticityControl.controlled_weight;
     if (Math.round(newWeight * 1000) === Math.round(oldWeight * 1000)) {
       // Identical quantized targets are not cognitive transitions (SPEC §8,
       // Theorem 2), but the signed outcome evidence must still be retained.
@@ -380,6 +391,8 @@ export async function applyRewardSignal(memoryId, rewardSign, context = {}) {
         eta,
         context_hash: contextHash,
         valence_row_hash: Buffer.from(valenceCommit.rowHash).toString('hex'),
+        neuroplasticity_control: neuroplasticityControl.decision,
+        neuroplasticity_control_sha256: neuroplasticityControl.decision_sha256,
         projection_appended: false,
         reasoning: 'Signed outcome evidence was retained, but its quantized target equaled the current weight; no fictitious REWEIGHT transition was appended.',
         source_knowledge: 'Certified Cognitive-Weight Trajectory SPEC Theorem 2: an identical target requires no transition',
@@ -397,7 +410,9 @@ export async function applyRewardSignal(memoryId, rewardSign, context = {}) {
         eta,
         quality_before: Math.log(oldWeight),
         quality_after: Math.log(newWeight),
-        valence_row_hash: Buffer.from(valenceCommit.rowHash).toString('hex')
+        valence_row_hash: Buffer.from(valenceCommit.rowHash).toString('hex'),
+        neuroplasticity_control: neuroplasticityControl.decision,
+        neuroplasticity_control_sha256: neuroplasticityControl.decision_sha256,
       },
       client
     });
@@ -415,6 +430,7 @@ export async function applyRewardSignal(memoryId, rewardSign, context = {}) {
       lower_bound: W_MIN,
       upper_bound: W_MAX,
       valence_row_hash: Buffer.from(valenceCommit.rowHash).toString('hex'),
+      neuroplasticity_control_sha256: neuroplasticityControl.decision_sha256,
       reasoning: 'Signed outcome evidence moved retrieval frequency bidirectionally within Aladdin bounds; canonical memory remained fully retained.',
       source_knowledge: 'HOM age-neutral signed-valence reference-point update; DA-SSDP co-activation and lag retained as contextual evidence, not the direct weight equation',
     }, null, { client });

@@ -9,7 +9,8 @@
  * from scratch.
  *
  * Single idempotent orchestrator for the *system* side only.
- * No user master or agent enrollment happens here (that's the live Part B ceremony).
+ * No user master or ordinary-agent enrollment happens here. The one public
+ * installer invokes generic first-launch onboarding immediately afterward.
  *
  * Run with: node scripts/genesis-install.mjs [--aimos-db aimos]
  *
@@ -22,13 +23,12 @@
  *   A4           — runtime architecture-authority generation (resolves template)
  *   A5           — housekeeper self-provisioning + self-signed T1_SYSTEM_SELF cert
  *   A6           — Genesis Guide ingestion (real /aimos/save pipeline with signed envelopes)
- *   A7           — installer exit + handoff to live reviewer ceremony (Part B)
+ *   A7           — Genesis completion + handoff to generic onboarding
  */
 
 import * as fs from 'node:fs';
 import { resolve } from 'node:path';
 import { execSync } from 'node:child_process';
-import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import crypto from 'node:crypto';
@@ -41,6 +41,7 @@ let DATABASE_URL = null;
 let AIMOS_COMPANY_ID = null;
 let AIMOS_RUNTIME_CREDENTIAL_SERVICE = null;
 let AIMOS_SERVER_PORT = null;
+let AIMOS_AGENT_KEY_ROOT = null;
 let pool = null;
 
 // A6 outcome, read by the A7 handoff so it reports actual counts, never a false claim.
@@ -71,11 +72,12 @@ async function initializeBootstrapFacts() {
   AIMOS_COMPANY_ID = runtime.AIMOS_COMPANY_ID;
   AIMOS_RUNTIME_CREDENTIAL_SERVICE = runtime.AIMOS_RUNTIME_CREDENTIAL_SERVICE;
   AIMOS_SERVER_PORT = runtime.AIMOS_SERVER_PORT;
+  AIMOS_AGENT_KEY_ROOT = runtime.AIMOS_AGENT_KEY_ROOT;
 }
 
 function verifySupportedNodeRuntime() {
   const major = Number(process.versions.node.split('.')[0]);
-  if (![20, 24].includes(major)) throw new Error(`node_runtime_unsupported:${process.version}`);
+  if (![20, 24, 26].includes(major)) throw new Error(`node_runtime_unsupported:${process.version}`);
   console.log(`[A0.25] Node.js runtime supported: ${process.version}`);
 }
 
@@ -214,7 +216,7 @@ async function phaseA5HousekeeperSelfProvision() {
   } = await import('../services/security/agent-identity.js');
   const { computeDeviceFp } = await import('./identity/lib.js');
 
-  const AGENTS_DIR = path.join(os.homedir(), '.aimos', 'agents');
+  const AGENTS_DIR = AIMOS_AGENT_KEY_ROOT;
   const HOUSEKEEPER_KEY_PATH = path.join(AGENTS_DIR, 'housekeeper.key');
   const HOUSEKEEPER_CERT_CACHE_PATH = path.join(AGENTS_DIR, 'housekeeper.cert-cache.json');
 
@@ -343,7 +345,62 @@ async function phaseA5HousekeeperSelfProvision() {
 async function phaseA5_0LedgerDependencyReceipt() {
   if (!pgsodiumDependencyReceipt) throw new Error('pgsodium_dependency_receipt_missing');
   logPhase('A5.0 — cryptographic dependency receipt');
-  const { logEvent } = await import('../services/observe/event-ledger.js');
+  const { logEvent, readVerifiedEventById } = await import('../services/observe/event-ledger.js');
+  const { canonicalJson } = await import('../services/security/agent-identity.js');
+  const identityRoot = await pool.query(
+    `SELECT identity.pubkey AS housekeeper_pubkey,
+            identity.cert AS housekeeper_cert, identity.valid_from AS housekeeper_valid_from
+       FROM agent_identity identity
+      WHERE identity.agent_id = 'housekeeper'
+      ORDER BY identity.valid_from DESC
+      LIMIT 1`,
+  );
+  const identity = identityRoot.rows[0];
+  if (!identity) throw new Error('genesis_identity_root_missing');
+  const housekeeperKeyPath = path.join(AIMOS_AGENT_KEY_ROOT, 'housekeeper.key');
+  const housekeeperCertPath = path.join(AIMOS_AGENT_KEY_ROOT, 'housekeeper.cert-cache.json');
+  const keyStat = fs.statSync(housekeeperKeyPath);
+  const certStat = fs.statSync(housekeeperCertPath);
+  if ((keyStat.mode & 0o777) !== 0o600 || (certStat.mode & 0o777) !== 0o600) {
+    throw new Error('genesis_identity_root_file_mode_invalid');
+  }
+  const rootMetadata = {
+      schema: 'hom.aimos.genesis-identity-root/v1',
+      root_disposition: 'GENESIS_ROOT',
+      housekeeper_pubkey_sha256: crypto.createHash('sha256').update(Buffer.from(identity.housekeeper_pubkey, 'base64url')).digest('hex'),
+      housekeeper_certificate_sha256: crypto.createHash('sha256').update(identity.housekeeper_cert, 'utf8').digest('hex'),
+      housekeeper_valid_from: new Date(identity.housekeeper_valid_from).toISOString(),
+      housekeeper_signing_material_sha256: crypto.createHash('sha256').update(fs.readFileSync(housekeeperKeyPath)).digest('hex'),
+      housekeeper_cert_cache_sha256: crypto.createHash('sha256').update(fs.readFileSync(housekeeperCertPath)).digest('hex'),
+      reasoning: 'The self-signed Housekeeper is the unavoidable first cryptographic event-stream root. Operator master enrollment occurs later and receives its own Housekeeper trace.',
+  };
+  const priorRoot = await pool.query(
+    `SELECT id FROM aimos_events
+      WHERE company_id = $1 AND operation = 'genesis_identity_root_committed'
+        AND key = 'housekeeper-self-root' AND ledger_version = 1
+      LIMIT 1`,
+    [AIMOS_COMPANY_ID],
+  );
+  const rootReceipt = priorRoot.rows[0]
+    ? await readVerifiedEventById(priorRoot.rows[0].id, AIMOS_COMPANY_ID)
+    : await logEvent(
+        AIMOS_COMPANY_ID,
+        'housekeeper',
+        'genesis_identity_root_committed',
+        'housekeeper-self-root',
+        rootMetadata,
+        null,
+        { returnReceipt: true, exclusiveOperationKey: true },
+      );
+  if (priorRoot.rows[0]) {
+    const retainedMetadata = typeof rootReceipt.metadata === 'string'
+      ? JSON.parse(rootReceipt.metadata)
+      : rootReceipt.metadata;
+    if (canonicalJson(retainedMetadata) !== canonicalJson(rootMetadata)) {
+      throw new Error('genesis_identity_root_projection_changed');
+    }
+  }
+  console.log(`[A5.0] genesis identity root event_id=${rootReceipt.event_id || rootReceipt.id}`);
   const receipt = await logEvent(
     AIMOS_COMPANY_ID,
     'housekeeper',
@@ -389,7 +446,11 @@ async function phaseA5_1LedgerRuntimeCredential() {
     rotated_from: null,
     reason: 'genesis_runtime_database_role',
     operator: 'housekeeper',
-    signer_agent_id: 'housekeeper'
+    signer_agent_id: 'housekeeper',
+    // The runtime database credential necessarily predates the database and
+    // Housekeeper ledger. This exact first STORE is the custody genesis root;
+    // successors must carry an ordinary signed custody start binding.
+    genesis_root: true,
   };
   const signed = await signAsHousekeeper(body);
   const commit = await credentialLedger.commitCredentialLifecycle({
@@ -703,7 +764,7 @@ export async function phaseA6GenesisGuideIngestion({
 }
 
 async function phaseA7Handoff() {
-  logPhase('A7 — installer exit + handoff');
+  logPhase('A7 — Genesis completion + onboarding handoff');
 
   console.log('=== HOM-AIMOS GENESIS INSTALLER COMPLETE (A1–A7) ===');
   console.log('');
@@ -718,78 +779,14 @@ async function phaseA7Handoff() {
   console.log('');
   console.log('The system will not "fire blank" — the Guide corpus is reachable via signed recall as housekeeper.');
   console.log('');
-  console.log('=== NOW HANDING OFF TO LIVE REVIEWER CEREMONY (Part B) ===');
-  console.log('');
-  console.log('You (the reviewer) will execute these steps live. I will verify each output in real time.');
-  console.log('Run them in order. Do not skip or script them.');
-  console.log('');
-  console.log('Prerequisites:');
-  console.log(`  - AIMOS database target: ${DATABASE_NAME} (resolved without environment variables).`);
-  console.log('  - The server is NOT running yet.');
-  console.log('');
-  console.log('B1. Enroll master identity:');
-  console.log('    node scripts/identity/enroll-master.js');
-  console.log('    (You will be prompted for keychain account name and master passphrase twice.)');
-  console.log('    Verify: aimos_master_identity row exists, fingerprint matches, keychain entry present.');
-  console.log('');
-  console.log('B2. Enroll an agent:');
-  console.log('    node scripts/identity/enroll-agent.js <your-agent-id>');
-  console.log('    (Choose a stable identifier such as "reviewer-1".)');
-  console.log('    Verify: agent_identity row for your agent_id, ~/.aimos/agents/<id>.key (mode 0600), .cert-cache.json present.');
-  console.log('');
-  console.log('B3. Confirm autonomous housekeeper readiness:');
-  console.log('    The housekeeper was provisioned in A5 and owns heartbeat, scheduling,');
-  console.log('    dream, calibration, and maintenance without an enrolled user agent.');
-  console.log('    Master and user-agent enrollment add human-directed authority only.');
-  console.log('');
-  console.log('B4. Start the server (in a SEPARATE terminal):');
-  console.log('    npm start');
-  console.log('    Watch for:');
-  console.log('      [BOOT] systemConfigStore loaded');
-  console.log('      [BOOT] credentialCache loaded');
-  console.log(`      Listening on http://127.0.0.1:${AIMOS_SERVER_PORT}`);
-  console.log('    The server must be running before B5.');
-  console.log('');
-  console.log('B5. Signed status check:');
-  console.log('    Use your enrolled agent to make a signed GET /aimos/status');
-  console.log('    (I will give you the exact curl or node one-liner when we reach this step.)');
-  console.log('    Expect: 200 OK with provider status, etc.');
-  console.log('');
-  console.log('B6. Signed recall of the Guide (proves the system does not fire blank):');
-  console.log('    Signed POST /aimos/recall with body {"query":"guide","limit":10}.');
-  console.log('    Expect: 200 + rows with agent_id="housekeeper", source="guide:genesis-install", is_genesis=true.');
-  console.log('    This is the critical "day-1 corpus" proof.');
-  console.log('');
-  console.log('B7. Signed save test:');
-  console.log('    Signed POST /aimos/save with a small test payload.');
-  console.log('    Expect: 200 with content_hash + chain_hash.');
-  console.log('');
-  console.log('B8. Store a credential via the proper path:');
-  console.log('    node scripts/identity/store-credential.js STORE --service=test-service --reason="A7 validation"');
-  console.log('    (You will be prompted for the secret value.)');
-  console.log('    Verify: aimos_credential_lifecycle row exists, signed by housekeeper, with mutation_hash + prev_mutation_hash.');
-  console.log('');
-  console.log('B9. Health surface checks (signed):');
-  console.log('    Signed calls to:');
-  console.log('      GET  /aimos/status');
-  console.log('      POST /aimos/heartbeat');
-  console.log('      GET  /aimos/reasoning-state');
-  console.log('      GET  /aimos/dream/latest');
-  console.log('    Each request must use its documented signed envelope and return a');
-  console.log('    documented success response. No placeholder endpoint counts as proof.');
-  console.log('');
-  console.log('B10. 21-stage native recall + 10-gear fusion surface:');
-  console.log('    Signed recall with mode=adaptive (or whatever triggers the full retrieval stack).');
-  console.log('    Verify recall_meta shows the expected multi-stage pipeline.');
-  console.log('');
-  console.log('B11. Architecture authority verification:');
-  console.log('    npm run test:architecture-authority');
-  console.log('    Expect: PASS / exit 0.');
-  console.log('');
-  console.log('When B1–B11 are all green, the fork is ready for GitHub.');
-  console.log('');
-  console.log('Exiting installer now. System side is fully bootstrapped.');
-  console.log('Over to you for the live Part B ceremony — I am ready when you are.');
+  console.log('Genesis is complete. Returning control to the one public installer.');
+  console.log('The installer will now run generic first-launch onboarding, which:');
+  console.log('  - asks for the operator-selected ordinary agent and optional model preference;');
+  console.log('  - requests the operator passphrase exactly once;');
+  console.log('  - creates the operator master after Housekeeper Genesis;');
+  console.log('  - enrolls the selected agent and grants its exact epoch memory authority;');
+  console.log('  - then installs and starts the persistent user service.');
+  console.log('No manual enrollment ceremony or second passphrase entry is required.');
 }
 
 async function main() {
@@ -810,9 +807,9 @@ async function main() {
   console.log('  - A4: runtime architecture-authority generation');
   console.log('  - A5: housekeeper self-provisioning (T1_SYSTEM_SELF)');
   console.log('  - A6: Genesis Guide ingestion (real signed pipeline)');
-  console.log('  - A7: installer exit + handoff to live reviewer ceremony');
+  console.log('  - A7: Genesis completion + handoff to generic onboarding');
   console.log('');
-  console.log('User-side enrollment (master + agent) is done separately in the live ceremony (Part B).');
+  console.log('The public installer continues with generic onboarding after Genesis and requests one operator passphrase.');
   console.log('');
 
   try {
@@ -873,7 +870,7 @@ async function main() {
     // Phase A6 — Genesis Guide ingestion
     await phaseA6GenesisGuideIngestion();
 
-    // Phase A7 — installer exit + handoff
+    // Phase A7 — Genesis completion + generic-onboarding handoff
     await phaseA7Handoff();
 
   } catch (err) {

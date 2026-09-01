@@ -26,6 +26,8 @@ import { query } from '../../db/connection.js';
 import { logEvent } from './event-ledger.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
+const sessionEnergy = new Map();
+const providerEnergy = new Map();
 const TAB_SOURCE = 'Not All Turns Are Equally Hard: Adaptive Thinking Budgets For Efficient Multi-Turn Reasoning';
 export const THERMAL_COMFORT_SOURCE = 'Agentic AI-Enabled Framework for Thermal Comfort and Building Energy Assessment';
 export const FRUGALGPT_ENERGY_SOURCE = 'FrugalGPT';
@@ -398,29 +400,11 @@ export function buildSolarEfficiencyAuditDiagnostics({
  * @returns {Promise<{sessionId: string, totalJoules: number}>}
  */
 export async function trackSessionEnergy(sessionId, joules) {
-  try {
-    const result = await query(
-      `INSERT INTO session_energy (session_id, joules_used, ts)
-       VALUES ($1, $2, NOW())
-       RETURNING session_id`,
-      [sessionId, joules]
-    );
-
-    // Get total for session
-    const totals = await query(
-      `SELECT SUM(joules_used) as total_joules FROM session_energy
-       WHERE session_id = $1`,
-      [sessionId]
-    );
-
-    return {
-      sessionId,
-      totalJoules: parseFloat(totals.rows[0]?.total_joules || 0)
-    };
-  } catch (err) {
-    console.error('[energy-budget] trackSessionEnergy error:', err.message);
-    return { sessionId, totalJoules: 0 };
-  }
+  const value = Number(joules);
+  if (!Number.isFinite(value) || value < 0) throw new Error('session_energy_value_invalid');
+  const totalJoules = Number(sessionEnergy.get(sessionId) || 0) + value;
+  sessionEnergy.set(sessionId, totalJoules);
+  return { sessionId, totalJoules };
 }
 
 /**
@@ -431,19 +415,7 @@ export async function trackSessionEnergy(sessionId, joules) {
  * @returns {Promise<boolean>} - true if budget exceeded
  */
 export async function isEnergyBudgetExceeded(sessionId, budget) {
-  try {
-    const result = await query(
-      `SELECT SUM(joules_used) as total_joules FROM session_energy
-       WHERE session_id = $1`,
-      [sessionId]
-    );
-
-    const total = parseFloat(result.rows[0]?.total_joules || 0);
-    return total > budget;
-  } catch (err) {
-    console.error('[energy-budget] isEnergyBudgetExceeded error:', err.message);
-    return false;
-  }
+  return Number(sessionEnergy.get(sessionId) || 0) > Number(budget);
 }
 
 // ─── PROVIDER ENERGY ATTRIBUTION ────────────────────────────────────────────────
@@ -464,19 +436,12 @@ export async function isEnergyBudgetExceeded(sessionId, budget) {
  * @returns {Promise<{providerId: string, joules: number}>}
  */
 export async function trackProviderEnergy(providerId, model, tokens, joules, sessionId = null) {
-  try {
-    const sid = sessionId || `provider:${providerId}:${Date.now()}`;
-    await query(
-      `INSERT INTO session_energy (session_id, joules_used, provider_id, model, ts)
-       VALUES ($1, $2, $3, $4, NOW())`,
-      [sid, joules, providerId, model]
-    );
-
-    return { providerId, joules };
-  } catch (err) {
-    console.error('[energy-budget] trackProviderEnergy error:', err.message);
-    return { providerId, joules: 0 };
-  }
+  void tokens; void sessionId;
+  const value = Number(joules);
+  if (!Number.isFinite(value) || value < 0) throw new Error('provider_energy_value_invalid');
+  const key = `${providerId}:${model}`;
+  providerEnergy.set(key, Number(providerEnergy.get(key) || 0) + value);
+  return { providerId, joules: value };
 }
 
 /**

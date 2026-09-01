@@ -16,11 +16,13 @@ import { pool } from '../../db/connection.js';
 
 const args = process.argv.slice(2);
 const DRY_RUN = args.includes('--dry-run');
+const validFromArg = args.find((arg) => arg.startsWith('--valid-from='));
 const positional = args.filter(a => !a.startsWith('--'));
 const agentId = positional[0];
+const agentValidFrom = validFromArg ? validFromArg.slice('--valid-from='.length) : null;
 
 if (!agentId) {
-  console.error('Usage: revoke-agent.js <agent_id> [--dry-run]');
+  console.error('Usage: revoke-agent.js <agent_id> [--valid-from=<ISO>] [--dry-run]');
   process.exit(64);
 }
 
@@ -47,7 +49,9 @@ async function main() {
   console.log(`Mode:      ${DRY_RUN ? 'DRY-RUN (no side effects)' : 'LIVE'}`);
   console.log();
 
-  const existing = await identityDb.getAgent(agentId);
+  const existing = agentValidFrom
+    ? await identityDb.getAgentEpoch(agentId, agentValidFrom)
+    : await identityDb.getAgent(agentId);
   if (!existing) {
     console.error(`[ERR] no active enrollment for ${agentId}`);
     process.exit(2);
@@ -61,7 +65,7 @@ async function main() {
     db: identityDb,
     kcService,
     kcAccount
-  }, { dryRun: DRY_RUN });
+  }, { dryRun: DRY_RUN, agentValidFrom });
 
   if (!result.ok) {
     console.error(`[ERR] ${result.reason}`);

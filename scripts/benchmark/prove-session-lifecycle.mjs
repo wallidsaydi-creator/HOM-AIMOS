@@ -70,7 +70,7 @@ async function appendFixtures(runId) {
       companyId: 'hom',
       agentId: 'housekeeper',
       clearanceLevel: 10,
-      mutationAuthority: 'housekeeper',
+      autonomousHousekeeper: true,
       source: 'benchmark:lifecycle-fixture',
     });
     const assistant = await sessionMemoryOwner.appendTurn({
@@ -85,7 +85,7 @@ async function appendFixtures(runId) {
       companyId: 'hom',
       agentId: 'housekeeper',
       clearanceLevel: 10,
-      mutationAuthority: 'housekeeper',
+      autonomousHousekeeper: true,
       source: 'benchmark:lifecycle-fixture',
     });
     appended.push({ session_id: fixture.session_id, user, assistant });
@@ -109,7 +109,7 @@ async function appendFixtures(runId) {
     companyId: 'hom',
     agentId: 'housekeeper',
     clearanceLevel: 10,
-    mutationAuthority: 'housekeeper',
+    autonomousHousekeeper: true,
     source: 'benchmark:lifecycle-fixture',
   });
   if (!replay.idempotent) throw new Error('live session retry was not idempotent');
@@ -197,6 +197,7 @@ async function finalizeAndRecall(runId) {
       companyId: 'hom',
       agentId: 'housekeeper',
       clearanceLevel: 10,
+      autonomousHousekeeper: true,
       source: 'benchmark:lifecycle-fixture',
     }));
   }
@@ -208,6 +209,7 @@ async function finalizeAndRecall(runId) {
     companyId: 'hom',
     agentId: 'housekeeper',
     clearanceLevel: 10,
+    autonomousHousekeeper: true,
     source: 'benchmark:lifecycle-fixture',
   });
   if (!replay.idempotent) throw new Error('live finalization retry was not idempotent');

@@ -63,6 +63,7 @@ import {
 } from '../core/runtime-config.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
+export const SYSTEM_CONFIG_MUTATION_SCOPE = 'offline_maintenance_only';
 
 export const SYSTEM_CONFIG_DEFINITIONS = Object.freeze({
   OPERATOR_AGENT_ID: Object.freeze({ type: 'agent_id', allowEmpty: true }),

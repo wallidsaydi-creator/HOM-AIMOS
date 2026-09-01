@@ -38,7 +38,7 @@
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { query } from '../../db/connection.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 import { logEvent } from '../observe/event-ledger.js';
 import { encodeSemanticBins } from './mnemonic-encoder.js';
 
@@ -220,14 +220,14 @@ export async function incrementRenewalCount(runId, companyId) {
   const updated = current + 1;
 
   try {
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: cid,
       agent_id: 'context-renewal',
-      mutation_authority: 'housekeeper',
       key: counterKey,
       value: String(updated),
       scope: 'run',
       memory_type: 'episodic',
+      source: 'context-renewal',
     });
   } catch (err) {
     console.error('[context-renewal] incrementRenewalCount write error:', err.message);
@@ -270,14 +270,14 @@ export async function checkpointProgress(runId, progressSummary, wisdom, company
   };
 
   try {
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: cid,
       agent_id: 'context-renewal',
-      mutation_authority: 'housekeeper',
       key: checkpointKey,
       value: JSON.stringify(wisdomObj),
       scope: 'run',
       memory_type: 'episodic',
+      source: 'context-renewal',
     });
 
     await logEvent(cid, 'context-renewal', 'checkpoint_saved', checkpointKey, {

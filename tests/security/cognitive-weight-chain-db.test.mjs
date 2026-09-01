@@ -6,6 +6,7 @@ import { AIMOS_COMPANY_ID } from '../../services/core/runtime-config.js';
 import { pool, agentPool, query, withTransaction } from '../../db/connection.js';
 import { applyRewardSignal } from '../../services/learning/stdp-kernel.js';
 import { commitGovernorMutation } from '../../services/governance/governor-provenance.js';
+import { createMutationOutcomeEvidence } from './helpers/mutation-outcome-evidence.mjs';
 
 const databaseName = resolveAimosDatabaseName();
 if (!process.argv.includes('--live-fire') || !/^aimos_test_security_[a-z0-9_]+$/.test(databaseName)) {
@@ -25,10 +26,12 @@ try {
   assert.equal(memoryResult.rowCount, 1, 'Genesis must provide a retained Guide memory for cognitive proof');
   const memoryId = memoryResult.rows[0].id;
   const beforeWeight = Number(memoryResult.rows[0].retrieval_weight);
+  const outcomeEvidence = await createMutationOutcomeEvidence(memoryId);
 
   const delta = await applyRewardSignal(memoryId, -1, {
     coActivationScore: 0.5,
     eta: 0.2,
+    outcomeEvidence,
   });
   assert.ok(delta < 0, 'negative signed evidence must lower retrieval frequency');
 

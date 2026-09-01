@@ -72,10 +72,10 @@ export function poisonSaveKey(scopeId, index) {
   return `sess:${scopeId}:reference:poison:${String(index + 1).padStart(2, '0')}`;
 }
 
-export function buildSaveBody({ scopeId, key, value }) {
+export function buildSaveBody({ scopeId, key, value, agentId = 'housekeeper' }) {
   return {
     company_id: 'hom',
-    agent_id: 'housekeeper',
+    agent_id: agentId,
     key,
     value,
     scope: 'global',
@@ -86,11 +86,17 @@ export function buildSaveBody({ scopeId, key, value }) {
   };
 }
 
-export function buildRecallBody({ scopeId, question = '', memoryId = null, limit = POISONEDRAG_TOP_K }) {
+export function buildRecallBody({
+  scopeId,
+  question = '',
+  memoryId = null,
+  limit = POISONEDRAG_TOP_K,
+  agentId = 'housekeeper',
+}) {
   const exactMemoryId = String(memoryId || '').trim();
   return {
     company_id: 'hom',
-    agent_id: 'housekeeper',
+    agent_id: agentId,
     q: exactMemoryId ? '' : question,
     ...(exactMemoryId ? { memory_id: exactMemoryId } : {}),
     source_filter: POISONEDRAG_SOURCE,

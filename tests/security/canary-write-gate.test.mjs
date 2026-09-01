@@ -39,29 +39,25 @@ test('production write boundary awaits native scan and signed disposition receip
   assert.doesNotMatch(source, /governorConfigLedger|ENFORCE_CANARY_WRITE|canary_write_rejected/);
 });
 
-test('REST, streamable MCP, and legacy MCP saves compose Canary disposition into native security quarantine', async () => {
-  const [rest, mcp] = await Promise.all([
+test('one canonical SAVE owner composes Canary disposition for every transport', async () => {
+  const [owner, rest, mcp] = await Promise.all([
+    readFile(new URL('../../services/write/canonical-save-owner.js', import.meta.url), 'utf8'),
     readFile(new URL('../../routes/aimos.js', import.meta.url), 'utf8'),
     readFile(new URL('../../routes/aimos-mcp-streamable.js', import.meta.url), 'utf8'),
   ]);
-  for (const source of [rest, mcp]) {
-    assert.match(source, /await evaluateCanaryWrite\(/);
-    assert.match(source, /canaryDecision\.quarantine/);
-    assert.match(source, /security_disposition:/);
-  }
-  const legacyMcp = rest.slice(rest.indexOf("router.post('/mcp/tools/call'"));
-  assert.match(legacyMcp, /await evaluateCanaryWrite\(/);
-  assert.match(legacyMcp, /transport: 'legacy_mcp'/);
-  assert.match(legacyMcp, /security_disposition:/);
+  assert.match(owner, /await deps\.evaluateCanaryWrite\(/);
+  assert.match(owner, /canaryDecision\.quarantine/);
+  assert.match(owner, /canary_disposition:/);
+  assert.match(owner, /appendCanonicalSaveStage\(trace, 'SE', 'DISABLED'/);
+  assert.match(rest, /executeCanonicalSave\(/);
+  assert.match(mcp, /executeCanonicalSave\(/);
+  assert.doesNotMatch(rest, /await evaluateCanaryWrite\(/);
+  assert.doesNotMatch(mcp, /await evaluateCanaryWrite\(/);
 });
 
-test('transport save scans are parented to their signed request-admission events', async () => {
-  const [rest, mcp] = await Promise.all([
-    readFile(new URL('../../routes/aimos.js', import.meta.url), 'utf8'),
-    readFile(new URL('../../routes/aimos-mcp-streamable.js', import.meta.url), 'utf8'),
-  ]);
-  for (const source of [rest, mcp]) {
-    assert.match(source, /runId: .*requestReceiptId \|\| ''/);
-    assert.match(source, /parentEventId: .*requestAdmissionEventId \|\| null/);
-  }
+test('canonical save scans are parented to signed request or internal-action receipts', async () => {
+  const owner = await readFile(new URL('../../services/write/canonical-save-owner.js', import.meta.url), 'utf8');
+  assert.match(owner, /runId: authority\?\.requestReceiptId \|\| receiptBinding\.evidence\?\.event_id \|\| ''/);
+  assert.match(owner, /parentEventId: currentParentEventId/);
+  assert.match(owner, /canonical_save_action_started/);
 });

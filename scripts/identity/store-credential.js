@@ -35,9 +35,7 @@ import { credentialLedger } from '../../services/security/credential-ledger.js';
 import {
   credentialSlotId,
   computeCredentialHash,
-  storeCredential,
   readCredential,
-  revokeCredential,
   credentialExists,
   parseIdentityVaultCredentialService,
 } from '../../services/security/credential-store.js';
@@ -101,6 +99,40 @@ async function promptCredentialValue(prompt) {
   return value;
 }
 
+async function commitLifecycleWithCustody(eventType, body, custodyTrace) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const signed = await signAsHousekeeper(body);
+    const commit = await credentialLedger.commitCredentialLifecycle({
+      serviceName: service,
+      slotId: body.slot_id,
+      body: signed.body,
+      agentId: signed.agentId,
+      validFromIso: signed.validFromIso,
+      certString: signed.certString,
+      signedTs: signed.signedTs,
+      nonce: signed.nonce,
+      sigBytes: signed.sigBytes,
+      identityTier: signed.identityTier,
+      eventType,
+      bodyJson: signed.body,
+      client,
+    });
+    if (!commit.ok) throw new Error(`credential_lifecycle_commit_failed:${commit.reason}`);
+    const terminal = await credentialLedger.commitCredentialCustodyTerminal(custodyTrace, commit, { client });
+    await client.query('COMMIT');
+    return { commit, signed, terminal };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch { /* connection may be gone */ }
+    try { await credentialLedger.markCredentialCustodyIndeterminate(custodyTrace, error); }
+    catch (traceError) { error.credential_custody_terminal_error = traceError?.message || String(traceError); }
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 function identityVaultBinding() {
   const parsed = parseIdentityVaultCredentialService(service);
   if (!parsed) return {};
@@ -146,7 +178,13 @@ async function doStore() {
   console.log();
 
   // Store in keychain first — if this fails, no ledger row is written.
-  const stored = await storeCredential(service, value);
+  const stored = await credentialLedger.beginCredentialCustodyMutation({
+    serviceName: service,
+    value,
+    eventType: 'STORE',
+    subjectAgentId: 'housekeeper',
+    reason,
+  });
   console.log(`[OK] plaintext stored in keychain at ${stored.slot}`);
   console.log();
 
@@ -162,32 +200,17 @@ async function doStore() {
     reason,
     operator,
     signer_agent_id: 'housekeeper',
+    custody_action_id: stored.custodyTrace.actionId,
+    custody_start_event_id: stored.custodyTrace.startEventId,
+    custody_start_mutation_hash: stored.custodyTrace.startMutationHash,
+    custody_readback_event_id: stored.custodyTrace.readbackEventId,
+    custody_readback_mutation_hash: stored.custodyTrace.readbackMutationHash,
+    custody_version_slot_sha256: stored.custodyTrace.versionSlotSha256,
     ...identityVaultBinding(),
     // ts_signed injected by signAsHousekeeper
   };
 
-  const signed = await signAsHousekeeper(body);
-  const commit = await credentialLedger.commitCredentialLifecycle({
-    serviceName: service,
-    slotId: body.slot_id,
-    body: signed.body,
-    agentId: signed.agentId,
-    validFromIso: signed.validFromIso,
-    certString: signed.certString,
-    signedTs: signed.signedTs,
-    nonce: signed.nonce,
-    sigBytes: signed.sigBytes,
-    identityTier: signed.identityTier,
-    eventType: 'STORE',
-    bodyJson: signed.body
-  });
-
-  if (!commit.ok) {
-    console.error(`[FATAL] ledger commit failed: ${commit.reason}`);
-    console.error('        Plaintext is already in keychain — re-run with REVOKE to undo, or investigate the ledger.');
-    await pool.end();
-    process.exit(1);
-  }
+  const { commit, signed } = await commitLifecycleWithCustody('STORE', body, stored.custodyTrace);
 
   const mutHex = Buffer.from(commit.mutationHash).toString('hex');
   const prevHex = commit.prevMutationHash ? Buffer.from(commit.prevMutationHash).toString('hex') : '<genesis>';
@@ -241,7 +264,13 @@ async function doRotate() {
 
   // Append the new version and atomically move the logical Keychain pointer.
   // Prior encrypted versions and every lifecycle row remain retained.
-  const stored = await storeCredential(service, newValue);
+  const stored = await credentialLedger.beginCredentialCustodyMutation({
+    serviceName: service,
+    value: newValue,
+    eventType: 'ROTATE',
+    subjectAgentId: 'housekeeper',
+    reason,
+  });
   console.log(`[OK] new plaintext version stored in keychain at ${stored.versionSlot}; logical pointer=${stored.slot}`);
   console.log();
 
@@ -257,32 +286,16 @@ async function doRotate() {
     reason,
     operator,
     signer_agent_id: 'housekeeper',
+    custody_action_id: stored.custodyTrace.actionId,
+    custody_start_event_id: stored.custodyTrace.startEventId,
+    custody_start_mutation_hash: stored.custodyTrace.startMutationHash,
+    custody_readback_event_id: stored.custodyTrace.readbackEventId,
+    custody_readback_mutation_hash: stored.custodyTrace.readbackMutationHash,
+    custody_version_slot_sha256: stored.custodyTrace.versionSlotSha256,
     ...identityVaultBinding(),
   };
 
-  const signed = await signAsHousekeeper(body);
-  const commit = await credentialLedger.commitCredentialLifecycle({
-    serviceName: service,
-    slotId: body.slot_id,
-    body: signed.body,
-    agentId: signed.agentId,
-    validFromIso: signed.validFromIso,
-    certString: signed.certString,
-    signedTs: signed.signedTs,
-    nonce: signed.nonce,
-    sigBytes: signed.sigBytes,
-    identityTier: signed.identityTier,
-    eventType: 'ROTATE',
-    bodyJson: signed.body
-  });
-
-  if (!commit.ok) {
-    console.error(`[FATAL] ledger commit failed: ${commit.reason}`);
-    console.error('        New plaintext is already in keychain — the old row is still in the ledger (audit intact).');
-    console.error('        Investigate the ledger, then re-run ROTATE.');
-    await pool.end();
-    process.exit(1);
-  }
+  const { commit, signed } = await commitLifecycleWithCustody('ROTATE', body, stored.custodyTrace);
 
   const mutHex = Buffer.from(commit.mutationHash).toString('hex');
   console.log('[OK] credential lifecycle ROTATE row committed');
@@ -321,6 +334,12 @@ async function doRevoke() {
   console.log(`Revoking row:     provenance_id=${priorRow.provenance_id} (hash=${priorRow.body_json?.credential_hash?.slice(0,16)}...)`);
   console.log();
 
+  const custody = await credentialLedger.beginCredentialCustodyMutation({
+    serviceName: service,
+    eventType: 'REVOKE',
+    subjectAgentId: 'housekeeper',
+    reason,
+  });
   const body = {
     event_type: 'REVOKE',
     service,
@@ -331,41 +350,18 @@ async function doRevoke() {
     revoked_provenance_id: priorRow.provenance_id,
     reason,
     operator,
-    signer_agent_id: 'housekeeper'
+    signer_agent_id: 'housekeeper',
+    custody_action_id: custody.custodyTrace.actionId,
+    custody_start_event_id: custody.custodyTrace.startEventId,
+    custody_start_mutation_hash: custody.custodyTrace.startMutationHash,
+    custody_readback_event_id: custody.custodyTrace.readbackEventId,
+    custody_readback_mutation_hash: custody.custodyTrace.readbackMutationHash,
+    custody_version_slot_sha256: custody.custodyTrace.versionSlotSha256,
   };
-
-  const signed = await signAsHousekeeper(body);
-  const commit = await credentialLedger.commitCredentialLifecycle({
-    serviceName: service,
-    slotId: body.slot_id,
-    body: signed.body,
-    agentId: signed.agentId,
-    validFromIso: signed.validFromIso,
-    certString: signed.certString,
-    signedTs: signed.signedTs,
-    nonce: signed.nonce,
-    sigBytes: signed.sigBytes,
-    identityTier: signed.identityTier,
-    eventType: 'REVOKE',
-    bodyJson: signed.body
-  });
-
-  if (!commit.ok) {
-    console.error(`[FATAL] ledger commit failed: ${commit.reason}`);
-    console.error('        Plaintext is still in keychain — investigate the ledger, then re-run REVOKE.');
-    await pool.end();
-    process.exit(1);
-  }
+  const { commit, signed } = await commitLifecycleWithCustody('REVOKE', body, custody.custodyTrace);
 
   console.log('[OK] credential lifecycle REVOKE row committed');
-  console.log('     Revoking the logical Keychain pointer while retaining encrypted history ...');
-
-  const revoked = await revokeCredential(service);
-  if (!revoked.revoked) {
-    console.error(`[WARN] Keychain pointer was already revoked or absent.`);
-  } else {
-    console.log(`[OK] logical Keychain pointer revoked at ${revoked.slot}; prior version remains retained.`);
-  }
+  console.log('[OK] logical Keychain pointer and signed REVOKE lifecycle terminal committed; prior version remains retained.');
 
   const mutHex = Buffer.from(commit.mutationHash).toString('hex');
   console.log();

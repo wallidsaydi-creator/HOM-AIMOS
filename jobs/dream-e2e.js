@@ -18,7 +18,7 @@ import {
   getPheromoneStrength
 } from '../services/temporal/retrieval-pheromone.js';
 import { getTopicDistribution } from '../services/temporal/topic-budget.js';
-import { amplifyConsolidated } from '../services/dream/spiced-consolidator.js';
+import { selectConsolidationCandidates } from '../services/dream/spiced-consolidator.js';
 import { systemConfigStore } from '../services/security/system-config-store.js';
 
 const COMPANY = 'hom';
@@ -88,12 +88,12 @@ await check('stage16_topic_budget_unnest', async () => {
   return `topics=${Object.keys(dist).length}`;
 });
 
-// ─── Stage 18: SPICED write path ──────────────────────────────────────────────
-// The live SPICED path is promotion-only; an empty candidate set verifies the
-// native no-op contract without mutating canonical retrieval weights.
-await check('stage18_spiced_write_path', async () => {
-  const amp = await amplifyConsolidated([]);
-  return `amp=${amp.amplified}`;
+// ─── Stage 18: SPICED verified activation read ──────────────────────────────────
+// The smoke test observes real candidates without obtaining a direct weight or
+// edge mutation capability.
+await check('stage18_spiced_verified_activation', async () => {
+  const candidates = await selectConsolidationCandidates(15);
+  return `verified_candidates=${candidates.length}`;
 });
 
 // ─── Report ───────────────────────────────────────────────────────────────────

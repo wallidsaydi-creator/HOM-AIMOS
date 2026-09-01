@@ -3,6 +3,8 @@
  * Source: Constitutional Black-Box Monitoring (2026)
  * Wave 1 reference: Quantifying Self-Preservation Bias in Large Language
  * Models (TBSP, 2026)
+ * Physical paper SHA-256:
+ * b3b513595a1ee59c79fcf79b99ffd816ba4c398f132dc7bb140568a9d44f5e94
  *
  * SERVICE CONNECTION GUIDE:
  * 1. ← Triggered by: agent-runner.js (post-run step 22)
@@ -28,9 +30,10 @@
 // Position: trajectory audit
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 import { systemConfigStore } from '../security/system-config-store.js';
 import { fetchWithTimeout } from '../orchestration/http.js';
+import { materialEffectOwner } from '../security/material-effect-owner.js';
 
 const COMPANY = 'hom';
 
@@ -140,10 +143,9 @@ export async function auditTrajectory(agentId, trajectoryEvents, options = {}) {
   warningSigns = [...new Set([...warningSigns, ...selfPreservation.warning_signs])];
   warningSigns = [...new Set([...warningSigns, ...antiPretend.warning_signs])];
 
-  await persistMemory({
+  await executeHousekeeperCanonicalSave({
     company_id: COMPANY,
     agent_id: agentId,
-    mutation_authority: 'housekeeper',
     key: `scheming_audit:${agentId}:${Date.now()}`,
     value: JSON.stringify({
       score,
@@ -157,6 +159,7 @@ export async function auditTrajectory(agentId, trajectoryEvents, options = {}) {
     memory_type: 'event_log',
     scope: 'global',
     clearance_level: 7,
+    source: 'scheming-monitor',
   });
 
   return { score, warning_signs: warningSigns, reasoning, self_preservation: selfPreservation, anti_pretend: antiPretend, alert: score >= 7 };
@@ -238,16 +241,58 @@ async function callScoringLLM(prompt, options) {
   const baseUrl = systemConfigStore.readConfigString('OLLAMA_BASE_URL') || 'http://localhost:11434';
   const model = options.model || systemConfigStore.readConfigString('OLLAMA_MODEL') || 'llama3.2';
 
-  const res = await fetchWithTimeout(`${baseUrl}/api/generate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, prompt, stream: false, format: 'json' })
+  const effect = await materialEffectOwner.begin({
+    kind: 'external',
+    operation: 'scheming_monitor_scoring',
+    targetIdentifier: `${baseUrl}/api/generate`,
+    inputProjection: { model, prompt, stream: false, format: 'json' },
+    subjectAgentId: options?.executionContext?.actorAgentId || 'housekeeper',
+    authority: options?.executionContext || null,
+    parentEventId: options?.executionContext?.autonomousActionEventId
+      || options?.executionContext?.requestAdmissionEventId
+      || null,
   });
-  if (!res.ok) {
-    throw new Error(`Scoring LLM returned HTTP ${res.status}`);
+  let terminalCommitted = false;
+  try {
+    const res = await fetchWithTimeout(`${baseUrl}/api/generate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model, prompt, stream: false, format: 'json' })
+    });
+    if (!res.ok) {
+      await materialEffectOwner.finish({
+        action: effect,
+        disposition: 'FAILED',
+        resultProjection: { status: res.status },
+        resultClass: 'scoring_provider_rejected',
+      });
+      terminalCommitted = true;
+      throw new Error(`Scoring LLM returned HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    await materialEffectOwner.finish({
+      action: effect,
+      disposition: 'SUCCEEDED',
+      resultProjection: { status: res.status, response: data.response },
+      resultClass: 'scoring_provider_response',
+    });
+    terminalCommitted = true;
+    return data.response;
+  } catch (error) {
+    if (!terminalCommitted) {
+      try {
+        await materialEffectOwner.finish({
+          action: effect,
+          disposition: 'INDETERMINATE',
+          resultProjection: { error_class: error?.name || 'scoring_provider_error' },
+          resultClass: 'scoring_provider_completion_not_proven',
+        });
+      } catch (terminalError) {
+        error.materialEffectTerminalError = terminalError?.message || String(terminalError);
+      }
+    }
+    throw error;
   }
-  const data = await res.json();
-  return data.response;
 }
 
 function truncate(str, max) {

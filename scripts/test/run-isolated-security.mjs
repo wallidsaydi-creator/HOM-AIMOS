@@ -81,6 +81,96 @@ async function scratchProof(databaseName) {
   });
 }
 
+async function cr5SessionFingerprint(databaseName) {
+  return withPool(databaseName, async (pool) => {
+    const result = await pool.query(
+      `SELECT m.id::text, m.key, encode(m.content_hash, 'hex') AS content_hash,
+              count(e.id)::int AS terminal_count
+         FROM aimos_memories m
+         LEFT JOIN aimos_events e
+           ON e.company_id = m.company_id
+          AND e.key = m.key
+          AND e.operation = 'canonical_save_terminal'
+        WHERE m.company_id = 'hom'
+          AND m.source = 'test:cr5-session-convergence'
+        GROUP BY m.id, m.key, m.content_hash
+        ORDER BY m.key, m.id`
+    );
+    return {
+      rows: result.rowCount,
+      digest: sha256(JSON.stringify(result.rows)),
+      terminal_count: result.rows.reduce((sum, row) => sum + Number(row.terminal_count || 0), 0),
+    };
+  });
+}
+
+async function waitForHealth(child, timeoutMs = 20_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (child.exitCode != null) throw new Error(`scratch_server_exited_before_ready:${child.exitCode}`);
+    try {
+      const response = await fetch(`http://127.0.0.1:${SCRATCH_PORT}/health`);
+      const body = await response.json();
+      if (response.ok && body?.ready === true) return body;
+    } catch { /* bounded readiness poll */ }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  throw new Error('scratch_server_readiness_timeout');
+}
+
+async function stopExactServer(child) {
+  if (child.exitCode != null) return;
+  const exited = new Promise((resolve) => child.once('exit', resolve));
+  child.kill('SIGTERM');
+  const timeout = new Promise((resolve) => setTimeout(resolve, 5_000, 'timeout'));
+  if (await Promise.race([exited, timeout]) === 'timeout' && child.exitCode == null) {
+    child.kill('SIGKILL');
+    await exited;
+  }
+}
+
+async function bootScratchServer(databaseName) {
+  const child = spawn(process.execPath, [
+    'server.js',
+    '--aimos-db', databaseName,
+    '--aimos-port', String(SCRATCH_PORT),
+  ], { cwd: ROOT, stdio: 'inherit' });
+  try {
+    const health = await waitForHealth(child);
+    return { child, health };
+  } catch (error) {
+    await stopExactServer(child);
+    throw error;
+  }
+}
+
+async function proveCr5Restart(databaseName) {
+  const before = await cr5SessionFingerprint(databaseName);
+  if (before.rows !== 4 || before.terminal_count !== 4) {
+    throw new Error(`cr5_restart_precondition_invalid:${JSON.stringify(before)}`);
+  }
+  const first = await bootScratchServer(databaseName);
+  const firstPid = first.child.pid;
+  await stopExactServer(first.child);
+  const second = await bootScratchServer(databaseName);
+  const secondPid = second.child.pid;
+  const after = await cr5SessionFingerprint(databaseName);
+  await stopExactServer(second.child);
+  if (firstPid === secondPid || JSON.stringify(before) !== JSON.stringify(after)) {
+    throw new Error(`cr5_restart_continuity_failed:${JSON.stringify({ firstPid, secondPid, before, after })}`);
+  }
+  return {
+    first_pid: firstPid,
+    second_pid: secondPid,
+    pid_changed: true,
+    first_health_ready: first.health.ready === true,
+    second_health_ready: second.health.ready === true,
+    before,
+    after,
+    continuity_verified: true,
+  };
+}
+
 function run(command, args) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd: ROOT, stdio: 'inherit' });
@@ -90,6 +180,71 @@ function run(command, args) {
       else reject(new Error(`${command} exited ${code ?? signal}`));
     });
   });
+}
+
+function capture(command, args, marker) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { cwd: ROOT, stdio: ['ignore', 'pipe', 'inherit'] });
+    let stdout = '';
+    child.stdout.on('data', (chunk) => {
+      const text = chunk.toString();
+      stdout += text;
+      process.stdout.write(text);
+    });
+    child.once('error', reject);
+    child.once('exit', (code, signal) => {
+      if (code !== 0) return reject(new Error(`${command} exited ${code ?? signal}`));
+      const line = stdout.split(/\r?\n/).findLast((entry) => entry.startsWith(marker));
+      if (!line) return reject(new Error(`captured_result_marker_missing:${marker}`));
+      try {
+        resolve(JSON.parse(line.slice(marker.length)));
+      } catch (error) {
+        reject(new Error(`captured_result_invalid:${marker}:${error.message}`));
+      }
+    });
+  });
+}
+
+async function probeCr6Recall(databaseName) {
+  return capture(process.execPath, [
+    'scripts/test/probe-cr6-canonical-recall.mjs',
+    '--live-fire',
+    '--aimos-db', databaseName,
+    '--aimos-port', String(SCRATCH_PORT),
+  ], 'CR6_PROBE_RESULT:');
+}
+
+async function proveCr6Restart(databaseName) {
+  const first = await bootScratchServer(databaseName);
+  const firstPid = first.child.pid;
+  const firstProbe = await probeCr6Recall(databaseName);
+  await stopExactServer(first.child);
+  const second = await bootScratchServer(databaseName);
+  const secondPid = second.child.pid;
+  const secondProbe = await probeCr6Recall(databaseName);
+  await stopExactServer(second.child);
+  if (firstPid === secondPid
+    || firstProbe.candidate_projection_sha256 !== secondProbe.candidate_projection_sha256
+    || JSON.stringify(firstProbe.candidate_projection) !== JSON.stringify(secondProbe.candidate_projection)) {
+    throw new Error(`cr6_restart_continuity_failed:${JSON.stringify({
+      firstPid, secondPid, firstProbe, secondProbe,
+    })}`);
+  }
+  return {
+    first_pid: firstPid,
+    second_pid: secondPid,
+    pid_changed: true,
+    first_health_ready: first.health.ready === true,
+    second_health_ready: second.health.ready === true,
+    candidate_projection_sha256: firstProbe.candidate_projection_sha256,
+    returned_count: firstProbe.returned_count,
+    attacks_denied_twice: [firstProbe, secondProbe].every((probe) =>
+      probe.wrong_company_status === 403
+      && probe.wrong_agent_status === 403
+      && probe.blocked_query_status === 403
+      && [401, 403].includes(probe.replay_status)),
+    continuity_verified: true,
+  };
 }
 
 function captureFile(file) {
@@ -146,6 +301,24 @@ async function main() {
       '--aimos-port', String(SCRATCH_PORT)
     ]);
     await run(process.execPath, [
+      'tests/security/canonical-save-owner-db.test.mjs',
+      '--live-fire',
+      '--aimos-db', databaseName,
+      '--aimos-port', String(SCRATCH_PORT)
+    ]);
+    await run(process.execPath, [
+      'tests/security/cr5-session-convergence-db.test.mjs',
+      '--live-fire',
+      '--aimos-db', databaseName,
+      '--aimos-port', String(SCRATCH_PORT)
+    ]);
+    await run(process.execPath, [
+      'tests/security/cr7-r2-database-local-closure-db.test.mjs',
+      '--live-fire',
+      '--aimos-db', databaseName,
+      '--aimos-port', String(SCRATCH_PORT)
+    ]);
+    await run(process.execPath, [
       'tests/security/event-ledger-db.test.mjs',
       '--live-fire',
       '--aimos-db', databaseName,
@@ -187,6 +360,9 @@ async function main() {
       '--aimos-port', String(SCRATCH_PORT)
     ]);
 
+    const cr5RestartProof = await proveCr5Restart(databaseName);
+    const cr6RestartProof = await proveCr6Restart(databaseName);
+
     const proof = await scratchProof(databaseName);
     if (Number(proof.test_memories) !== 1 || Number(proof.test_provenance) !== 2) {
       throw new Error(`unexpected live-fire proof counts: ${JSON.stringify(proof)}`);
@@ -213,6 +389,8 @@ async function main() {
       canonical_after: canonicalAfter,
       canonical_untouched: true,
       scratch_proof: proof,
+      cr5_restart_proof: cr5RestartProof,
+      cr6_restart_proof: cr6RestartProof,
       scratch_retained: keepScratch
     }, null, 2));
   } finally {

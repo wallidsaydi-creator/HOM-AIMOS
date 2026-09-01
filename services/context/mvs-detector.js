@@ -78,8 +78,10 @@ export function computeMVS(currentPredictionError, historyPredictionError, optio
  * - markov_confidence: top-1 calibrated recall confidence
  * - history_confidence: history-aware top-k aggregate for the same recall
  */
-export async function checkContextSufficiency(sessionId) {
-  const recent = await query(`
+export async function checkContextSufficiency(sessionId, options = {}) {
+  const queryFn = typeof options.queryFn === 'function' ? options.queryFn : query;
+  const companyId = String(options.companyId || COMPANY);
+  const recent = await queryFn(`
     SELECT
       COALESCE((metadata->>'markov_confidence')::float, 0.5) AS markov_confidence,
       COALESCE((metadata->>'history_confidence')::float, 0.5) AS history_confidence,
@@ -93,7 +95,7 @@ export async function checkContextSufficiency(sessionId) {
       )
     ORDER BY ts DESC
     LIMIT $3
-  `, [COMPANY, sessionId, HISTORY_K]);
+  `, [companyId, sessionId, HISTORY_K]);
 
   if (recent.rows.length < HISTORY_K) {
     return { mvs: 0, needsMoreContext: false, reason: 'insufficient_history' };
@@ -108,7 +110,7 @@ export async function checkContextSufficiency(sessionId) {
     s + (parseFloat(r.history_confidence) || 0.5), 0) / recent.rows.length;
   const mseH = Math.pow(1 - avgConf, 2);
 
-  const result = computeMVS(mseM, mseH);
+  const result = computeMVS(mseM, mseH, { memoryCount: options.memoryCount });
   return {
     ...result,
     markovConfidence: Number(latestConf.toFixed(3)),

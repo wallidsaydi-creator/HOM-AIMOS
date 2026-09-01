@@ -24,7 +24,7 @@
 
 import { query } from '../../db/connection.js';
 import { getEmbedding } from '../core/embeddings.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 import { applyRewardSignal } from '../learning/stdp-kernel.js';
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 
@@ -168,10 +168,9 @@ export async function curatorMerge(deltas, companyId = COMPANY) {
       harmful_count: delta.harmful_count
     });
 
-    const saveResult = await persistMemory({
+    const saveResult = await executeHousekeeperCanonicalSave({
       company_id: companyId,
       agent_id: 'delta-writer',
-      mutation_authority: 'housekeeper',
       key,
       value,
       scope: 'system',

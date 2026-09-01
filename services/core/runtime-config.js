@@ -6,10 +6,18 @@
 // belong in the signed system-config / credential ledgers.
 
 import os from 'node:os';
+import { resolveAimosInstallationContext } from '../installation-context.js';
 
 export const AIMOS_COMPANY_ID = 'hom';
-export const AIMOS_RUNTIME_ROLE = 'agent_runtime';
-export const AIMOS_RUNTIME_CREDENTIAL_SERVICE = 'agent_runtime_db_password';
+export const AIMOS_INSTALLATION_CONTEXT = resolveAimosInstallationContext();
+export const AIMOS_INSTANCE = AIMOS_INSTALLATION_CONTEXT.instance;
+export const AIMOS_STATE_ROOT = AIMOS_INSTALLATION_CONTEXT.state_root;
+export const AIMOS_AGENT_KEY_ROOT = AIMOS_INSTALLATION_CONTEXT.agent_key_root;
+export const AIMOS_RUNTIME_ROLE = AIMOS_INSTALLATION_CONTEXT.runtime_role;
+export const AIMOS_RUNTIME_CREDENTIAL_SERVICE =
+  AIMOS_INSTALLATION_CONTEXT.runtime_credential_service;
+export const AIMOS_USER_SERVICE_LABEL = AIMOS_INSTALLATION_CONTEXT.user_service_label;
+export const AIMOS_POSTGRES_PORT = AIMOS_INSTALLATION_CONTEXT.postgres_port;
 export const RESERVED_LEGACY_PORTS = Object.freeze([9000, 9001]);
 
 function cliValue(name, argv = process.argv.slice(2)) {
@@ -104,5 +112,6 @@ export function resolveAimosDatabaseName(argv = process.argv.slice(2)) {
 
 export function resolveAimosDatabaseUrl(argv = process.argv.slice(2)) {
   const username = encodeURIComponent(os.userInfo().username);
-  return `postgresql://${username}@localhost:5432/${resolveAimosDatabaseName(argv)}`;
+  const context = resolveAimosInstallationContext(argv);
+  return `postgresql://${username}@localhost:${context.postgres_port}/${resolveAimosDatabaseName(argv)}`;
 }

@@ -4,7 +4,14 @@ Date: 2026-07-30
 Protocol: `poisonedrag-n100-epistemic-ablation-v1`
 Source evidence: canonical completed N=100 aggregate
 Source protocol: `poisonedrag-n100-v1`
-Status: protocol fixed before computing counterfactual-arm results
+Status: current-stack installed-service amendment fixed before computing new counterfactual-arm results
+
+Current-stack amendment (2026-09-01): the V1 clone lifecycle is replaced by
+the P4 installed-service boundary. The scientific arms, estimands, model roles,
+prompts, denominators and statistical procedures below are unchanged. The
+ablation consumes the same already-admitted PoisonedRAG campaign evidence in
+the retained reproduction installation; it creates no clone, server or
+database. Historical clone-based results remain historical V1 evidence.
 
 ## 1. Purpose and prior knowledge
 
@@ -37,9 +44,9 @@ cognitive-weight mutation ablation:
 - all 504 retained signed epistemic-classification rows remain present and
   re-verify identically in every arm;
 - all source memories remain retained and recallable;
-- the experiment runs against an isolated clone of the completed scratch
-  brain;
-- the clone continues the append-only signed event history;
+- the experiment runs against the retained installed reproduction brain and
+  the exact source-run/session scopes of the completed PoisonedRAG campaign;
+- the installed brain continues its append-only signed event history;
 - each experimental decision is appended to the cryptographic event ledger.
 
 The production `/aimos/recall` behavior is not made configurable. No ENV
@@ -63,10 +70,12 @@ into the ablation manifest:
 10. Exact source-file hashes for the native epistemic retriever, doctor trace,
     ablation runner, provider bridge, and benchmark prompts.
 
-The ablation must use a new scratch database whose name begins with
-`aimos_benchmark_` and is supplied only through the explicit `--aimos-db`
-runtime argument. The source database identifier remains in the private
-run-level evidence and is committed publicly only by its sanitized aggregate.
+The current-stack ablation must resolve one validated installed service and use
+its exact existing database and endpoint. The source PoisonedRAG run identifier
+is explicit and its completed artifacts, source/session scopes and database
+identity must match that service. No scratch database, clone or child server is
+permitted. The historical V1 clone implementation remains available only for
+historical verification and is never selected by P4.
 
 ## 4. Fixed model and prompt protocol
 
@@ -220,14 +229,14 @@ artifact hash.
 
 The terminal evidence pack must prove:
 
-- source database and clone binding;
+- source campaign, installed service and exact database binding;
 - source corpus root unchanged;
 - canonical memory bodies unchanged;
 - persistent retrieval weights unchanged;
 - no missing target or scope;
 - all event receipts verify;
 - all artifact self-hashes verify;
-- the canonical `aimos` database received no benchmark memory.
+- the operator's canonical `aimos` database received no benchmark memory.
 
 ## 11. Stop conditions
 

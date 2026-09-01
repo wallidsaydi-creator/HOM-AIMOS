@@ -132,6 +132,7 @@ export class SemanticCache {
     this.ttlMs = options.ttlMs || 300000; // 5 minutes default
     this.similarityThreshold = options.similarityThreshold || 0.85;
     this.maxSize = options.maxSize || 1000; // LRU size limit
+    this._logEvent = options.logEvent || logEvent;
 
     // Internal LRU map: key -> { embedding, result, timestamp, trust_score, mvs }
     this._cache = new Map();
@@ -164,7 +165,7 @@ export class SemanticCache {
         return null;
       }
       this._markAccessed(exactKey);
-      logEvent('hom', 'system', 'cache_hit', queryText, {
+      this._logEvent('hom', 'system', 'cache_hit', queryText, {
         type: 'exact_match',
         reasoning: 'An ACL- and calibration-namespaced state-reference proposal matched the exact query text; live hydration and verification remain mandatory.',
       }).catch(() => {});
@@ -185,7 +186,7 @@ export class SemanticCache {
         const sim = this._cosineSimilarity(queryEmbedding, item.embedding);
         if (sim > this.similarityThreshold) {
           this._markAccessed(key);
-          logEvent('hom', 'system', 'cache_hit', queryText, {
+          this._logEvent('hom', 'system', 'cache_hit', queryText, {
             type: 'semantic_match',
             similarity: sim,
             cached_key: key,
@@ -211,7 +212,7 @@ export class SemanticCache {
           // hydration, provenance verification, and state reselection remain
           // mandatory before the references can influence a response.
           this._markCompressedAccessed(key);
-          logEvent('hom', 'system', 'cache_hit', queryText, {
+          this._logEvent('hom', 'system', 'cache_hit', queryText, {
             type: 'warm_state_reference_match',
             similarity: sim,
             cached_key: key,
@@ -222,7 +223,7 @@ export class SemanticCache {
       }
     }
 
-    logEvent('hom', 'system', 'cache_miss', queryText, {
+    this._logEvent('hom', 'system', 'cache_miss', queryText, {
       reasoning: 'No namespaced state-reference proposal satisfied the bounded cache contract; continue the full native path.',
     }).catch(() => {});
     return null;
@@ -256,7 +257,7 @@ export class SemanticCache {
       && topNScores.every(s => s > AGREEMENT_PARADOX_THRESHOLD);
 
     if (hallucinationRisk) {
-      logEvent('hom', 'system', 'agreement_paradox_detected', queryText, {
+      this._logEvent('hom', 'system', 'agreement_paradox_detected', queryText, {
         topScores: topNScores,
         threshold: AGREEMENT_PARADOX_THRESHOLD,
         risk: 'collective_hallucination'
@@ -325,7 +326,7 @@ export class SemanticCache {
       this._accessOrder = [];
       this._compressedStore.clear();
       this._compressedAccessOrder = [];
-      logEvent('hom', 'system', 'cache_invalidate', 'all', { count, trigger: triggerType });
+      this._logEvent('hom', 'system', 'cache_invalidate', 'all', { count, trigger: triggerType });
     }
     // Note: Fine-grained invalidation by memory_id would require indexing
   }

@@ -33,8 +33,8 @@
 // ═══════════════════════════════════════════════════════════════════════════════
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
-import { query } from '../../db/connection.js';
-import { logEvent } from '../observe/event-ledger.js';
+import { query, withTransaction } from '../../db/connection.js';
+import { logEvent, readVerifiedEventById } from '../observe/event-ledger.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -281,26 +281,29 @@ export function computeStabilityObjective(skillUpdates) {
  */
 export async function getSkillRunningStats(skillId, companyId) {
   const cid = companyId || COMPANY;
-  await ensureErrorNormalizerSchema();
 
   try {
-    const result = await query(
-      `SELECT mu, variance, n_samples
-       FROM skill_running_stats
-       WHERE company_id = $1 AND skill_id = $2
-       LIMIT 1`,
-      [cid, String(skillId)]
-    );
-
-    if (!result.rows.length) {
-      return { mu: 0, variance: 1, nSamples: 0 };
+    const row = await withTransaction(async (client) => {
+      const result = await client.query(
+        `SELECT id FROM aimos_events
+          WHERE company_id = $1 AND operation = 'skill_error_stats_committed'
+            AND key = $2 AND ledger_version = 1
+          ORDER BY ts DESC, signer_valid_from DESC, ledger_seq DESC LIMIT 1`,
+        [cid, String(skillId)],
+      );
+      return result.rows[0]
+        ? readVerifiedEventById(result.rows[0].id, cid, { client })
+        : null;
+    }, { restricted: true, client_id: cid, agent_id: 'housekeeper' });
+    if (!row) return { mu: 0, variance: 1, nSamples: 0 };
+    const metadata = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata;
+    if (metadata?.schema !== 'hom.aimos.skill-error-stats/v1' || metadata?.skill_id !== String(skillId)) {
+      throw new Error('skill_error_stats_event_invalid');
     }
-
-    const row = result.rows[0];
     return {
-      mu: parseFloat(row.mu) || 0,
-      variance: Math.max(MIN_VARIANCE, parseFloat(row.variance) || 1),
-      nSamples: parseInt(row.n_samples, 10) || 0,
+      mu: Number(metadata.mu) || 0,
+      variance: Math.max(MIN_VARIANCE, Number(metadata.variance) || 1),
+      nSamples: Number(metadata.n_samples) || 0,
     };
   } catch (err) {
     console.error('[error-normalizer] getSkillRunningStats DB error:', err.message);
@@ -320,28 +323,24 @@ export async function getSkillRunningStats(skillId, companyId) {
  */
 export async function updateSkillRunningStats(skillId, newErrorValue, companyId) {
   const cid = companyId || COMPANY;
-  await ensureErrorNormalizerSchema();
 
   const prev = await getSkillRunningStats(skillId, cid);
   const clipped = clipValue(newErrorValue, ERROR_CLIP);
   const next = welfordUpdate(prev.mu, prev.variance, prev.nSamples, clipped);
 
   try {
-    await query(
-      `INSERT INTO skill_running_stats
-         (company_id, skill_id, mu, variance, n_samples, updated_at)
-       VALUES ($1, $2, $3, $4, $5, NOW())
-       ON CONFLICT (company_id, skill_id)
-       DO UPDATE SET mu = $3, variance = $4, n_samples = $5, updated_at = NOW()`,
-      [cid, String(skillId), next.mu, next.variance, next.n]
-    );
-
-    await logEvent(cid, 'error-normalizer', 'skill_stats_updated', skillId, {
+    await logEvent(cid, 'housekeeper', 'skill_error_stats_committed', String(skillId), {
+      schema: 'hom.aimos.skill-error-stats/v1',
+      skill_id: String(skillId),
       reasoning: `Welford update for skill ${skillId}: μ=${next.mu.toFixed(4)}, σ²=${next.variance.toFixed(4)}, n=${next.n}`,
       mu: next.mu,
       variance: next.variance,
-      nSamples: next.n,
-    }).catch(() => {});
+      n_samples: next.n,
+      prior_mu: prev.mu,
+      prior_variance: prev.variance,
+      prior_n_samples: prev.nSamples,
+      source_paper_sha256: '5df20d03d73678f51456442b83eb37b94dd59f77a17afd164bb02b158e32c9a7',
+    }, null, { returnReceipt: true });
 
     return { mu: next.mu, variance: next.variance, nSamples: next.n, updated: true };
   } catch (err) {

@@ -1,6 +1,8 @@
 /**
  * Native context-conditioned QA operator from:
  * - SITUATEDQA.pdf
+ * Status: Native structural projection in canonical /aimos/recall with zero
+ * rank influence pending calibration.
  *
  * Implemented formulas / techniques:
  * - situated tuple: (q, c_v, a)
@@ -10,7 +12,7 @@
  * - exact-match compatibility diagnostics
  *
  * Aimos adaptation:
- * - scores context compatibility for recall evidence
+ * - projects explicit query context into signed recall evidence
  * - does not generate answers or inject benchmark labels
  * - does not filter, delete, decay, prune, or suppress memories
  */

@@ -63,7 +63,7 @@
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { query } from '../../db/connection.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 import { logEvent } from './event-ledger.js';
 import { buildInactiveAudioUnderstandingContract, QWEN_AUDIO_SOURCE } from './multimodal-contract.js';
 
@@ -491,9 +491,8 @@ export function buildInactiveMultimodalRepresentationContracts({
 // ─── Model Registry ──────────────────────────────────────────────────────────
 
 /**
- * Register a new AI model in the model registry.
- * Uses UPSERT on (company_id, model_id, version) — re-registering an existing
- * version updates its metadata and status.
+ * Retained compatibility export. Runtime model-registry mutation is retired;
+ * model selection is owned by the signed system-configuration ledger.
  *
  * @param {{
  *   model_id: string,
@@ -505,59 +504,14 @@ export function buildInactiveMultimodalRepresentationContracts({
  *   metadata?: object
  * }} modelSpec
  * @param {string} [companyId]
- * @returns {Promise<{registered: boolean, model_id: string, version: string}>}
+ * @throws {Error} Always; there is no runtime registry writer.
  */
 export async function registerModel(modelSpec, companyId) {
-  const cid = companyId || COMPANY;
-  await ensureArchitectureRegistrySchema();
-
   if (!modelSpec?.model_id || !modelSpec?.version) {
     throw new Error('[architecture-registry] registerModel: model_id and version are required');
   }
-
-  const status = VALID_STATUSES.includes(modelSpec.status) ? modelSpec.status : 'experimental';
-  const threshold = Number(modelSpec.threshold) || 0;
-  const metadata = modelSpec.metadata && typeof modelSpec.metadata === 'object'
-    ? modelSpec.metadata
-    : {};
-
-  try {
-    await query(
-      `INSERT INTO model_registry
-         (company_id, model_id, version, framework, eval_metric, threshold, status, metadata, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, NOW())
-       ON CONFLICT (company_id, model_id, version)
-       DO UPDATE SET
-         framework   = $4,
-         eval_metric = $5,
-         threshold   = $6,
-         status      = $7,
-         metadata    = $8::jsonb,
-         updated_at  = NOW()`,
-      [
-        cid,
-        String(modelSpec.model_id),
-        String(modelSpec.version),
-        String(modelSpec.framework || 'unknown'),
-        String(modelSpec.eval_metric || 'accuracy'),
-        threshold,
-        status,
-        JSON.stringify(metadata),
-      ]
-    );
-
-    await logEvent(cid, 'architecture-registry', 'model_registered', modelSpec.model_id, {
-      reasoning: `Model '${modelSpec.model_id}@${modelSpec.version}' registered with status '${status}', eval_metric='${modelSpec.eval_metric}', threshold=${threshold}`,
-      version: modelSpec.version,
-      framework: modelSpec.framework,
-      status,
-    }).catch(() => {});
-
-    return { registered: true, model_id: modelSpec.model_id, version: modelSpec.version };
-  } catch (err) {
-    console.error('[architecture-registry] registerModel DB error:', err.message);
-    return { registered: false, model_id: modelSpec.model_id, version: modelSpec.version };
-  }
+  void companyId;
+  throw new Error('model_registry_mutation_retired_use_signed_model_preference');
 }
 
 /**
@@ -652,7 +606,7 @@ export async function registerBoundary(componentId, contract, companyId) {
   });
 
   try {
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: cid,
       agent_id: 'architecture-registry',
       key: boundaryKey,
@@ -660,7 +614,7 @@ export async function registerBoundary(componentId, contract, companyId) {
       scope: 'global',
       memory_type: 'declarative',
       clearance_level: 5,
-      mutation_authority: 'housekeeper',
+      source: 'architecture-registry',
     });
 
     await logEvent(cid, 'architecture-registry', 'boundary_registered', componentId, {
@@ -755,7 +709,7 @@ export async function logAIDecision(decisionRecord, companyId) {
   Object.assign(adr, extraFields);
 
   try {
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: cid,
       agent_id: 'architecture-registry',
       key: adrKey,
@@ -763,7 +717,7 @@ export async function logAIDecision(decisionRecord, companyId) {
       scope: 'global',
       memory_type: 'declarative',
       clearance_level: 5,
-      mutation_authority: 'housekeeper',
+      source: 'architecture-registry',
     });
 
     await logEvent(cid, 'architecture-registry', 'ai_decision_logged', adrKey, {
@@ -802,61 +756,11 @@ export async function logAIDecision(decisionRecord, companyId) {
  * @returns {Promise<{tracked: boolean, debtId: number|null, category: string}>}
  */
 export async function trackAIDebt(entry, companyId) {
-  const cid = companyId || COMPANY;
-  await ensureArchitectureRegistrySchema();
-
   if (!entry?.category) {
     throw new Error('[architecture-registry] trackAIDebt: category is required');
   }
-
-  const category = VALID_DEBT_CATEGORIES.includes(entry.category)
-    ? entry.category
-    : entry.category; // Accept unknown categories — warn only
-
-  if (!VALID_DEBT_CATEGORIES.includes(entry.category)) {
-    console.warn(`[architecture-registry] trackAIDebt: unknown category '${entry.category}'. Valid: ${VALID_DEBT_CATEGORIES.join(', ')}`);
-  }
-
-  const severity = VALID_SEVERITIES.includes(entry.severity) ? entry.severity : 'medium';
-  const status = entry.status || 'open';
-  const metadata = entry.metadata && typeof entry.metadata === 'object' ? entry.metadata : {};
-
-  try {
-    const result = await query(
-      `INSERT INTO ai_debt_register
-         (company_id, category, severity, blast_radius, remediation_effort,
-          owner, status, description, metadata)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb)
-       RETURNING id`,
-      [
-        cid,
-        category,
-        severity,
-        String(entry.blast_radius || 'unknown'),
-        String(entry.remediation_effort || 'unknown'),
-        String(entry.owner || 'unassigned'),
-        status,
-        String(entry.description || ''),
-        JSON.stringify(metadata),
-      ]
-    );
-
-    const debtId = result.rows[0]?.id ?? null;
-
-    await logEvent(cid, 'architecture-registry', 'ai_debt_tracked', `debt:${debtId}`, {
-      reasoning: `AI technical debt item tracked: category='${category}', severity='${severity}', blast_radius='${entry.blast_radius}', owner='${entry.owner}'`,
-      category,
-      severity,
-      blastRadius: entry.blast_radius,
-      remediationEffort: entry.remediation_effort,
-      owner: entry.owner,
-    }).catch(() => {});
-
-    return { tracked: true, debtId, category };
-  } catch (err) {
-    console.error('[architecture-registry] trackAIDebt DB error:', err.message);
-    return { tracked: false, debtId: null, category };
-  }
+  void companyId;
+  throw new Error('ai_debt_mutation_retired_no_verified_caller');
 }
 
 // ---------------------------------------------------------------------------

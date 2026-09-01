@@ -1,0 +1,340 @@
+{
+  "schema": "hom.aimos.mutmem-v2-claim-to-evidence-map/v1",
+  "rows": [
+    {
+      "claim_id": "V1-LONGMEMEVAL-UTILITY",
+      "disposition": "HISTORICAL_V1",
+      "statement_authority": "bounded_as_written",
+      "table_cell_ids": [
+        "v1-longmemeval-judged-accuracy"
+      ],
+      "code": [
+        "scripts/benchmark/regenerate-mutmem-v2-publication-evidence.mjs"
+      ],
+      "protocol": "canonical-blind-v1",
+      "artifacts": [
+        "eval/publication/verified-benchmark-results.json"
+      ],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": "459/500",
+      "limitation": "Historical V1 result; model-judged and not a current-source V2 benchmark."
+    },
+    {
+      "claim_id": "V1-LOCOMO-JUDGED",
+      "disposition": "HISTORICAL_V1",
+      "statement_authority": "bounded_as_written",
+      "table_cell_ids": [
+        "v1-locomo-judged-accuracy"
+      ],
+      "code": [
+        "scripts/benchmark/regenerate-mutmem-v2-publication-evidence.mjs"
+      ],
+      "protocol": "canonical-blind-v1",
+      "artifacts": [
+        "eval/publication/verified-benchmark-results.json"
+      ],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": "1472/1986",
+      "limitation": "Historical V1 judged accuracy; never merged with token F1."
+    },
+    {
+      "claim_id": "V1-LOCOMO-F1",
+      "disposition": "HISTORICAL_V1",
+      "statement_authority": "bounded_as_written",
+      "table_cell_ids": [
+        "v1-locomo-token-f1"
+      ],
+      "code": [
+        "scripts/benchmark/regenerate-mutmem-v2-publication-evidence.mjs"
+      ],
+      "protocol": "locomo-upstream-qa-v1",
+      "artifacts": [
+        "eval/publication/verified-benchmark-results.json"
+      ],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": "1986",
+      "limitation": "Point estimate remains in the V1 aggregate; bootstrap interval omitted because private rows are unavailable."
+    },
+    {
+      "claim_id": "V1-POISONEDRAG",
+      "disposition": "HISTORICAL_V1",
+      "statement_authority": "bounded_as_written",
+      "table_cell_ids": [
+        "v1-poisonedrag-attacked-asr",
+        "v1-poisonedrag-poison-retrieved-at-5",
+        "v1-poisonedrag-clean-accuracy",
+        "v1-poisonedrag-attacked-accuracy"
+      ],
+      "code": [
+        "scripts/benchmark/regenerate-mutmem-v2-publication-evidence.mjs"
+      ],
+      "protocol": "poisonedrag-n100-v1",
+      "artifacts": [
+        "eval/publication/verified-benchmark-results.json",
+        "eval/publication/poisonedrag-epistemic-verification.json"
+      ],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": "100 targets",
+      "limitation": "Adapted bounded N=100 protocol; no universal or unseen-attack claim."
+    },
+    {
+      "claim_id": "V1-EPISTEMIC-ABLATION",
+      "disposition": "HISTORICAL_V1",
+      "statement_authority": "bounded_as_written",
+      "table_cell_ids": [
+        "v1-ablation-a0-attacked-poison-retrieval-at-5",
+        "v1-ablation-a0-official-clean-asr",
+        "v1-ablation-a0-official-attacked-asr",
+        "v1-ablation-a0-official-induced-asr",
+        "v1-ablation-a0-semantic-attacked-asr",
+        "v1-ablation-a0-semantic-induced-asr",
+        "v1-ablation-a0-clean-accuracy",
+        "v1-ablation-a0-attacked-accuracy",
+        "v1-ablation-a1-attacked-poison-retrieval-at-5",
+        "v1-ablation-a1-official-clean-asr",
+        "v1-ablation-a1-official-attacked-asr",
+        "v1-ablation-a1-official-induced-asr",
+        "v1-ablation-a1-semantic-attacked-asr",
+        "v1-ablation-a1-semantic-induced-asr",
+        "v1-ablation-a1-clean-accuracy",
+        "v1-ablation-a1-attacked-accuracy",
+        "v1-ablation-a2-attacked-poison-retrieval-at-5",
+        "v1-ablation-a2-official-clean-asr",
+        "v1-ablation-a2-official-attacked-asr",
+        "v1-ablation-a2-official-induced-asr",
+        "v1-ablation-a2-semantic-attacked-asr",
+        "v1-ablation-a2-semantic-induced-asr",
+        "v1-ablation-a2-clean-accuracy",
+        "v1-ablation-a2-attacked-accuracy",
+        "v1-ablation-a3-attacked-poison-retrieval-at-5",
+        "v1-ablation-a3-official-clean-asr",
+        "v1-ablation-a3-official-attacked-asr",
+        "v1-ablation-a3-official-induced-asr",
+        "v1-ablation-a3-semantic-attacked-asr",
+        "v1-ablation-a3-semantic-induced-asr",
+        "v1-ablation-a3-clean-accuracy",
+        "v1-ablation-a3-attacked-accuracy"
+      ],
+      "code": [
+        "scripts/benchmark/regenerate-mutmem-v2-publication-evidence.mjs"
+      ],
+      "protocol": "poisonedrag-n100-epistemic-ablation-v1",
+      "artifacts": [
+        "eval/publication/poisonedrag-epistemic-ablation.json"
+      ],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": "100 paired targets per arm",
+      "limitation": "Fixed-corpus causal evidence; query-local contribution was null and withholding was not exercised."
+    },
+    {
+      "claim_id": "V1-MUTATION-INTEGRITY",
+      "disposition": "HISTORICAL_V1",
+      "statement_authority": "bounded_as_written",
+      "table_cell_ids": [
+        "v1-mutation-integrity"
+      ],
+      "code": [
+        "scripts/benchmark/regenerate-mutmem-v2-publication-evidence.mjs"
+      ],
+      "protocol": "hom-cognitive-mutation-integrity-v1",
+      "artifacts": [
+        "eval/publication/mutation-integrity-verification.json"
+      ],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": "20 transitions",
+      "limitation": "Historical retained-memory transition evidence under the V1 threat model."
+    },
+    {
+      "claim_id": "V1-MUTATION-LATENCY-STORAGE",
+      "disposition": "HISTORICAL_V1",
+      "statement_authority": "bounded_as_written",
+      "table_cell_ids": [
+        "v1-mutation-latency-storage"
+      ],
+      "code": [
+        "scripts/benchmark/regenerate-mutmem-v2-publication-evidence.mjs"
+      ],
+      "protocol": "hom-cognitive-mutation-integrity-v1",
+      "artifacts": [
+        "eval/publication/mutation-integrity-verification.json"
+      ],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": "20 transitions",
+      "limitation": "Single-machine descriptive values; row-level inputs are unavailable for independent recomputation."
+    },
+    {
+      "claim_id": "V1-HUMAN-AGREEMENT",
+      "disposition": "HISTORICAL_V1",
+      "statement_authority": "bounded_as_written",
+      "table_cell_ids": [
+        "v1-human-correctness-agreement",
+        "v1-human-target-assertion-agreement"
+      ],
+      "code": [
+        "scripts/benchmark/regenerate-mutmem-v2-publication-evidence.mjs"
+      ],
+      "protocol": "blinded-system-author-audit-v1",
+      "artifacts": [
+        "eval/publication/poisonedrag-human-agreement.json"
+      ],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": "200 answers",
+      "limitation": "System-author diagnostic, not independent human validation; bootstrap interval omitted."
+    },
+    {
+      "claim_id": "V2-PORTABLE-PROTOCOL",
+      "disposition": "CURRENT_V2",
+      "statement_authority": "bounded_as_written",
+      "table_cell_ids": [
+        "v2-portable-protocol"
+      ],
+      "code": [
+        "verifiers/mutmem-v2/node",
+        "verifiers/mutmem-v2/python"
+      ],
+      "protocol": "hom.aimos.mutmem-portable-protocol-manifest/v2",
+      "artifacts": [
+        "verifiers/mutmem-conformance/v2/protocol-manifest.json"
+      ],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": "39+15 vectors",
+      "limitation": "Portable verification protocol, not another memory engine or producer."
+    },
+    {
+      "claim_id": "V2-INDEPENDENT-VERIFIER",
+      "disposition": "CURRENT_V2",
+      "statement_authority": "bounded_as_written",
+      "table_cell_ids": [
+        "v2-node-python-independent-verification"
+      ],
+      "code": [
+        "verifiers/mutmem-v2/node",
+        "verifiers/mutmem-v2/python"
+      ],
+      "protocol": "independent-node-python-v2",
+      "artifacts": [
+        "verifiers/mutmem-conformance/v2/protocol-manifest.json",
+        "verifiers/mutmem-conformance/v2/p2-closure-audit.json"
+      ],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": "72 terminal verdicts",
+      "limitation": "Cross-language verdict/reason parity proves verifier portability, not empirical utility."
+    },
+    {
+      "claim_id": "V2-PRODUCTION-CONFORMANCE",
+      "disposition": "CURRENT_V2",
+      "statement_authority": "bounded_as_written",
+      "table_cell_ids": [
+        "v2-production-conformance"
+      ],
+      "code": [
+        "verifiers/mutmem-v2/node",
+        "verifiers/mutmem-v2/python"
+      ],
+      "protocol": "hom.aimos.mutmem-v2-s5-parity-report/v1",
+      "artifacts": [
+        "verifiers/mutmem-conformance/v1/verification-report.json"
+      ],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": "42/42",
+      "limitation": "Conformance corpus, not benchmark efficacy."
+    },
+    {
+      "claim_id": "V2-CANARY",
+      "disposition": "CURRENT_V2",
+      "statement_authority": "bounded_as_written",
+      "table_cell_ids": [
+        "v2-canary-explicit-marker-detection",
+        "v2-canary-clean-false-positive"
+      ],
+      "code": [
+        "verifiers/mutmem-v2/node",
+        "verifiers/mutmem-v2/python"
+      ],
+      "protocol": "hom-aimos-canary-cross-transport-v12",
+      "artifacts": [
+        "eval/publication/canary-cross-transport-verification.json"
+      ],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": "120/120",
+      "limitation": "Explicit marker traversal only; not arbitrary poison, prompt-injection, or semantic social-engineering detection."
+    },
+    {
+      "claim_id": "V2-CLEAN-INSTALLER",
+      "disposition": "CURRENT_V2",
+      "statement_authority": "bounded_as_written",
+      "table_cell_ids": [
+        "v2-clean-installer"
+      ],
+      "code": [
+        "verifiers/mutmem-v2/node",
+        "verifiers/mutmem-v2/python"
+      ],
+      "protocol": "hom.aimos.p3-clean-installer-qualification/v3",
+      "artifacts": [
+        "verifiers/mutmem-conformance/v2/p3-clean-installer-qualification.json"
+      ],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": "one qualified installation and restart",
+      "limitation": "Reproducibility evidence only; not benchmark evidence."
+    },
+    {
+      "claim_id": "SABER-OPERATIONAL-NUMBERS",
+      "disposition": "OMITTED",
+      "statement_authority": "bounded_as_written",
+      "table_cell_ids": [],
+      "code": [
+        "scripts/benchmark/regenerate-mutmem-v2-publication-evidence.mjs"
+      ],
+      "protocol": "unverified-private-artifact",
+      "artifacts": [],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": null,
+      "limitation": "Exact private artifact is not in verified custody; no numerical V2 claim is permitted."
+    },
+    {
+      "claim_id": "CONTENT-TRUTH",
+      "disposition": "PROHIBITED",
+      "statement_authority": "none",
+      "table_cell_ids": [],
+      "code": [
+        "scripts/benchmark/regenerate-mutmem-v2-publication-evidence.mjs"
+      ],
+      "protocol": "none",
+      "artifacts": [],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": null,
+      "limitation": "Integrity, provenance, authorization, and agreement do not establish semantic truth."
+    },
+    {
+      "claim_id": "UNIVERSAL-DEFENSE",
+      "disposition": "PROHIBITED",
+      "statement_authority": "none",
+      "table_cell_ids": [],
+      "code": [
+        "scripts/benchmark/regenerate-mutmem-v2-publication-evidence.mjs"
+      ],
+      "protocol": "none",
+      "artifacts": [],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": null,
+      "limitation": "Fixed marker and N=100 evidence do not establish universal robustness."
+    },
+    {
+      "claim_id": "INDEPENDENT-REPLICATION",
+      "disposition": "PROHIBITED",
+      "statement_authority": "none",
+      "table_cell_ids": [],
+      "code": [
+        "scripts/benchmark/regenerate-mutmem-v2-publication-evidence.mjs"
+      ],
+      "protocol": "none",
+      "artifacts": [],
+      "verifier": "scripts/verification/verify-mutmem-v2-publication-evidence.mjs",
+      "denominator": null,
+      "limitation": "No outside team independently reproduced the system or empirical results."
+    }
+  ],
+  "all_nonprohibited_claims_have_limitation": true,
+  "claim_map_sha256": "4d8d23442e9ed311e33ddd9ce9a79e878642eba93329c460e203128e54997527"
+}

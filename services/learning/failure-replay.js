@@ -27,7 +27,7 @@
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { query } from '../../db/connection.js';
-import { persistMemory } from '../write/persist-memory.js';
+import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 import { runProvider } from '../core/providers.js';
 import { logEvent } from '../observe/event-ledger.js';
 
@@ -299,15 +299,15 @@ Output format:
   });
 
   try {
-    await persistMemory({
+    await executeHousekeeperCanonicalSave({
       company_id: cid,
       agent_id: 'failure-replay',
-      mutation_authority: 'housekeeper',
       key,
       value,
       scope: 'global',
       memory_type: 'procedural',
-      clearance_level: 3
+      clearance_level: 3,
+      source: 'failure-replay',
     });
 
     await logEvent(cid, 'failure-replay', 'anti_skill_generated', key, {
