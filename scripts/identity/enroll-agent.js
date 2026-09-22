@@ -8,21 +8,24 @@
 //   node scripts/identity/enroll-agent.js <agent_id>
 //   node scripts/identity/enroll-agent.js <agent_id> --validity-days=30
 //   node scripts/identity/enroll-agent.js <agent_id> --dry-run
+//   node scripts/identity/enroll-agent.js <agent_id> --renew --validity-days=365
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, writeFileSync, chmodSync, existsSync, readFileSync } from 'node:fs';
 import os from 'node:os';
-import { createHash } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey } from 'node:crypto';
 import {
   enrollAgentWithDeps,
   KC_SERVICE,
-  KC_ACCOUNT_DEFAULT
+  KC_ACCOUNT_DEFAULT,
+  decryptMasterPrivkey,
 } from './lib.js';
 import { keychainGet, keychainSet } from './keychain.js';
 import * as identityDb from './db.js';
 import { readPassphrase, readLine } from './passphrase.js';
-import { pool } from '../../db/connection.js';
+import { pool, agentPool } from '../../db/connection.js';
+import { loadAgentPrivkey } from '../../services/security/agent-identity.js';
 import { AIMOS_AGENT_KEY_ROOT } from '../../services/core/runtime-config.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -46,7 +49,53 @@ const AGENT_KEY_PATH = path.join(AGENTS_DIR, `${agentId}.key`);
 const AGENT_CERT_CACHE_PATH = path.join(AGENTS_DIR, `${agentId}.cert-cache.json`);
 const sha256Hex = (value) => createHash('sha256').update(value).digest('hex');
 
+async function renewExistingAgent() {
+  if (validityArg && !/^--validity-days=[1-9][0-9]*$/.test(validityArg)) throw new Error('identity_renewal_validity_invalid');
+  // Inspect custody; never generate, overwrite or copy the retained private key.
+  const key = loadAgentPrivkey(AGENT_KEY_PATH);
+  const publicKey = createPublicKey(createPrivateKey({key:Buffer.from(key,'base64url'),format:'der',type:'pkcs8'}))
+    .export({type:'spki',format:'der'}).toString('base64url');
+  const keyHash = sha256Hex(readFileSync(AGENT_KEY_PATH));
+  const state = await identityDb.inspectAgentRenewal(agentId,publicKey,validityDays);
+  console.log(JSON.stringify({mode:DRY_RUN?'DRY_RUN':'LIVE',action:'RENEW_EXISTING_AGENT_CERTIFICATE',
+    agent_id:agentId,validity_days:validityDays,predecessor:state.projection,
+    preserved_grant:{allowed:state.grant.allowed,write_allowed:state.grant.writeAllowed,
+      clearance_ceiling:state.grant.clearanceCeiling,data_class_ceiling:state.grant.dataClassCeiling},
+    same_key:true,new_agent:false,private_key_write:false,one_passphrase:true,
+    already_renewed:state.alreadyRenewed},null,2));
+  if (DRY_RUN || state.alreadyRenewed) {
+    if (state.alreadyRenewed) console.log(JSON.stringify({success:true,status:'EXISTING_RENEWAL_VERIFIED',terminal_event_id:state.terminalId}));
+    return;
+  }
+  const accountArg = args.find(arg=>arg.startsWith('--kc-account='));
+  const account = state.master.keychain_account || (accountArg ? accountArg.slice('--kc-account='.length) : null)
+    || await readLine('Keychain account name',{default:os.userInfo().username});
+  const blob = await keychainGet(state.master.keychain_service || KC_SERVICE,account);
+  if (!blob) throw new Error('master_keychain_missing');
+  let passphrase = await readPassphrase('Master passphrase (once; renewal and preserved grant): ');
+  let masterKey = null;
+  try {
+    masterKey = decryptMasterPrivkey(passphrase,blob); passphrase = null;
+    if (!masterKey) throw new Error('wrong_passphrase_or_tampered_keychain_blob');
+    if (sha256Hex(readFileSync(AGENT_KEY_PATH)) !== keyHash) throw new Error('identity_renewal_key_changed');
+    const result = await identityDb.renewAgentCertificate({agentId,publicKey,validityDays,
+      expectedCertificateSha256:state.projection.certificate_sha256,
+      masterPrivkeyB64u:masterKey,signingMaterialSha256:keyHash});
+    if (sha256Hex(readFileSync(AGENT_KEY_PATH)) !== keyHash) throw new Error('identity_renewal_key_changed_after_commit');
+    console.log(JSON.stringify({success:true,status:'EXISTING_AGENT_CERTIFICATE_RENEWED',
+      agent_id:agentId,validity_days:validityDays,same_key:true,
+      valid_from:result.successor.valid_from,valid_until:result.successor.valid_until,
+      terminal_event_id:result.terminalId,grant_mutation_hash:result.grantMutationHash,
+      historical_identity_preserved:true,private_key_write:false},null,2));
+  } finally { passphrase = null; masterKey = null; }
+}
+
 async function main() {
+  if (args.includes('--renew')) {
+    try { await renewExistingAgent(); }
+    finally { await Promise.allSettled([pool.end(),agentPool.end()]); }
+    return;
+  }
   // The master ceremony permits a custom Keychain account. Agent enrollment
   // must ask for the same account; KC_ACCOUNT_DEFAULT is intentionally null.
   const osUser = (os.userInfo().username || '').trim() || null;

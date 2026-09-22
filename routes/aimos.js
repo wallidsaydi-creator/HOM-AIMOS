@@ -13,7 +13,9 @@
  * Security (RLS) and is protocol-blocked from deleting any records (Aladdin Law).
  */
 import express from 'express';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { verifyGenesisManifest } from '../scripts/verify-genesis-manifest.mjs';
 import { query, withTransaction } from '../db/connection.js';
 import { AIMOS_COMPANY_ID } from '../services/core/runtime-config.js';
 import { getEmbedding } from '../services/core/embeddings.js';
@@ -31,6 +33,7 @@ import { buildTrustAlignmentDiagnostics } from '../services/learning/trust-score
 import { buildEngramPoolDiagnostics } from '../services/core/concept-graph.js';
 import { semanticCache } from '../services/caching/semantic-cache.js';
 import { executeCanonicalSave } from '../services/write/canonical-save-owner.js';
+import { projectSignedEventLogMemory } from '../services/write/canonical-save-contract.js';
 import { saveCompactionMemory } from '../services/write/compaction-save.js';
 import { savePostCompactionDelivery } from '../services/context/post-compaction-delivery.js';
 import { sessionMemoryOwner } from '../services/orchestration/session-memory-owner.js';
@@ -388,6 +391,10 @@ function sanitizeDirectiveGoal(goal = '') {
 // ─── EVENT LEDGER (called by Swift AimosCore.logEvent) ──────────────────────
 router.post('/event', async (req, res, next) => {
   const { company_id, agent_id, operation, key, metadata } = req.body;
+  if (['agent_run_started', 'agent_run_terminal', 'tool_context_prepared', 'model_context_completed',
+    'tool_execution_started', 'tool_execution_terminal', 'request_admission_verified', 'recall_receipt'].includes(String(operation || '').trim())) {
+    return res.status(403).json({ success: false, error: 'native_evaluation_operation_owner_required' });
+  }
   const context = req.executionContext;
   if (!context?.actorAgentId || !context?.companyId) {
     return res.status(401).json({ success: false, error: 'verified_execution_context_required' });
@@ -421,7 +428,7 @@ router.post('/event', async (req, res, next) => {
     });
     res.status(201).json({ success: true, receipt });
   } catch (err) {
-    err.statusCode = 500;
+    err.statusCode ||= 500;
     next(err);
   }
 });
@@ -444,6 +451,45 @@ router.get('/status', async (req, res, next) => {
   } catch (error) {
     error.statusCode = 500;
     next(error);
+  }
+});
+
+// The manifest-bound Guide is an authenticated product surface. Resolve only
+// these four fixed files after verifying the complete on-disk corpus; never
+// accept a caller-controlled path or serve changed bytes under an old root.
+router.get('/guide', (req, res) => {
+  if (!requireAimosEnvelopeAgent(req, res)) return;
+  const tier = String(req.query.tier ?? '');
+  const paths = {
+    '1': 'Guide/aimos-guide-tier1-boot.md',
+    '2': 'Guide/aimos-guide-tier2-recall.md',
+    '3': 'Guide/aimos-guide-tier3-save.md',
+    '4': 'Guide/aimos-guide-tier4-debug.md',
+  };
+  const requestedPath = paths[tier];
+  if (!requestedPath) return res.status(400).json({ success: false, error: 'guide_tier_invalid' });
+  try {
+    const manifest = verifyGenesisManifest();
+    const record = manifest.files.find((file) => file.path === requestedPath);
+    if (!record) throw new Error('guide_tier_not_manifest_bound');
+    const bytes = readFileSync(record.absolutePath);
+    if (bytes.length !== record.bytes
+      || createHash('sha256').update(bytes).digest('hex') !== record.sha256) {
+      throw new Error('guide_tier_changed_after_manifest_verification');
+    }
+    res.set('Cache-Control', 'no-store');
+    return res.json({
+      success: true,
+      tier: Number(tier),
+      path: record.path,
+      content: bytes.toString('utf8'),
+      sha256: record.sha256,
+      bytes: record.bytes,
+      manifest_version: manifest.version,
+      corpus_root: manifest.corpusRoot,
+    });
+  } catch (error) {
+    return res.status(503).json({ success: false, error: 'guide_corpus_integrity_unavailable' });
   }
 });
 
@@ -566,7 +612,8 @@ router.post('/compaction/save', async (req, res) => {
   try {
     const result = await saveCompactionMemory(req.body || {}, {
       agentId: identity.agentId,
-      companyId: req.body?.company_id || AIMOS_COMPANY_ID,
+      companyId: req.executionContext.companyId,
+      requestAuthority: verifiedRequestAuthorityFromReq(req),
       identityTier: identity.tier,
       validFrom: identity.validFrom,
       origin: req.body?.origin || 'app_context_window',
@@ -602,12 +649,22 @@ router.post('/compaction/save', async (req, res) => {
       compression_ratio: result.compression_ratio,
       content_hash: result.payload?.metadata?.content_hash || null,
       trigger: result.payload?.metadata?.app_trigger || null,
+      terminal_event_id: result.terminal_event_id || null,
     });
   } catch (error) {
-    return res.status(500).json({
+    const authority=verifiedRequestAuthorityFromReq(req);
+    const decision=await logEvent(req.executionContext.companyId,identity.agentId,'compaction_full_rejected',null,{
+      lane:'compaction_full',route:'/aimos/compaction/save',error_code:error.message,
+      canonical_terminal_event_id:error.canonicalSaveTerminal?.event_id || null,
+      reasoning:'The authenticated full-compaction request did not produce a committed SAVE; preserve its rejection under the original request authority.',
+    },error.canonicalSaveTerminal?.event_id || authority.requestAdmissionEventId,{authority,returnReceipt:true});
+    return res.status(['compaction_scope_unsupported','compaction_authority_mismatch','origin_compaction_session_detail_missing',
+      'origin_input_clearance_downgrade','origin_input_scope_broadening','origin_input_memory_not_authorized'].includes(error.message)?422:500).json({
       success: false,
       error: error.message,
       lane: 'compaction_full',
+      terminal_event_id: error.canonicalSaveTerminal?.event_id || null,
+      decision_event_id: decision.event_id,
     });
   }
 });
@@ -619,7 +676,8 @@ router.post('/compaction/post', async (req, res) => {
   try {
     const result = await savePostCompactionDelivery(req.body || {}, {
       agentId: identity.agentId,
-      companyId: req.body?.company_id || AIMOS_COMPANY_ID,
+      companyId: req.executionContext.companyId,
+      requestAuthority: verifiedRequestAuthorityFromReq(req),
       identityTier: identity.tier,
       validFrom: identity.validFrom,
       origin: req.body?.origin || 'app_context_window',
@@ -658,12 +716,24 @@ router.post('/compaction/post', async (req, res) => {
       handoff: result.delivery?.handoff || null,
       confidence: result.delivery?.confidence || null,
       evidence_refs: result.delivery?.evidence_refs || [],
+      terminal_event_id: result.terminal_event_id || null,
     });
   } catch (error) {
-    return res.status(500).json({
+    const authority=verifiedRequestAuthorityFromReq(req);
+    const decision=await logEvent(req.executionContext.companyId,identity.agentId,'post_compaction_rejected',null,{
+      lane:'post_compaction_delivery',route:'/aimos/compaction/post',error_code:error.message,
+      canonical_terminal_event_id:error.canonicalSaveTerminal?.event_id || null,
+      reasoning:'The authenticated handoff request did not produce a committed SAVE; preserve its rejection under the original request authority.',
+    },error.canonicalSaveTerminal?.event_id || authority.requestAdmissionEventId,{authority,returnReceipt:true});
+    return res.status(['compaction_scope_unsupported','compaction_authority_mismatch','post_compaction_retained_source_mismatch',
+      'post_compaction_retained_source_required','post_compaction_retained_source_missing_or_ambiguous',
+      'post_compaction_source_not_authorized','origin_input_clearance_downgrade',
+      'origin_input_scope_broadening','origin_input_memory_not_authorized'].includes(error.message)?422:500).json({
       success: false,
       error: error.message,
       lane: 'post_compaction_delivery',
+      terminal_event_id: error.canonicalSaveTerminal?.event_id || null,
+      decision_event_id: decision.event_id,
     });
   }
 });
@@ -747,8 +817,17 @@ router.post('/save', async (req, res, next) => {
       terminal_mutation_hash: saved.terminal_receipt?.mutation_hash || null,
       stage_root_sha256: saved.canonical_save_trace?.stage_root_sha256 || null,
       stage_count: saved.canonical_save_trace?.stage_count || null,
+      save_operation_id: saved.save_operation_id || null,
+      operation_replayed: saved.operation_replayed === true,
     });
   } catch (error) {
+    if (error.canonicalSaveOutcome) {
+      return res.status(503).json({success:false,error:'canonical_save_commit_resolution_required',
+        commit_state:error.canonicalSaveOutcome.state,
+        save_operation_id:error.canonicalSaveOutcome.operationId,
+        terminal_event_id:error.canonicalSaveOutcome.terminalEventId,
+        retry_policy:'reconcile_same_save_operation_id_no_new_operation'});
+    }
     if (error?.canonicalSaveTerminal) error.publicMessage = 'Canonical SAVE failed';
     error.statusCode = Number(error.statusCode || 500);
     return next(error);
@@ -898,7 +977,7 @@ router.get('/recall', (_req, res) => res.status(405).json({
 }));
 router.post('/recall', handleAimosRecall);
 
-router.post('/recall/calibration/observe', requireCapability('memory_read'), async (req, res, next) => {
+router.post('/recall/calibration/observe', async (req, res, next) => {
   try {
     const context = req.executionContext;
     const company = String(req.body?.company_id || context?.companyId || '');
@@ -912,6 +991,7 @@ router.post('/recall/calibration/observe', requireCapability('memory_read'), asy
     const receipt = await recordCalibrationObservationBatch({
       companyId: company,
       labels: req.body?.labels,
+      signedBody: req.body,
       authority: {
         actorAgentId: context.actorAgentId,
         actorValidFromIso: context.actorValidFromIso,
@@ -930,7 +1010,8 @@ router.post('/recall/calibration/observe', requireCapability('memory_read'), asy
     });
     res.json({ success: true, observation_receipt: receipt });
   } catch (error) {
-    error.statusCode = /binding|authority|required|mismatch/.test(String(error?.message || '')) ? 403 : 400;
+    error.statusCode = /already_recorded|duplicate_evaluation/.test(String(error?.message || '')) ? 409
+      : /binding|authority|required|mismatch/.test(String(error?.message || '')) ? 403 : 400;
     next(error);
   }
 });
@@ -1798,7 +1879,6 @@ router.get('/layer-status', async (req, res, next) => {
       todayEvents,
       capsules,
       conflicts,
-      creditAvg,
       clearanceLevels,
       dreamRow,
       typeBreakdown
@@ -1807,7 +1887,6 @@ router.get('/layer-status', async (req, res, next) => {
       query(`SELECT COUNT(*) AS total FROM aimos_events WHERE company_id = $1 AND ts >= NOW() - INTERVAL '48 hours'`, [company]),
       query(`SELECT COUNT(*) AS total, status FROM aimos_capsules WHERE company_id = $1 GROUP BY status`, [company]),
       query(`SELECT COUNT(*) AS total FROM aimos_conflicts WHERE company_id = $1 AND resolved_at IS NULL`, [company]),
-      query(`SELECT AVG(credit_score) AS avg FROM aimos_memories WHERE company_id = $1`, [company]),
       query(`SELECT COUNT(DISTINCT clearance_level) AS levels FROM aimos_memories WHERE company_id = $1`, [company]),
       query(`SELECT created_at FROM aimos_memories WHERE company_id = $1 AND memory_type = 'dream_summary' ORDER BY created_at DESC LIMIT 1`, [company]),
       query(`SELECT memory_type, COUNT(*) AS count FROM aimos_memories WHERE company_id = $1 GROUP BY memory_type`, [company])
@@ -1823,7 +1902,6 @@ router.get('/layer-status', async (req, res, next) => {
     const memoryTotal = parseInt(memoryCount.rows[0].total);
     const eventsToday = parseInt(todayEvents.rows[0].total);
     const openConflicts = parseInt(conflicts.rows[0].total);
-    const avgCredit = parseFloat(creditAvg.rows[0].avg || 1.0);
     const clearanceLevelsCount = parseInt(clearanceLevels.rows[0].levels || 0);
     const lastDream = dreamRow.rows[0]?.created_at || null;
     const dreamScheduled = !lastDream || (Date.now() - new Date(lastDream).getTime() > 20 * 60 * 60 * 1000);
@@ -1859,8 +1937,9 @@ router.get('/layer-status', async (req, res, next) => {
       },
       memory_market: {
         status: memoryTotal > 0 ? 'active' : 'idle',
-        avg_credit: avgCredit.toFixed(2),
-        label: memoryTotal > 0 ? `Score ${avgCredit.toFixed(2)}` : 'Idle'
+        avg_credit: null,
+        credit_scope: 'exact_content_occurrence_housekeeper_policy',
+        label: memoryTotal > 0 ? 'Usefulness is evidence-bound per memory, not a brain-wide trust score' : 'Idle'
       },
       governance: {
         status: clearanceLevelsCount > 0 ? 'active' : 'idle',
@@ -2175,33 +2254,30 @@ router.post('/log-event', async (req, res, next) => {
   if (agent_id && agent_id !== verifiedLogAgentId) {
     return res.status(403).json({ success: false, error: 'agent_identity_mismatch' });
   }
-  const aid = normalizeOperatorAgentId(verifiedLogAgentId);
-  const now = new Date();
-  const ts = now.toISOString().slice(0, 16).replace('T', '_').replace(':', '');
-  const key = `event_${String(action).toLowerCase()}_${ts}`;
-
+  const aid = verifiedLogAgentId;
   const effectiveNext = next_action || bodyNext;
-  const bullet = [
-    `• ${now.toISOString().slice(11, 16)} — [${action}] ${summary}`,
-    outcome ? `  result: ${outcome}` : null,
-    reasoning ? `  reasoning: ${reasoning}` : null,
-    source_knowledge ? `  source: ${source_knowledge}` : null,
-    Array.isArray(files) && files.length ? `  files: ${files.join(', ')}` : null,
-    effectiveNext ? `  next: ${effectiveNext}` : null
-  ].filter(Boolean).join('\n');
+  let projection;
+  try {
+    projection = projectSignedEventLogMemory(req.body, {
+      companyId: cid, agentId: aid, signedTs: req.identitySignedTs,
+    });
+  } catch {
+    return res.status(400).json({ success: false, error: 'signed_event_log_input_invalid' });
+  }
+  const key = projection.key;
 
   try {
     const requestAuthority = verifiedRequestAuthorityFromReq(req);
     const saved = await executeCanonicalSave({
-      company_id: cid,
-      agent_id: aid,
-      key,
-      value: bullet,
-      scope: 'system',
-      clearance_level: 5,
-      memory_type: 'event_log',
+      ...projection,
       mutation_authority: requestAuthority
     });
+    if (saved?.rejected || !saved?.id) {
+      return res.status(saved?.http_status || 500).json({
+        success: false, error: saved?.reason || 'canonical_event_log_save_failed',
+        terminal_receipt: saved?.terminal_receipt || null,
+      });
+    }
 
     const eventReceipt = await logEvent(cid, aid, String(action).toLowerCase(), key, {
       summary,
@@ -2694,7 +2770,12 @@ router.get('/mcp/tools/list', (req, res) => {
             company_id: { type: 'string', default: 'hom' },
             agent_id: { type: 'string', default: 'external' },
             memory_type: { type: 'string', default: 'declarative' },
-            scope: { type: 'string', default: 'global' }
+            scope: { type: 'string', default: 'global' },
+            source_memory_ids: {
+              type: 'array',
+              items: { type: 'string' },
+              description: 'Exact retained derivation inputs; order is canonicalized and no input may be omitted.'
+            }
           },
           required: ['key', 'value']
         }
@@ -2742,7 +2823,7 @@ router.post('/mcp/tools/call', async (req, res, next) => {
 
     if (name === 'aimos_save') {
       // Legacy MCP transport delegates to the same canonical SAVE owner as REST.
-      const { key, value, company_id, agent_id, memory_type = 'declarative', scope = 'global', clearance_level = 1, source } = args;
+      const { key, value, company_id, agent_id, memory_type = 'declarative', scope = 'global', clearance_level = 1, source, source_memory_ids } = args;
       if (!key || !value) return res.status(400).json({ error: 'key and value required' });
       const actor = req.executionContext?.actorAgentId;
       const company = req.executionContext?.companyId;
@@ -2782,6 +2863,7 @@ router.post('/mcp/tools/call', async (req, res, next) => {
         clearance_level,
         memory_type,
         source,
+        source_memory_ids,
         mutation_authority: requestAuthority,
       });
       if (saved?.rejected) {
@@ -2820,208 +2902,6 @@ router.post('/mcp/tools/call', async (req, res, next) => {
     next(err);
   }
 });
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// QMD — Query Memory Database
-// Structured graph query language for Aimos's memory brain.
-// ═══════════════════════════════════════════════════════════════════════════════
-import { parseQMD, QMDSyntaxError }  from '../services/retrieval/qmd-parser.js';
-import { executeQMD, buildQueryPlan } from '../services/retrieval/qmd-planner.js';
-
-/**
- * POST /aimos/qmd
- * Body: { query: string, company_id?, agent_id?, clearance_level? }
- * Response: { results, query_plan, ast, execution_time_ms }
- *
- * Examples:
- *   { "query": "FIND type:framework WHERE contains('positioning') HOPS 2 LIMIT 10" }
- *   { "query": "TRAVERSE FROM key:\"F1*\" FOLLOW cross_refs,entity_edges HOPS 3" }
- *   { "query": "COUNT type:event_log WHERE created > 24h GROUP BY agent_id" }
- */
-router.post('/qmd', async (req, res, next) => {
-  const {
-    query: rawQuery,
-    company_id,
-    agent_id,
-    clearance_level
-  } = req.body || {};
-
-  if (!rawQuery || typeof rawQuery !== 'string' || !rawQuery.trim()) {
-    return res.status(400).json({ error: 'Missing required field: query (string)' });
-  }
-
-  const company        = (company_id   || AIMOS_COMPANY_ID).trim();
-  const requestingAgent = normalizeOperatorAgentId(agent_id);
-  const clearance      = Number(clearance_level || 5);
-
-  const t0 = Date.now();
-
-  let ast;
-  try {
-    ast = parseQMD(rawQuery.trim());
-  } catch (err) {
-    if (err instanceof QMDSyntaxError || err.name === 'QMDSyntaxError') {
-      err.statusCode = 400;
-      return next(err);
-    }
-    err.statusCode = 400;
-    next(err);
-  }
-
-  try {
-    const outcome = await executeQMD(ast, { company, clearance, requestingAgent });
-
-    const execution_time_ms = Date.now() - t0;
-
-    // Log event for observability (non-fatal)
-    logEvent(company, requestingAgent, 'qmd_query', rawQuery.slice(0, 120), {
-      reasoning: `QMD query executed by '${requestingAgent}': natural language query parsed to AST, translated to SQL with same ACL as recall. QMD is the structured query interface — when recall's semantic search isn't precise enough.`,
-      source_knowledge: 'aimos.js QMD parser — recursive descent parser with 6 verbs (Feature from cybersec session)'
-    }).catch(() => {});
-
-    return res.json({
-      results:          outcome.results,
-      meta:             outcome.meta,
-      query_plan:       outcome.query_plan,
-      ast,
-      execution_time_ms
-    });
-  } catch (err) {
-    console.error('[qmd] execution error:', err.message);
-    return res.status(500).json({
-      error:     err.message,
-      ast,
-      query:     rawQuery,
-      execution_time_ms: Date.now() - t0
-    });
-  }
-});
-
-/**
- * GET /aimos/qmd/explain
- * Query param: q=FIND type:framework...
- * Returns the parsed AST, query plan, and estimated cost — WITHOUT executing.
- */
-router.get('/qmd/explain', (req, res, next) => {
-  const rawQuery = (req.query.q || '').trim();
-
-  if (!rawQuery) {
-    return res.status(400).json({ error: 'Missing query param: q' });
-  }
-
-  let ast;
-  try {
-    ast = parseQMD(rawQuery);
-  } catch (err) {
-    if (err instanceof QMDSyntaxError || err.name === 'QMDSyntaxError') {
-      err.statusCode = 400;
-      return next(err);
-    }
-    err.statusCode = 400;
-    next(err);
-  }
-
-  const query_plan = buildQueryPlan(ast);
-
-  // Build a human-readable SQL preview (parameterized, not executable as-is)
-  const sql_preview = buildSQLPreview(ast);
-
-  return res.json({ ast, query_plan, sql_preview, estimated_cost: query_plan.estimated_cost });
-});
-
-/** Produce a non-executable, human-readable SQL sketch for /explain */
-function buildSQLPreview(ast) {
-  switch (ast.verb) {
-    case 'FIND': {
-      const typeF  = ast.filters?.find(f => f.field === 'type')?.value;
-      const keyF   = ast.filters?.find(f => f.field === 'key')?.value;
-      const contains = ast.where?.find(w => w.type === 'contains')?.value;
-      return [
-        `SELECT id, key, value, memory_type, memory_tier, ...`,
-        `FROM aimos_memories`,
-        `WHERE company_id = :company AND clearance_level <= :clearance`,
-        typeF    ? `  AND memory_type = '${typeF}'` : null,
-        keyF     ? `  AND key ILIKE '${keyF.replace(/\*/g, '%')}'` : null,
-        contains ? `  AND (key ILIKE '%${contains}%' OR value ILIKE '%${contains}%')` : null,
-        `  -- vector: ORDER BY embedding <=> :query_vector`,
-        `LIMIT ${ast.limit || 10};`,
-        ast.hops > 1 ? `-- then: WITH RECURSIVE graph_walk ... (${ast.hops} hops)` : null,
-      ].filter(Boolean).join('\n');
-    }
-    case 'TRAVERSE': {
-      const follow = ast.follow?.join(', ');
-      return [
-        `-- anchor resolution:`,
-        `SELECT id FROM aimos_memories WHERE company_id = :company AND ${ast.from?.field} ILIKE '${ast.from?.value}'`,
-        ``,
-        `-- recursive traversal (${ast.hops} hops) via: ${follow}`,
-        `WITH RECURSIVE graph_walk AS (`,
-        `  SELECT target_memory_id, similarity, 1 AS hop FROM memory_cross_refs WHERE source_memory_id = ANY(:anchor_ids)`,
-        `  UNION ALL`,
-        `  SELECT cr.target_memory_id, cr.similarity, gw.hop + 1 FROM graph_walk gw JOIN memory_cross_refs cr ON ...`,
-        `  WHERE gw.hop < ${ast.hops}`,
-        `)`,
-        `SELECT ... FROM graph_walk JOIN aimos_memories ... LIMIT ${ast.limit || 50};`,
-      ].join('\n');
-    }
-    case 'MATCH': {
-      return [
-        `SELECT id, key, value, memory_type, memory_tier, ...`,
-        `FROM aimos_memories`,
-        `WHERE company_id = :company AND clearance_level <= :clearance`,
-        ...( ast.filters?.map(f => `  AND ${f.field} = '${f.value}'`) || [] ),
-        `  -- plus WHERE conditions from parsed clauses`,
-        `ORDER BY memory_tier_rank ASC, created_at DESC`,
-        `LIMIT ${ast.limit || 20};`,
-      ].join('\n');
-    }
-    case 'GRAPH': {
-      return [
-        `-- center: ${ast.center?.field}=${ast.center?.value}`,
-        `WITH RECURSIVE graph_walk AS (`,
-        `  SELECT target_memory_id AS mem_id, similarity, 1 AS hop`,
-        `  FROM memory_cross_refs WHERE source_memory_id = :center_id`,
-        `  UNION ALL`,
-        `  SELECT cr.target_memory_id, cr.similarity, gw.hop + 1`,
-        `  FROM graph_walk gw JOIN memory_cross_refs cr ON ...`,
-        `  WHERE gw.hop < ${ast.hops}`,
-        `)`,
-        `SELECT ... FROM graph_walk JOIN aimos_memories ... LIMIT ${ast.limit || 50};`,
-        `-- RETURN format: ${ast.return || 'default'}`,
-      ].join('\n');
-    }
-    case 'PATH': {
-      return [
-        `-- from: ${ast.from?.field}=${ast.from?.value}`,
-        `-- to:   ${ast.to?.field}=${ast.to?.value}`,
-        `WITH RECURSIVE path_walk AS (`,
-        `  SELECT source_memory_id AS current_id, target_memory_id AS next_id, 1 AS depth, ARRAY[source_memory_id] AS visited, ...`,
-        `  FROM memory_cross_refs WHERE source_memory_id = ANY(:from_ids)`,
-        `  UNION ALL`,
-        `  SELECT pw.next_id, cr.target_memory_id, pw.depth + 1, pw.visited || pw.next_id, ...`,
-        `  FROM path_walk pw JOIN memory_cross_refs cr ON ... WHERE pw.depth < ${ast.max_depth}`,
-        `)`,
-        `SELECT path_ids, depth FROM path_walk WHERE next_id = ANY(:to_ids) ORDER BY depth ASC LIMIT ${ast.limit || 20};`,
-      ].join('\n');
-    }
-    case 'COUNT': {
-      const typeF = ast.filters?.find(f => f.field === 'type')?.value;
-      const grp   = ast.group_by;
-      return [
-        `SELECT ${grp ? `${grp}, ` : ''}COUNT(*) AS count`,
-        `FROM aimos_memories`,
-        `WHERE company_id = :company AND clearance_level <= :clearance`,
-        typeF ? `  AND memory_type = '${typeF}'` : null,
-        `  -- plus WHERE conditions from parsed clauses`,
-        grp ? `GROUP BY ${grp}` : null,
-        `ORDER BY count DESC;`,
-      ].filter(Boolean).join('\n');
-    }
-    default:
-      return '-- unknown verb';
-  }
-}
-// ─────────────────────────────────────────────────────────────────────────────
 
 // The unsigned demo disclosure path is retired. Screen-safe recall is a
 // terminal projection of the same signed, provenance-admitted POST pipeline.

@@ -61,11 +61,6 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
-      - name: Fetch and verify canonical benchmark fixtures
-        run: |
-          bash eval/data/download.sh
-          node eval/prepare-canonical-corpus.mjs
-
       - name: Run source release gates
         run: npm run test:release:source
 

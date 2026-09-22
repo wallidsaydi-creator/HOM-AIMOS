@@ -236,7 +236,9 @@ export function recordKnowledgeToolEvent(state, event = {}) {
     const evidenceType = KNOWLEDGE_ACQUISITION_TOOLS[toolName];
 
     if (toolName === 'aimos_recall') {
-      const rows = Array.isArray(event.result?.items)
+      const rows = Array.isArray(event.result?.memories)
+        ? event.result.memories
+        : Array.isArray(event.result?.items)
         ? event.result.items
         : Array.isArray(event.result)
           ? event.result

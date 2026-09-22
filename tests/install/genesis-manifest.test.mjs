@@ -12,8 +12,8 @@ import {
 } from '../../scripts/verify-genesis-manifest.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const EXPECTED_VERSION = 26;
-const EXPECTED_ROOT = '2004c925c6cb45c36d7e7328d92fcbab516e732b47ee35f2e3a4b6c058813aaa';
+const EXPECTED_VERSION = 20;
+const EXPECTED_ROOT = 'a471afec36ba87e30f6fa28a02ab31fa5981fdc6aca68836237c45489ad32970';
 
 test('shipped Guide bytes produce the published deterministic corpus root', () => {
   const verified = verifyGenesisManifest({ brainRoot: root });

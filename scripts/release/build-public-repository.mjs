@@ -217,8 +217,9 @@ function initializeRepository(output, commit) {
     }).trim();
     if (!value) throw new Error(`public_release_git_identity_missing:${key}`);
   }
+  const packageJson = JSON.parse(readFileSync(path.join(output, 'package.json'), 'utf8'));
   execFileSync('git', ['add', '--all'], { cwd: output, stdio: 'inherit' });
-  execFileSync('git', ['commit', '-m', 'feat: release AIMOS backend v1.0.4'], {
+  execFileSync('git', ['commit', '-m', `feat: release AIMOS backend v${packageJson.version}`], {
     cwd: output,
     stdio: 'inherit',
   });

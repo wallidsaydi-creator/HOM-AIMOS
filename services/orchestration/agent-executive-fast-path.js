@@ -14,7 +14,8 @@
  */
 
 import { executeTool } from './tool-registry.js';
-import { getOperatorAgentId } from '../security/system-config-store.js';
+import { getOperatorAgentId, isOperatorAgentId } from '../security/system-config-store.js';
+import { shouldBlockToolForMissingKnowledge } from '../security/knowledge-gate.js';
 
 // ─── PROMPT CLASSIFICATION HELPERS ──────────────────────────────────────────────
 
@@ -120,34 +121,36 @@ export function extractRememberFactsFromHistory(history = [], { isInternalMemory
 export async function runDeterministicExecutiveFastPath(runtimeAgent, userPrompt, toolExecutionOptions = {}, isInternalMemoryTextFn = null) {
   const prompt = String(userPrompt || '').trim();
   if (!prompt) return null;
+  const operator = isOperatorAgentId(runtimeAgent.id);
+  if (!operator && !isExecutiveRememberPrompt(prompt) && !isExecutiveRecallSelfPrompt(prompt)) return null;
 
-  if (isExecutiveModelIdentityPrompt(prompt)) {
+  if (operator && isExecutiveModelIdentityPrompt(prompt)) {
     return { response: `I'm ${getOperatorAgentId() || 'the assistant'}, your AI assistant.` };
   }
 
-  if (isExecutiveModelCountPrompt(prompt)) {
+  if (operator && isExecutiveModelCountPrompt(prompt)) {
     return {
       response: `I'm ${getOperatorAgentId() || 'the assistant'}, and I can help with execution directly: email, calendar, web research, memory, and task coordination.`
     };
   }
 
-  if (isExecutiveBuilderPrompt(prompt)) {
+  if (operator && isExecutiveBuilderPrompt(prompt)) {
     return { response: `I'm ${getOperatorAgentId() || 'the assistant'}, the operator's designated agent.` };
   }
 
-  if (isExecutiveContactsPrompt(prompt)) {
+  if (operator && isExecutiveContactsPrompt(prompt)) {
     return {
       response: "Contacts access isn't available yet. I can check your Gmail inbox or review your calendar instead."
     };
   }
 
-  if (isExecutiveInstagramPostPrompt(prompt)) {
+  if (operator && isExecutiveInstagramPostPrompt(prompt)) {
     return {
       response: "Instagram posting isn't available yet. I can post to X/Twitter or send a Telegram message instead."
     };
   }
 
-  if (isExecutiveLatestEmailPrompt(prompt) || isExecutiveSenderFollowupPrompt(prompt)) {
+  if (operator && (isExecutiveLatestEmailPrompt(prompt) || isExecutiveSenderFollowupPrompt(prompt))) {
     const inbox = await executeTool(
       'gmail_inbox',
       { max: 1 },
@@ -175,6 +178,12 @@ export async function runDeterministicExecutiveFastPath(runtimeAgent, userPrompt
     if (!content) {
       return { response: 'Tell me what you want me to remember.' };
     }
+    if (toolExecutionOptions.allowedTools?.includes('aimos_save')
+      && shouldBlockToolForMissingKnowledge(toolExecutionOptions.knowledgeGateState,'aimos_save').blocked) {
+      // Satisfy the existing knowledge gate with an actual signed native read.
+      // Prefetched context is not relabeled as a tool execution or a grant.
+      await executeTool('aimos_recall',{ query:content,limit:5 },runtimeAgent.id,toolExecutionOptions);
+    }
     const save = await executeTool(
       'aimos_save',
       { content },
@@ -200,6 +209,9 @@ export async function runDeterministicExecutiveFastPath(runtimeAgent, userPrompt
       runtimeAgent.id,
       toolExecutionOptions
     );
+    if (recalled?.error || recalled?.blocked || recalled?.success === false) {
+      return { response: `I couldn't recall your memory: ${recalled?.error || 'native recall denied'}` };
+    }
     const memories = Array.isArray(recalled)
       ? recalled
       : (Array.isArray(recalled?.memories) ? recalled.memories : []);

@@ -590,7 +590,7 @@ test('native twin-prime integration is signed-policy owned and shortcut closed',
   assert.match(pipeline, /securityClosureDecisionHash: securityClosure\.decision\.decision_sha256/);
   assert.match(pipeline, /returnProjectionDecision: projection/);
   assert.match(receipt, /hom-aimos\/recall-merkle\/v2-epistemic-decision/);
-  assert.match(receipt, /hom-aimos\/recall-merkle\/v3-epistemic-and-security-closure/);
+  assert.match(receipt, /hom-aimos\/recall-merkle\/v4-origin-family-disclosure/);
   assert.match(receipt, /entry_type: 'epistemic_decision'/);
   assert.match(receipt, /entry_type: 'canary_final_security_closure'/);
   assert.match(receipt, /canary_final_security_closure_sha256/);

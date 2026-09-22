@@ -11,6 +11,9 @@
 --
 -- Idempotent: safe to re-run. The DO block catches undefined_object when the
 -- legacy role was never created (fresh fork install) — the migration no-ops.
+-- Runtime credentials are provisioned exclusively by the Keychain-backed
+-- bootstrap owner. Database-schema migrations must never rotate a
+-- cluster-global role or contain a public bootstrap password.
 --
 -- RLS isolation policy on the role survives RENAME — Postgres rewrites the role
 -- reference in the policy's `roles` array to the new role name automatically.
@@ -24,5 +27,3 @@ DO $$ BEGIN
   ALTER ROLE piro_runtime RENAME TO agent_runtime;
 EXCEPTION WHEN undefined_object THEN NULL;
 END $$;
-
-ALTER ROLE agent_runtime WITH PASSWORD 'agent_secure_access';

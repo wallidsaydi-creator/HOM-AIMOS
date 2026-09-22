@@ -10,6 +10,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { createHash } from 'node:crypto';
 import { executeTool } from './tool-registry.js';
+import { createToolInputState, recordToolContextInput } from './tool-action-ledger.js';
 import { buildInactiveSkillPolicyCandidates as buildInactiveSkillPolicyCandidatesDiagnostic } from './skill-policy-diagnostics.js';
 
 const BRAIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -233,6 +234,12 @@ export async function executeSkill(name, parameters = {}, { executionContext = n
   if (key === 'file-organizer') ensureFileOrganizerGuard(skill, parameters);
 
   const results = [];
+  const nativeToolInputs = createToolInputState();
+  recordToolContextInput(nativeToolInputs, { kind: 'record',
+    owner: 'services/orchestration/skills-runtime.js#executeSkill', ref: `runtimeSkills:${key}`, value: skill });
+  recordToolContextInput(nativeToolInputs, { kind: 'request',
+    owner: 'services/orchestration/skills-runtime.js#executeSkill',
+    ref: executionContext?.requestAdmissionEventId || key, value: parameters });
   for (const action of skill.actions) {
     const normalized = String(action || '').trim();
     if (!normalized) continue;
@@ -245,6 +252,7 @@ export async function executeSkill(name, parameters = {}, { executionContext = n
       : parameters;
 
     const result = await executeTool(normalized, actionArgs || {}, 'housekeeper', {
+      nativeToolInputs,
       intent: normalized,
       executionContext,
       credentialUseContext: executionContext,

@@ -8,11 +8,15 @@
 import { createHash } from 'node:crypto';
 
 import { canonicalJson } from './canonical-json.js';
-import { eventMutationHash, recallMerkleRoot } from './mutmem-protocol.js';
+import { eventMutationHash, recallMerkleRoot, eventPayloadCommitment, eventPayloadBody } from './mutmem-protocol.js';
 import {
   MUTMEM_PORTABLE_EVIDENCE_V2,
+  MUTMEM_PORTABLE_EVIDENCE_V3,
   createMutMemPortableEvidenceEnvelopeV2,
+  createMutMemPortableEvidenceEnvelopeV3,
 } from './mutmem-portable-evidence-v2.js';
+import { ORIGIN_FAMILY_PROFILE_SHA256_V1, originProtocolHashV1,
+  originFamilyClosureV1 } from './origin-binding-v1.js';
 
 export const MUTMEM_PORTABLE_OBJECT_SCHEMAS_V2 = Object.freeze({
   trust_anchor: 'hom.aimos.mutmem-trust-anchor/v2',
@@ -34,6 +38,19 @@ export const MUTMEM_PORTABLE_OBJECT_SCHEMAS_V2 = Object.freeze({
   epistemic_projection: 'hom.aimos.mutmem-epistemic-projection/v2',
   receipt_evidence: 'hom.aimos.mutmem-recall-evidence-entry/v2',
 });
+
+export const MUTMEM_PORTABLE_OBJECT_SCHEMAS_V3 = Object.freeze({
+  ...MUTMEM_PORTABLE_OBJECT_SCHEMAS_V2,
+  native_recall_receipt: 'hom.aimos.mutmem-native-recall-receipt/v3',
+  receipt_evidence: 'hom.aimos.mutmem-recall-evidence-entry/v3',
+  provenance_chain: 'hom.aimos.mutmem-provenance-chain/v3',
+  occurrence: 'hom.aimos.mutmem-occurrence-evidence/v3',
+});
+
+export const ORIGIN_DISCLOSURE_FAILURE_CODES = Object.freeze([
+  'ORIGIN_FAMILY_PROFILE_INVALID', 'ORIGIN_DISCLOSURE_LABEL_INVALID',
+  'ORIGIN_DISCLOSURE_ROOT_INVALID', 'ORIGIN_DISCLOSURE_EVENT_BINDING_INVALID',
+]);
 
 export const MUTMEM_PORTABLE_PREDICATE_CODES_V2 = Object.freeze([
   'ENVELOPE_COMMITMENT_INVALID',
@@ -102,7 +119,8 @@ export const MUTMEM_PORTABLE_DOMAIN_HEX_V2 = Object.freeze({
 });
 
 function fail(code) {
-  if (!MUTMEM_PORTABLE_PREDICATE_CODES_V2.includes(code)) {
+  if (!MUTMEM_PORTABLE_PREDICATE_CODES_V2.includes(code)
+      && !ORIGIN_DISCLOSURE_FAILURE_CODES.includes(code)) {
     throw new Error('mutmem_portable_predicates_v2:UNDECLARED_FAILURE_CODE');
   }
   throw new Error(`mutmem_portable_predicates_v2:${code}`);
@@ -230,7 +248,9 @@ function validateEnvelopeCommitment(envelope) {
     const sourceObjects = Array.isArray(envelope?.objects)
       ? envelope.objects.map(({ ordinal: _ordinal, ...object }) => object)
       : envelope?.objects;
-    reconstructed = createMutMemPortableEvidenceEnvelopeV2({
+    const createEnvelope = envelope?.format?.schema === MUTMEM_PORTABLE_EVIDENCE_V3.schema
+      ? createMutMemPortableEvidenceEnvelopeV3 : createMutMemPortableEvidenceEnvelopeV2;
+    reconstructed = createEnvelope({
       bundleId: envelope?.bundle_id,
       companyId: envelope?.company_id,
       expectedMasterFingerprint: envelope?.expected_master_fingerprint,
@@ -240,9 +260,7 @@ function validateEnvelopeCommitment(envelope) {
   } catch {
     fail('ENVELOPE_COMMITMENT_INVALID');
   }
-  if (envelope?.format?.schema !== MUTMEM_PORTABLE_EVIDENCE_V2.schema
-      || envelope?.format?.version !== MUTMEM_PORTABLE_EVIDENCE_V2.version
-      || envelope?.format?.profile !== MUTMEM_PORTABLE_EVIDENCE_V2.profile
+  if (!equal(envelope?.format, reconstructed.format)
       || envelope?.object_count !== reconstructed.object_count
       || envelope?.object_root_sha256 !== reconstructed.object_root_sha256
       || envelope?.bundle_sha256 !== reconstructed.bundle_sha256) {
@@ -252,8 +270,13 @@ function validateEnvelopeCommitment(envelope) {
 }
 
 function requireSchemas(envelope) {
+  const schemas = envelope.format.version === 3
+    ? MUTMEM_PORTABLE_OBJECT_SCHEMAS_V3 : MUTMEM_PORTABLE_OBJECT_SCHEMAS_V2;
   for (const object of envelope.objects) {
-    if (object.schema !== MUTMEM_PORTABLE_OBJECT_SCHEMAS_V2[object.kind]
+    const retainedShape = envelope.format.version === 3
+      && ['provenance_chain', 'occurrence'].includes(object.kind)
+      && object.schema === MUTMEM_PORTABLE_OBJECT_SCHEMAS_V2[object.kind];
+    if ((!retainedShape && object.schema !== schemas[object.kind])
         || object.body?.schema !== object.schema) {
       fail('OBJECT_SCHEMA_INVALID');
     }
@@ -410,9 +433,10 @@ function validateAuthority(envelope, singletons) {
   } else {
     fail('GRANT_COMMITMENT_INVALID');
   }
-  if (request.request_sig_form !== 3
+  if (![3, 5].includes(request.request_sig_form)
       || request.signed_method !== 'POST'
-      || request.signed_path !== '/aimos/recall'
+      || String(request.signed_path || '').split('?')[0] !== '/aimos/recall'
+      || (request.request_sig_form === 3 && request.signed_path.includes('?'))
       || !string(request.nonce)
       || signatureBytes(request.signature_b64u, 'REQUEST_CONTEXT_INVALID').length !== 64
       || !request.request_body || typeof request.request_body !== 'object'
@@ -531,7 +555,7 @@ function validateDecisions(singletons, nativeReceipt) {
 }
 
 function validateResults(envelope, resultGroups, decisions, nativeReceipt) {
-  if (nativeReceipt.merkle_schema !== MUTMEM_PORTABLE_EVIDENCE_V2.native_receipt_schema
+  if (nativeReceipt.merkle_schema !== envelope.format.native_receipt_schema
       || Number(nativeReceipt.result_count) !== envelope.result_count
       || !Array.isArray(nativeReceipt.evidence)
       || nativeReceipt.evidence.length !== envelope.result_count
@@ -546,6 +570,7 @@ function validateResults(envelope, resultGroups, decisions, nativeReceipt) {
     const memory = group.get('memory_state').body;
     const provenance = group.get('provenance_chain').body;
     const occurrence = group.get('occurrence').body;
+    if (provenance.schema.endsWith('/v3') !== occurrence.schema.endsWith('/v3')) fail('OBJECT_SCHEMA_INVALID');
     const epistemic = group.get('epistemic_projection').body;
     const receiptEvidence = group.get('receipt_evidence').body;
     const memoryId = string(memory.memory_id).toLowerCase();
@@ -624,7 +649,9 @@ function validateMerkleAndEvent(nativeReceipt, decisions, evidence, authority) {
   }
   const root = recallMerkleRoot(expectedEntries).toString('hex');
   if (nativeReceipt.merkle_root !== root) fail('MERKLE_ROOT_MISMATCH');
-  const event = nativeReceipt.event_receipt;
+  let event;
+  try { event = nativeReceipt.event_receipt && { ...nativeReceipt.event_receipt, signed_body: eventPayloadBody(nativeReceipt.event_receipt) }; }
+  catch { fail('EVENT_RECEIPT_COMMITMENT_INVALID'); }
   const metadata = event?.signed_body?.metadata;
   if (!event || !metadata
       || event.signed_body.operation !== 'recall_receipt'
@@ -637,6 +664,7 @@ function validateMerkleAndEvent(nativeReceipt, decisions, evidence, authority) {
       || metadata.authority_mutation_hash !== nativeReceipt.authority_mutation_hash
       || metadata.request_receipt_id !== nativeReceipt.request_receipt_id
       || metadata.request_receipt_mutation_hash !== nativeReceipt.request_receipt_mutation_hash
+      || metadata.merkle_schema !== nativeReceipt.merkle_schema
       || metadata.merkle_root !== root
       || metadata.result_count !== evidence.length
       || !equal(metadata.evidence, evidence)
@@ -657,7 +685,17 @@ function validateMerkleAndEvent(nativeReceipt, decisions, evidence, authority) {
         !== authority.housekeeperIdentity.cert_fingerprint) {
     fail('HOUSEKEEPER_IDENTITY_INVALID');
   }
-  const contentHash = sha256Canonical(event.signed_body);
+  let contentHash;
+  try {
+    let wire = null;
+    if (Object.hasOwn(event, 'signed_body_bytes_b64u')) {
+      const encoded = event.signed_body_bytes_b64u;
+      if (typeof encoded !== 'string' || !encoded.length) throw new Error('event_bytes_invalid');
+      wire = Buffer.from(encoded, 'base64url');
+      if (wire.toString('base64url') !== encoded) throw new Error('event_bytes_invalid');
+    }
+    contentHash = eventPayloadCommitment(event.signed_body, event.nonce, wire).toString('hex');
+  } catch { fail('EVENT_RECEIPT_COMMITMENT_INVALID'); }
   const mutationHash = eventMutationHash(
     hashBytes(event.prev_mutation_hash, 'EVENT_RECEIPT_COMMITMENT_INVALID'),
     Buffer.from(contentHash, 'hex'),
@@ -680,6 +718,83 @@ function validateMerkleAndEvent(nativeReceipt, decisions, evidence, authority) {
   }
 }
 
+function validateOriginDisclosure(envelope, groups, receipt, evidence) {
+  if (envelope.format.version === 2) {
+    if (['origin_family_profile', 'disclosure_labels', 'disclosure_label_root_sha256']
+      .some((key) => Object.hasOwn(receipt, key))
+      || evidence.some((entry) => Object.hasOwn(entry, 'origin_disclosure'))) {
+      fail('OBJECT_SCHEMA_INVALID');
+    }
+    return;
+  }
+  const profile = receipt.origin_family_profile;
+  try {
+    if (profile?.schema !== 'hom.aimos.origin-family-profile/v1'
+        || originProtocolHashV1(profile).toString('hex') !== ORIGIN_FAMILY_PROFILE_SHA256_V1) {
+      fail('ORIGIN_FAMILY_PROFILE_INVALID');
+    }
+  } catch { fail('ORIGIN_FAMILY_PROFILE_INVALID'); }
+  const labelKeys = ['schema', 'memory_id', 'live_content_hash', 'family_profile_sha256',
+    'family_ids', 'family_set_root_sha256', 'origin_binding_sha256s', 'origin_ledger_hashes',
+    'origin_event_ids', 'origin_event_mutation_sha256s', 'confidentiality', 'integrity',
+    'effective_action_class', 'legacy_unbound', 'unclassified', 'disclosure_label_sha256'].sort();
+  const labels = [];
+  for (let ordinal = 0; ordinal < evidence.length; ordinal += 1) {
+    try {
+      const label = evidence[ordinal].origin_disclosure;
+      const memory = groups[ordinal].get('memory_state').body;
+      if (!label || !equal(Object.keys(label).sort(), labelKeys)
+          || label.schema !== 'hom.aimos.native-recall-origin-disclosure/v1'
+          || label.memory_id !== memory.memory_id || label.live_content_hash !== memory.live_content_hash
+          || label.family_profile_sha256 !== ORIGIN_FAMILY_PROFILE_SHA256_V1
+          || !equal(label.family_ids, originFamilyClosureV1(label.family_ids))
+          || label.family_set_root_sha256 !== recallMerkleRoot(label.family_ids.map((family_id, index) => ({ ordinal: index, family_id }))).toString('hex')
+          || !profile.confidentiality_order.includes(label.confidentiality)
+          || !profile.integrity_order.includes(label.integrity)
+          || !profile.action_class_order.includes(label.effective_action_class)
+          || !profile.confidentiality_order.includes(memory.data_class)
+          || profile.confidentiality_order.indexOf(label.confidentiality) < profile.confidentiality_order.indexOf(memory.data_class)
+          || typeof label.legacy_unbound !== 'boolean' || label.unclassified !== label.legacy_unbound) {
+        fail('ORIGIN_DISCLOSURE_LABEL_INVALID');
+      }
+      for (const key of ['origin_binding_sha256s', 'origin_ledger_hashes', 'origin_event_ids', 'origin_event_mutation_sha256s']) {
+        const refs = label[key];
+        const pattern = key === 'origin_event_ids' ? UUID : HEX32;
+        if (!Array.isArray(refs) || refs.some((ref, index) => typeof ref !== 'string'
+            || ref !== ref.toLowerCase() || !pattern.test(ref) || (index > 0 && refs[index - 1] >= ref))
+            || (label.legacy_unbound ? refs.length !== 0 : refs.length === 0)) {
+          fail('ORIGIN_DISCLOSURE_LABEL_INVALID');
+        }
+      }
+      if (label.legacy_unbound && (!equal(label.family_ids, ['unknown_protected'])
+          || label.confidentiality !== 'restricted' || label.integrity !== 'untrusted'
+          || label.effective_action_class !== 'none')) fail('ORIGIN_DISCLOSURE_LABEL_INVALID');
+      const { disclosure_label_sha256: commitment, ...body } = label;
+      const bytes = Buffer.from(canonicalJson(body), 'utf8');
+      const length = Buffer.alloc(4); length.writeUInt32BE(bytes.length);
+      if (commitment !== sha256Buffer(Buffer.concat([
+        Buffer.from('hom.aimos.native-recall-origin-disclosure/v1\0'), length, bytes,
+      ])).toString('hex')) fail('ORIGIN_DISCLOSURE_LABEL_INVALID');
+      labels.push(label);
+    } catch { fail('ORIGIN_DISCLOSURE_LABEL_INVALID'); }
+  }
+  const root = recallMerkleRoot(labels.map((label, ordinal) => ({
+    ordinal, memory_id: label.memory_id, live_content_hash: label.live_content_hash,
+    disclosure_label_sha256: label.disclosure_label_sha256,
+  }))).toString('hex');
+  if (!Array.isArray(receipt.disclosure_labels) || receipt.disclosure_label_root_sha256 !== root
+      || !equal(receipt.disclosure_labels, labels)) {
+    fail('ORIGIN_DISCLOSURE_ROOT_INVALID');
+  }
+  let metadata;
+  try { metadata = eventPayloadBody(receipt.event_receipt)?.metadata; }
+  catch { fail('EVENT_RECEIPT_COMMITMENT_INVALID'); }
+  if (metadata?.disclosure_label_root_sha256 !== root || !Array.isArray(metadata.disclosure_labels)
+      || !equal(metadata.disclosure_labels, labels)) {
+    fail('ORIGIN_DISCLOSURE_EVENT_BINDING_INVALID');
+  }
+}
+
 export function evaluateMutMemPortablePredicatesV2(envelope) {
   const reconstructed = validateEnvelopeCommitment(envelope);
   requireSchemas(reconstructed);
@@ -692,14 +807,16 @@ export function evaluateMutMemPortablePredicatesV2(envelope) {
     decisions,
     authority.nativeReceipt,
   );
+  validateOriginDisclosure(reconstructed, maps.results, authority.nativeReceipt, evidence);
   validateMerkleAndEvent(authority.nativeReceipt, decisions, evidence, authority);
   return Object.freeze({
-    schema: 'hom.aimos.mutmem-portable-predicate-result/v2',
+    schema: `hom.aimos.mutmem-portable-predicate-result/v${reconstructed.format.version}`,
     valid: true,
     bundle_sha256: reconstructed.bundle_sha256,
     object_root_sha256: reconstructed.object_root_sha256,
     result_count: reconstructed.result_count,
-    predicate_count: MUTMEM_PORTABLE_PREDICATE_CODES_V2.length,
+    predicate_count: MUTMEM_PORTABLE_PREDICATE_CODES_V2.length
+      + (reconstructed.format.version === 3 ? ORIGIN_DISCLOSURE_FAILURE_CODES.length : 0),
     cryptographic_signatures_verified: false,
     external_trust_established: false,
     next_required_owner: 'P2_INDEPENDENT_CRYPTOGRAPHIC_VERIFIER',

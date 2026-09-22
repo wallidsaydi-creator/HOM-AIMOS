@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createHash } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import {
   chmodSync,
   existsSync,
@@ -163,6 +164,7 @@ export function buildUserServiceDefinition({
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
   <key>ThrottleInterval</key><integer>10</integer>
+  <key>ExitTimeOut</key><integer>40</integer>
   <key>StandardOutPath</key><string>${xml(common.stdout_path)}</string>
   <key>StandardErrorPath</key><string>${xml(common.stderr_path)}</string>
 </dict>
@@ -186,7 +188,7 @@ WorkingDirectory=${systemdQuote(source)}
 ExecStart=${command}
 Restart=on-failure
 RestartSec=10
-TimeoutStopSec=30
+TimeoutStopSec=40
 KillSignal=SIGTERM
 StandardOutput=append:${common.stdout_path}
 StandardError=append:${common.stderr_path}
@@ -280,7 +282,7 @@ function launchdLoaded(definition) {
   ], { allowFailure: true }).status === 0;
 }
 
-function waitForLaunchdUnloaded(definition, timeoutMs = 10_000) {
+function waitForLaunchdUnloaded(definition, timeoutMs = 45_000) {
   const deadline = Date.now() + timeoutMs;
   const waiter = new Int32Array(new SharedArrayBuffer(4));
   while (Date.now() < deadline) {
@@ -337,17 +339,31 @@ function startDefinition(definition) {
   run('/usr/bin/systemctl', ['--user', 'enable', '--now', path.basename(definition.unit_path)]);
 }
 
-async function waitForReadiness(definition, timeoutMs = 180_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+// Cold boot verifies retained signed history before advertising readiness.
+// Keep an absolute bound, but do not terminate a healthy verification pass at
+// the former three-minute edge. No verification or readiness predicate changes.
+async function waitForReadiness(definition, timeoutMs = 300_000) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    let pauseMs = 1000;
     try {
-      const response = await fetch(`http://127.0.0.1:${definition.port}/health`);
+      const remaining = Math.ceil(deadline - performance.now());
+      if (remaining <= 0) break;
+      const response = await fetch(`http://127.0.0.1:${definition.port}/health`, {
+        signal: AbortSignal.timeout(Math.min(5000, remaining)),
+      });
       const body = await response.json();
       if (response.ok && body?.ready === true
           && body?.runtime?.database_name === definition.database
           && Number(body?.runtime?.server_port) === definition.port) return body;
+      const retryAfter = Number(response.headers.get('retry-after'));
+      if (response.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0) {
+        pauseMs = Math.max(pauseMs, retryAfter * 1000);
+      }
     } catch { /* bounded poll */ }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    // At most 60 probes/minute, below the canonical 100/minute limiter.
+    // Retry-After never extends the operation's original monotonic deadline.
+    await new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.min(pauseMs, deadline - performance.now()))));
   }
   fail('aimos_user_service_readiness_timeout');
 }

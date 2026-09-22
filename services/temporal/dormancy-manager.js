@@ -36,6 +36,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
+import { memoryCreditValue } from '../security/protocol/memory-credit.js';
 import { query } from '../../db/connection.js';
 import { logEvent } from '../observe/event-ledger.js';
 import { getDormancyThreshold, getReactivationCount, getMaxAccessNormalization, getMaxCrossRefNormalization } from '../shared/scale-baseline.js';
@@ -70,7 +71,7 @@ export const SALIENCE_FREQUENCY_ALADDIN_CONTRACT = Object.freeze({
     access_frequency: 'aimos_events(operation=recall)',
     access_recency: 'aimos_events(operation=recall).max(ts)',
     cross_refs: 'request-scoped cryptographically verified recall graph links',
-    permanent_value_prior: 'aimos_memories.credit_score read_only',
+    permanent_value_prior: 'verified Housekeeper reported usefulness for the admitted exact content occurrence; unmeasured contributes zero',
     cold_start_recency_fallback: 'aimos_memories.created_at read_only',
   }),
   canonical_memory_policy: 'read_only_for_identity_and_prior_no_body_history_or_value_rewrite',
@@ -204,9 +205,8 @@ export async function evaluateSalienceFrequencyBatch(memoryIds, companyId, optio
         ? 'aimos_events(operation=recall).max(ts)'
         : 'aimos_memories.created_at read_only_cold_start_fallback';
 
-      // Credit score is a read-only permanent-value prior. Salience frequency never writes it.
-      const rawCredit = parseFloat(row.credit_score) || 0;
-      const credit_score = rawCredit > 1 ? rawCredit / 100 : rawCredit;
+      // Consume the request's verified credit, never the historical raw column.
+      const credit_score = memoryCreditValue(options.admittedMemories?.get(String(row.id))) ?? 0;
 
       const trustScore = computeTrustScore({ access_freq, cross_refs, recency, credit_score });
 
@@ -704,7 +704,7 @@ export function classifySalienceFrequencyResolution(memory, options = {}) {
   const accessFreq = Math.min(1.0, (memory.access_freq || memory.access_count || 0) / maxAccess);
   const crossRefs = Math.min(1.0, ((memory.graph_links || []).length || memory.cross_ref_count || 0) / maxCrossRefs);
   const recency = memory.recency || 0.5;
-  const credit = (memory.credit_score || 0) > 1 ? (memory.credit_score || 0) / 100 : (memory.credit_score || 0);
+  const credit = memoryCreditValue(memory) ?? 0;
 
   const trustScore = computeTrustScore({
     access_freq: accessFreq,

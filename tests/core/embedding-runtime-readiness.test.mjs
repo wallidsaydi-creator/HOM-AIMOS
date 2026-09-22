@@ -10,8 +10,9 @@ test('server does not advertise recall readiness before local embedding inferenc
   const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
   const embeddings = fs.readFileSync(path.join(ROOT, 'services/core/embeddings.js'), 'utf8');
   const prewarm = server.indexOf('await prewarmEmbeddingRuntime()');
-  const ready = server.indexOf('backgroundReady = true');
+  const ready = server.indexOf("backgroundReady = getServingWorkState().phase === 'running'");
   assert.ok(prewarm >= 0 && ready > prewarm);
+  assert.match(server, /ready: getServingWorkState\(\)\.phase === 'running' && backgroundReady && schedulerStatus\.ready === true/);
   assert.match(embeddings, /export async function prewarmEmbeddingRuntime\(\)/);
   assert.match(embeddings, /dimension !== 768/);
   assert.match(embeddings, /canonical_memory_changed: false/);

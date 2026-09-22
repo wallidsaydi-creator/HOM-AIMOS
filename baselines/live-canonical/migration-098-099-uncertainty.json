@@ -1,0 +1,21 @@
+{
+  "schema": "hom.aimos.cr9-migration-byte-uncertainty/v1",
+  "records": [
+    {
+      "filename": "098-request-receipt-occurrence-lookup.sql",
+      "applied_at": "2026-08-17T22:43:23.727002+02:00",
+      "recorded_checksum": "1d9288168577df1f3eba64c33932e7ed3d44548d0ece27126a474e466a21fc4a",
+      "recovered_file_sha256": "fed5e24f61751e6fea7efc01178f8cfd28ff2a3494abec9c971fdade7479925e",
+      "checksum_equal": false,
+      "disposition": "HISTORICAL_APPLIED_BYTE_UNCERTAINTY_LIVE_SEMANTICS_VERIFIED"
+    },
+    {
+      "filename": "099-occurrence-attributed-mutation-evidence.sql",
+      "applied_at": "2026-08-17T23:09:01.030136+02:00",
+      "recorded_checksum": "5fd0ce46a65cef460feb7769789d4cdc54770d838a12f2bddae7091edb4df01a",
+      "recovered_file_sha256": "b4fd7e3b9360843c3538d1c052cfbccf77bcef25f9f4c7e88bcf98320f0224f8",
+      "checksum_equal": false,
+      "disposition": "HISTORICAL_APPLIED_BYTE_UNCERTAINTY_LIVE_SEMANTICS_VERIFIED"
+    }
+  ]
+}

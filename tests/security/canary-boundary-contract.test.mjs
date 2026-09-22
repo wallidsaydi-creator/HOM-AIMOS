@@ -673,17 +673,21 @@ test('tool execution and result scans occupy the native signed action boundary',
     new URL('../../services/orchestration/tool-registry.js', import.meta.url),
     'utf8',
   );
-  const begin = source.indexOf('signedToolAction = await beginToolAction(');
+  const begin = source.indexOf('signedToolAction = await beginToolAction({',
+    source.indexOf("if (name === 'read_file' && !isOperatorAgentId(agentId))"));
   const outboundScan = source.indexOf('await scanToolExecution(', begin);
-  const invoke = source.indexOf('await runWithTimeout(', begin);
+  const invoke = source.indexOf('const result = await invokeTool()', begin);
   const resultScan = source.indexOf('await scanToolResult(', invoke);
-  const terminal = source.indexOf('await finishToolAction({', resultScan);
+  const completion = source.indexOf('return await completeResult(result, disposition, returnedResult)', resultScan);
+  const classifier = source.indexOf('const classification = await classifyNativeResult(');
+  const terminal = source.indexOf('const terminal = await finishToolAction({', classifier);
 
   assert.ok(begin >= 0);
   assert.ok(outboundScan > begin, 'arguments must be scanned after a signed action exists');
   assert.ok(invoke > outboundScan, 'arguments must be scanned before tool dispatch');
   assert.ok(resultScan > invoke, 'tool results can only be scanned after invocation');
-  assert.ok(terminal > resultScan, 'terminal action proof follows result-boundary evidence');
+  assert.ok(completion > resultScan, 'the result-boundary evidence must feed the common completion owner');
+  assert.ok(classifier >= 0 && terminal > classifier, 'the common completion owner classifies before signing its terminal');
 });
 
 test('read-only tool intent is evaluated as read authority before Canary dispatch', async () => {
@@ -705,7 +709,7 @@ test('non-operator local reads require an exact master-signed purpose proof befo
     readFile(new URL('../../services/orchestration/tool-action-ledger.js', import.meta.url), 'utf8'),
   ]);
   const purposeGate = registry.indexOf("if (name === 'read_file' && !isOperatorAgentId(agentId))");
-  const actionStart = registry.indexOf('signedToolAction = await beginToolAction(');
+  const actionStart = registry.indexOf('signedToolAction = await beginToolAction({', purposeGate);
   const invocation = registry.indexOf('const invokeTool = () =>', actionStart);
   assert.ok(purposeGate >= 0 && purposeGate < actionStart);
   assert.ok(actionStart < invocation);
@@ -714,6 +718,7 @@ test('non-operator local reads require an exact master-signed purpose proof befo
   assert.match(registry, /authorizePurposeLocalFileRead/);
   assert.match(actionLedger, /purpose_authorization_sha256/);
   assert.match(actionLedger, /purposeAuthorizationSha256/);
+  assert.match(registry, /dispatchAllowed: false/);
 });
 
 test('relay observation precedes prompt construction and RELAYED follows completed model invocation', async () => {

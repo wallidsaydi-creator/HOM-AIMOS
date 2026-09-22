@@ -29,7 +29,7 @@ export const RECALL_PIPELINE_STAGES = [
   // speculative_prefetch and batched_stdp_enqueue removed — not runtime stages yet (Phase 2 future work)
   { id: 'entity_recall', required: false, description: 'Entity-aware memory recall (when entities detected)' },
   { id: 'bm25_rescue', required: false, description: 'BM25 keyword fallback for low-vector results' },
-  { id: 'qmd_activation', required: false, description: 'Query-Memory Divergence mode switch' },
+  { id: 'qmd_activation', required: false, description: 'Internal QMD candidate activation' },
   { id: 'hyde_expansion', required: false, description: 'Hypothetical Document Embedding expansion' }
 ];
 

@@ -1,0 +1,1713 @@
+{
+  "schema": "hom.aimos.origin-binding-vectors/v1",
+  "intended_n": 25,
+  "valid_n": 6,
+  "invalid_n": 19,
+  "vectors": [
+    {
+      "id": "profile-valid",
+      "operation": "family_profile_hash",
+      "input": {
+        "schema": "hom.aimos.origin-family-profile/v1",
+        "version": 1,
+        "canonicalization": "hom-aimos/canonical-json/v1-safe-integers",
+        "hash": "sha256",
+        "signature": "ed25519",
+        "family_order": "utf8_lexicographic_ascending",
+        "maximum_family_count": 64,
+        "maximum_parent_count": 64,
+        "maximum_corroborator_count": 16,
+        "confidentiality_order": [
+          "public",
+          "internal",
+          "confidential",
+          "restricted"
+        ],
+        "integrity_order": [
+          "untrusted",
+          "agent",
+          "trusted"
+        ],
+        "action_class_order": [
+          "none",
+          "inform",
+          "act"
+        ],
+        "risk_class_order": [
+          "non_consequential",
+          "consequential",
+          "high_impact"
+        ],
+        "ingress_channels": [
+          "untrusted_external",
+          "agent_self",
+          "authenticated_agent",
+          "housekeeper_system",
+          "authenticated_tool",
+          "authenticated_user",
+          "system_internal"
+        ],
+        "classification_authorities": [
+          "deterministic_route_schema",
+          "deterministic_field_schema",
+          "authenticated_tool_schema",
+          "system_producer_schema",
+          "trusted_monitor_classifier",
+          "legacy_successor_review"
+        ],
+        "family_action_policies": [
+          "inform_only",
+          "exact_origin_verdict",
+          "exact_user_or_provider",
+          "exact_configuration_owner",
+          "inherit_parents",
+          "deny_action"
+        ],
+        "families": [
+          {
+            "id": "action_input",
+            "parent_id": null,
+            "confidentiality_floor": "internal",
+            "action_policy": "exact_origin_verdict"
+          },
+          {
+            "id": "action_input.executable_instruction",
+            "parent_id": "action_input",
+            "confidentiality_floor": "internal",
+            "action_policy": "exact_origin_verdict"
+          },
+          {
+            "id": "action_input.external_destination",
+            "parent_id": "action_input",
+            "confidentiality_floor": "internal",
+            "action_policy": "exact_origin_verdict"
+          },
+          {
+            "id": "action_input.financial_value",
+            "parent_id": "action_input",
+            "confidentiality_floor": "confidential",
+            "action_policy": "exact_origin_verdict"
+          },
+          {
+            "id": "action_input.resource_target",
+            "parent_id": "action_input",
+            "confidentiality_floor": "internal",
+            "action_policy": "exact_origin_verdict"
+          },
+          {
+            "id": "derived",
+            "parent_id": null,
+            "confidentiality_floor": "internal",
+            "action_policy": "inherit_parents"
+          },
+          {
+            "id": "derived.housekeeper_derivation",
+            "parent_id": "derived",
+            "confidentiality_floor": "internal",
+            "action_policy": "inherit_parents"
+          },
+          {
+            "id": "derived.reflection",
+            "parent_id": "derived",
+            "confidentiality_floor": "internal",
+            "action_policy": "inherit_parents"
+          },
+          {
+            "id": "derived.summary",
+            "parent_id": "derived",
+            "confidentiality_floor": "internal",
+            "action_policy": "inherit_parents"
+          },
+          {
+            "id": "derived.tool_result",
+            "parent_id": "derived",
+            "confidentiality_floor": "internal",
+            "action_policy": "inherit_parents"
+          },
+          {
+            "id": "identity",
+            "parent_id": null,
+            "confidentiality_floor": "internal",
+            "action_policy": "exact_origin_verdict"
+          },
+          {
+            "id": "identity.ownership_assertion",
+            "parent_id": "identity",
+            "confidentiality_floor": "internal",
+            "action_policy": "exact_origin_verdict"
+          },
+          {
+            "id": "identity.principal_assertion",
+            "parent_id": "identity",
+            "confidentiality_floor": "internal",
+            "action_policy": "exact_origin_verdict"
+          },
+          {
+            "id": "identity.role_assertion",
+            "parent_id": "identity",
+            "confidentiality_floor": "internal",
+            "action_policy": "exact_origin_verdict"
+          },
+          {
+            "id": "information",
+            "parent_id": null,
+            "confidentiality_floor": "public",
+            "action_policy": "inform_only"
+          },
+          {
+            "id": "information.event",
+            "parent_id": "information",
+            "confidentiality_floor": "public",
+            "action_policy": "inform_only"
+          },
+          {
+            "id": "information.fact",
+            "parent_id": "information",
+            "confidentiality_floor": "public",
+            "action_policy": "inform_only"
+          },
+          {
+            "id": "information.preference",
+            "parent_id": "information",
+            "confidentiality_floor": "internal",
+            "action_policy": "inform_only"
+          },
+          {
+            "id": "information.relationship",
+            "parent_id": "information",
+            "confidentiality_floor": "internal",
+            "action_policy": "inform_only"
+          },
+          {
+            "id": "secret",
+            "parent_id": null,
+            "confidentiality_floor": "restricted",
+            "action_policy": "exact_user_or_provider"
+          },
+          {
+            "id": "secret.access_token",
+            "parent_id": "secret",
+            "confidentiality_floor": "restricted",
+            "action_policy": "exact_user_or_provider"
+          },
+          {
+            "id": "secret.credential",
+            "parent_id": "secret",
+            "confidentiality_floor": "restricted",
+            "action_policy": "exact_user_or_provider"
+          },
+          {
+            "id": "secret.personal_data",
+            "parent_id": "secret",
+            "confidentiality_floor": "restricted",
+            "action_policy": "exact_user_or_provider"
+          },
+          {
+            "id": "secret.private_key",
+            "parent_id": "secret",
+            "confidentiality_floor": "restricted",
+            "action_policy": "exact_user_or_provider"
+          },
+          {
+            "id": "system_control",
+            "parent_id": null,
+            "confidentiality_floor": "restricted",
+            "action_policy": "exact_configuration_owner"
+          },
+          {
+            "id": "system_control.authorization_directive",
+            "parent_id": "system_control",
+            "confidentiality_floor": "restricted",
+            "action_policy": "exact_configuration_owner"
+          },
+          {
+            "id": "system_control.memory_directive",
+            "parent_id": "system_control",
+            "confidentiality_floor": "restricted",
+            "action_policy": "exact_configuration_owner"
+          },
+          {
+            "id": "system_control.model_configuration",
+            "parent_id": "system_control",
+            "confidentiality_floor": "restricted",
+            "action_policy": "exact_configuration_owner"
+          },
+          {
+            "id": "system_control.security_policy",
+            "parent_id": "system_control",
+            "confidentiality_floor": "restricted",
+            "action_policy": "exact_configuration_owner"
+          },
+          {
+            "id": "unknown_protected",
+            "parent_id": null,
+            "confidentiality_floor": "restricted",
+            "action_policy": "deny_action"
+          }
+        ]
+      },
+      "expected": {
+        "valid": true,
+        "sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24"
+      }
+    },
+    {
+      "id": "binding-untrusted-valid",
+      "operation": "memory_binding",
+      "input": {
+        "schema": "hom.aimos.memory-origin-binding/v1",
+        "company_id": "hom",
+        "memory_id": "20000000-0000-4000-8000-000000000001",
+        "occurrence_id": "30000000-0000-4000-8000-000000000001",
+        "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "actor": {
+          "agent_id": "codex-auditor",
+          "valid_from": "2026-08-10T18:49:54.000Z",
+          "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "request": {
+          "receipt_id": "10000000-0000-4000-8000-000000000001",
+          "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "origin": {
+          "ingress_channel": "untrusted_external",
+          "channel_identity_sha256": "1313131313131313131313131313131313131313131313131313131313131313"
+        },
+        "parents": {
+          "origin_sha256s": []
+        },
+        "classification": {
+          "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24",
+          "family_ids": [
+            "action_input",
+            "action_input.executable_instruction",
+            "information",
+            "information.fact"
+          ],
+          "authority": "deterministic_route_schema",
+          "evidence_sha256": "1212121212121212121212121212121212121212121212121212121212121212"
+        },
+        "confidentiality": "internal",
+        "integrity": "untrusted",
+        "action_class": "none",
+        "scope": "global",
+        "session_id": "phase1-ob1-session",
+        "tool_action_event_id": null,
+        "created_at": "2026-09-01T16:00:00.000Z"
+      },
+      "expected": {
+        "valid": true,
+        "sha256": "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+      }
+    },
+    {
+      "id": "binding-trusted-valid",
+      "operation": "memory_binding",
+      "input": {
+        "schema": "hom.aimos.memory-origin-binding/v1",
+        "company_id": "hom",
+        "memory_id": "20000000-0000-4000-8000-000000000003",
+        "occurrence_id": "30000000-0000-4000-8000-000000000003",
+        "content_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "actor": {
+          "agent_id": "codex-auditor",
+          "valid_from": "2026-08-10T18:49:54.000Z",
+          "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "request": {
+          "receipt_id": "10000000-0000-4000-8000-000000000001",
+          "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "origin": {
+          "ingress_channel": "authenticated_user",
+          "channel_identity_sha256": "1515151515151515151515151515151515151515151515151515151515151515"
+        },
+        "parents": {
+          "origin_sha256s": []
+        },
+        "classification": {
+          "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24",
+          "family_ids": [
+            "action_input",
+            "action_input.financial_value"
+          ],
+          "authority": "deterministic_field_schema",
+          "evidence_sha256": "1717171717171717171717171717171717171717171717171717171717171717"
+        },
+        "confidentiality": "confidential",
+        "integrity": "trusted",
+        "action_class": "act",
+        "scope": "payment.create",
+        "session_id": "phase1-ob1-session",
+        "tool_action_event_id": "60000000-0000-4000-8000-000000000001",
+        "created_at": "2026-09-01T16:02:00.000Z"
+      },
+      "expected": {
+        "valid": true,
+        "sha256": "43e2dfa00d179d353e24813501a961796e1c320dd9675c602c4bf65042934391"
+      }
+    },
+    {
+      "id": "derivation-valid",
+      "operation": "derivation",
+      "input": {
+        "child": {
+          "action_class": "none",
+          "actor": {
+            "agent_id": "codex-auditor",
+            "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "valid_from": "2026-08-10T18:49:54.000Z"
+          },
+          "classification": {
+            "authority": "system_producer_schema",
+            "evidence_sha256": "1616161616161616161616161616161616161616161616161616161616161616",
+            "family_ids": [
+              "action_input",
+              "action_input.executable_instruction",
+              "derived",
+              "derived.summary",
+              "information",
+              "information.fact"
+            ],
+            "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24"
+          },
+          "company_id": "hom",
+          "confidentiality": "internal",
+          "content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "created_at": "2026-09-01T16:01:00.000Z",
+          "integrity": "untrusted",
+          "memory_id": "20000000-0000-4000-8000-000000000002",
+          "occurrence_id": "30000000-0000-4000-8000-000000000002",
+          "origin": {
+            "channel_identity_sha256": "1414141414141414141414141414141414141414141414141414141414141414",
+            "ingress_channel": "agent_self"
+          },
+          "parents": {
+            "origin_sha256s": [
+              "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+            ]
+          },
+          "request": {
+            "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "receipt_id": "10000000-0000-4000-8000-000000000001"
+          },
+          "schema": "hom.aimos.memory-origin-binding/v1",
+          "scope": "global",
+          "session_id": "phase1-ob1-session",
+          "tool_action_event_id": null,
+          "binding_sha256": "dc421be4c359f82501cce6cf0470116885d34b5d0792b00e7a41c1bafc4eeb4e"
+        },
+        "parents": [
+          {
+            "action_class": "none",
+            "actor": {
+              "agent_id": "codex-auditor",
+              "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "valid_from": "2026-08-10T18:49:54.000Z"
+            },
+            "classification": {
+              "authority": "deterministic_route_schema",
+              "evidence_sha256": "1212121212121212121212121212121212121212121212121212121212121212",
+              "family_ids": [
+                "action_input",
+                "action_input.executable_instruction",
+                "information",
+                "information.fact"
+              ],
+              "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24"
+            },
+            "company_id": "hom",
+            "confidentiality": "internal",
+            "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "created_at": "2026-09-01T16:00:00.000Z",
+            "integrity": "untrusted",
+            "memory_id": "20000000-0000-4000-8000-000000000001",
+            "occurrence_id": "30000000-0000-4000-8000-000000000001",
+            "origin": {
+              "channel_identity_sha256": "1313131313131313131313131313131313131313131313131313131313131313",
+              "ingress_channel": "untrusted_external"
+            },
+            "parents": {
+              "origin_sha256s": []
+            },
+            "request": {
+              "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "receipt_id": "10000000-0000-4000-8000-000000000001"
+            },
+            "schema": "hom.aimos.memory-origin-binding/v1",
+            "scope": "global",
+            "session_id": "phase1-ob1-session",
+            "tool_action_event_id": null,
+            "binding_sha256": "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+          }
+        ]
+      },
+      "expected": {
+        "valid": true,
+        "parent_count": 1
+      }
+    },
+    {
+      "id": "elevation-corroborated-valid",
+      "operation": "elevation",
+      "input": {
+        "schema": "hom.aimos.origin-elevation/v1",
+        "company_id": "hom",
+        "elevation_id": "40000000-0000-4000-8000-000000000001",
+        "value_sha256": "5151515151515151515151515151515151515151515151515151515151515151",
+        "family_id": "action_input.external_destination",
+        "action_scope": "payment.create",
+        "risk_class": "consequential",
+        "base_origin_sha256s": [
+          "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+        ],
+        "corroborators": [
+          {
+            "principal_id": "bank-registry",
+            "valid_from": "2026-09-01T15:00:00.000Z",
+            "administrative_domain_sha256": "2121212121212121212121212121212121212121212121212121212121212121",
+            "upstream_source_sha256": "3131313131313131313131313131313131313131313131313131313131313131",
+            "license_sha256": "4141414141414141414141414141414141414141414141414141414141414141"
+          },
+          {
+            "principal_id": "internal-registry",
+            "valid_from": "2026-09-01T15:00:00.000Z",
+            "administrative_domain_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "upstream_source_sha256": "3232323232323232323232323232323232323232323232323232323232323232",
+            "license_sha256": "4242424242424242424242424242424242424242424242424242424242424242"
+          }
+        ],
+        "threshold": 2,
+        "user_authorization_sha256": null,
+        "maximum_uses": 1,
+        "valid_from": "2026-09-01T16:00:00.000Z",
+        "valid_until": "2026-09-01T17:00:00.000Z",
+        "created_at": "2026-09-01T16:03:00.000Z"
+      },
+      "expected": {
+        "valid": true,
+        "sha256": "52c4b0e850d6006a8f5e2a2441c155953a7500089501d4d029079edd2d294b77"
+      }
+    },
+    {
+      "id": "verdict-allow-valid",
+      "operation": "action_verdict",
+      "input": {
+        "schema": "hom.aimos.action-origin-verdict/v1",
+        "company_id": "hom",
+        "verdict_id": "50000000-0000-4000-8000-000000000001",
+        "actor": {
+          "agent_id": "codex-auditor",
+          "valid_from": "2026-08-10T18:49:54.000Z",
+          "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "tool_name": "payment-create",
+        "action_scope": "payment.create",
+        "risk_class": "consequential",
+        "arguments_sha256": "6161616161616161616161616161616161616161616161616161616161616161",
+        "security_values": [
+          {
+            "value_sha256": "6262626262626262626262626262626262626262626262626262626262626262",
+            "family_ids": [
+              "action_input",
+              "action_input.external_destination"
+            ]
+          },
+          {
+            "value_sha256": "6363636363636363636363636363636363636363636363636363636363636363",
+            "family_ids": [
+              "action_input",
+              "action_input.financial_value"
+            ]
+          }
+        ],
+        "family_ids": [
+          "action_input",
+          "action_input.external_destination",
+          "action_input.financial_value"
+        ],
+        "input_origin_sha256s": [
+          "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+        ],
+        "untrusted_influence": true,
+        "elevation_sha256": "52c4b0e850d6006a8f5e2a2441c155953a7500089501d4d029079edd2d294b77",
+        "user_authorization_sha256": null,
+        "decision": "ALLOW",
+        "failure_code": null,
+        "previous_verdict_sha256": null,
+        "created_at": "2026-09-01T16:04:00.000Z"
+      },
+      "expected": {
+        "valid": true,
+        "sha256": "5f7bd4e5fddedf94bf21d2dfa70d7168684501f6477818a847354a11fc859850"
+      }
+    },
+    {
+      "id": "binding-caller-family-authority",
+      "operation": "memory_binding",
+      "input": {
+        "schema": "hom.aimos.memory-origin-binding/v1",
+        "company_id": "hom",
+        "memory_id": "20000000-0000-4000-8000-000000000001",
+        "occurrence_id": "30000000-0000-4000-8000-000000000001",
+        "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "actor": {
+          "agent_id": "codex-auditor",
+          "valid_from": "2026-08-10T18:49:54.000Z",
+          "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "request": {
+          "receipt_id": "10000000-0000-4000-8000-000000000001",
+          "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "origin": {
+          "ingress_channel": "untrusted_external",
+          "channel_identity_sha256": "1313131313131313131313131313131313131313131313131313131313131313"
+        },
+        "parents": {
+          "origin_sha256s": []
+        },
+        "classification": {
+          "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24",
+          "family_ids": [
+            "action_input",
+            "action_input.executable_instruction",
+            "information",
+            "information.fact"
+          ],
+          "authority": "caller",
+          "evidence_sha256": "1212121212121212121212121212121212121212121212121212121212121212"
+        },
+        "confidentiality": "internal",
+        "integrity": "untrusted",
+        "action_class": "none",
+        "scope": "global",
+        "session_id": "phase1-ob1-session",
+        "tool_action_event_id": null,
+        "created_at": "2026-09-01T16:00:00.000Z"
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "enum_invalid"
+      }
+    },
+    {
+      "id": "binding-unknown-family",
+      "operation": "memory_binding",
+      "input": {
+        "schema": "hom.aimos.memory-origin-binding/v1",
+        "company_id": "hom",
+        "memory_id": "20000000-0000-4000-8000-000000000001",
+        "occurrence_id": "30000000-0000-4000-8000-000000000001",
+        "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "actor": {
+          "agent_id": "codex-auditor",
+          "valid_from": "2026-08-10T18:49:54.000Z",
+          "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "request": {
+          "receipt_id": "10000000-0000-4000-8000-000000000001",
+          "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "origin": {
+          "ingress_channel": "untrusted_external",
+          "channel_identity_sha256": "1313131313131313131313131313131313131313131313131313131313131313"
+        },
+        "parents": {
+          "origin_sha256s": []
+        },
+        "classification": {
+          "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24",
+          "family_ids": [
+            "unknown.future_family"
+          ],
+          "authority": "deterministic_route_schema",
+          "evidence_sha256": "1212121212121212121212121212121212121212121212121212121212121212"
+        },
+        "confidentiality": "internal",
+        "integrity": "untrusted",
+        "action_class": "none",
+        "scope": "global",
+        "session_id": "phase1-ob1-session",
+        "tool_action_event_id": null,
+        "created_at": "2026-09-01T16:00:00.000Z"
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "family_id_invalid"
+      }
+    },
+    {
+      "id": "binding-family-order",
+      "operation": "memory_binding",
+      "input": {
+        "schema": "hom.aimos.memory-origin-binding/v1",
+        "company_id": "hom",
+        "memory_id": "20000000-0000-4000-8000-000000000001",
+        "occurrence_id": "30000000-0000-4000-8000-000000000001",
+        "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "actor": {
+          "agent_id": "codex-auditor",
+          "valid_from": "2026-08-10T18:49:54.000Z",
+          "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "request": {
+          "receipt_id": "10000000-0000-4000-8000-000000000001",
+          "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "origin": {
+          "ingress_channel": "untrusted_external",
+          "channel_identity_sha256": "1313131313131313131313131313131313131313131313131313131313131313"
+        },
+        "parents": {
+          "origin_sha256s": []
+        },
+        "classification": {
+          "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24",
+          "family_ids": [
+            "information.fact",
+            "information",
+            "action_input.executable_instruction",
+            "action_input"
+          ],
+          "authority": "deterministic_route_schema",
+          "evidence_sha256": "1212121212121212121212121212121212121212121212121212121212121212"
+        },
+        "confidentiality": "internal",
+        "integrity": "untrusted",
+        "action_class": "none",
+        "scope": "global",
+        "session_id": "phase1-ob1-session",
+        "tool_action_event_id": null,
+        "created_at": "2026-09-01T16:00:00.000Z"
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "family_order_invalid"
+      }
+    },
+    {
+      "id": "binding-family-closure",
+      "operation": "memory_binding",
+      "input": {
+        "schema": "hom.aimos.memory-origin-binding/v1",
+        "company_id": "hom",
+        "memory_id": "20000000-0000-4000-8000-000000000001",
+        "occurrence_id": "30000000-0000-4000-8000-000000000001",
+        "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "actor": {
+          "agent_id": "codex-auditor",
+          "valid_from": "2026-08-10T18:49:54.000Z",
+          "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "request": {
+          "receipt_id": "10000000-0000-4000-8000-000000000001",
+          "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "origin": {
+          "ingress_channel": "untrusted_external",
+          "channel_identity_sha256": "1313131313131313131313131313131313131313131313131313131313131313"
+        },
+        "parents": {
+          "origin_sha256s": []
+        },
+        "classification": {
+          "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24",
+          "family_ids": [
+            "information.fact"
+          ],
+          "authority": "deterministic_route_schema",
+          "evidence_sha256": "1212121212121212121212121212121212121212121212121212121212121212"
+        },
+        "confidentiality": "internal",
+        "integrity": "untrusted",
+        "action_class": "none",
+        "scope": "global",
+        "session_id": "phase1-ob1-session",
+        "tool_action_event_id": null,
+        "created_at": "2026-09-01T16:00:00.000Z"
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "family_closure_invalid"
+      }
+    },
+    {
+      "id": "binding-stale-family-profile",
+      "operation": "memory_binding",
+      "input": {
+        "schema": "hom.aimos.memory-origin-binding/v1",
+        "company_id": "hom",
+        "memory_id": "20000000-0000-4000-8000-000000000001",
+        "occurrence_id": "30000000-0000-4000-8000-000000000001",
+        "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "actor": {
+          "agent_id": "codex-auditor",
+          "valid_from": "2026-08-10T18:49:54.000Z",
+          "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "request": {
+          "receipt_id": "10000000-0000-4000-8000-000000000001",
+          "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "origin": {
+          "ingress_channel": "untrusted_external",
+          "channel_identity_sha256": "1313131313131313131313131313131313131313131313131313131313131313"
+        },
+        "parents": {
+          "origin_sha256s": []
+        },
+        "classification": {
+          "profile_sha256": "9191919191919191919191919191919191919191919191919191919191919191",
+          "family_ids": [
+            "action_input",
+            "action_input.executable_instruction",
+            "information",
+            "information.fact"
+          ],
+          "authority": "deterministic_route_schema",
+          "evidence_sha256": "1212121212121212121212121212121212121212121212121212121212121212"
+        },
+        "confidentiality": "internal",
+        "integrity": "untrusted",
+        "action_class": "none",
+        "scope": "global",
+        "session_id": "phase1-ob1-session",
+        "tool_action_event_id": null,
+        "created_at": "2026-09-01T16:00:00.000Z"
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "family_profile_hash_invalid"
+      }
+    },
+    {
+      "id": "binding-family-confidentiality-floor",
+      "operation": "memory_binding",
+      "input": {
+        "schema": "hom.aimos.memory-origin-binding/v1",
+        "company_id": "hom",
+        "memory_id": "20000000-0000-4000-8000-000000000003",
+        "occurrence_id": "30000000-0000-4000-8000-000000000003",
+        "content_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "actor": {
+          "agent_id": "codex-auditor",
+          "valid_from": "2026-08-10T18:49:54.000Z",
+          "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "request": {
+          "receipt_id": "10000000-0000-4000-8000-000000000001",
+          "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "origin": {
+          "ingress_channel": "authenticated_user",
+          "channel_identity_sha256": "1515151515151515151515151515151515151515151515151515151515151515"
+        },
+        "parents": {
+          "origin_sha256s": []
+        },
+        "classification": {
+          "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24",
+          "family_ids": [
+            "action_input",
+            "action_input.financial_value"
+          ],
+          "authority": "deterministic_field_schema",
+          "evidence_sha256": "1717171717171717171717171717171717171717171717171717171717171717"
+        },
+        "confidentiality": "internal",
+        "integrity": "trusted",
+        "action_class": "act",
+        "scope": "payment.create",
+        "session_id": "phase1-ob1-session",
+        "tool_action_event_id": "60000000-0000-4000-8000-000000000001",
+        "created_at": "2026-09-01T16:02:00.000Z"
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "family_confidentiality_floor_invalid"
+      }
+    },
+    {
+      "id": "binding-channel-integrity",
+      "operation": "memory_binding",
+      "input": {
+        "schema": "hom.aimos.memory-origin-binding/v1",
+        "company_id": "hom",
+        "memory_id": "20000000-0000-4000-8000-000000000001",
+        "occurrence_id": "30000000-0000-4000-8000-000000000001",
+        "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "actor": {
+          "agent_id": "codex-auditor",
+          "valid_from": "2026-08-10T18:49:54.000Z",
+          "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "request": {
+          "receipt_id": "10000000-0000-4000-8000-000000000001",
+          "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "origin": {
+          "ingress_channel": "untrusted_external",
+          "channel_identity_sha256": "1313131313131313131313131313131313131313131313131313131313131313"
+        },
+        "parents": {
+          "origin_sha256s": []
+        },
+        "classification": {
+          "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24",
+          "family_ids": [
+            "action_input",
+            "action_input.executable_instruction",
+            "information",
+            "information.fact"
+          ],
+          "authority": "deterministic_route_schema",
+          "evidence_sha256": "1212121212121212121212121212121212121212121212121212121212121212"
+        },
+        "confidentiality": "internal",
+        "integrity": "agent",
+        "action_class": "inform",
+        "scope": "global",
+        "session_id": "phase1-ob1-session",
+        "tool_action_event_id": null,
+        "created_at": "2026-09-01T16:00:00.000Z"
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "channel_integrity_invalid"
+      }
+    },
+    {
+      "id": "binding-integrity-action-class",
+      "operation": "memory_binding",
+      "input": {
+        "schema": "hom.aimos.memory-origin-binding/v1",
+        "company_id": "hom",
+        "memory_id": "20000000-0000-4000-8000-000000000001",
+        "occurrence_id": "30000000-0000-4000-8000-000000000001",
+        "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "actor": {
+          "agent_id": "codex-auditor",
+          "valid_from": "2026-08-10T18:49:54.000Z",
+          "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "request": {
+          "receipt_id": "10000000-0000-4000-8000-000000000001",
+          "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        "origin": {
+          "ingress_channel": "untrusted_external",
+          "channel_identity_sha256": "1313131313131313131313131313131313131313131313131313131313131313"
+        },
+        "parents": {
+          "origin_sha256s": []
+        },
+        "classification": {
+          "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24",
+          "family_ids": [
+            "action_input",
+            "action_input.executable_instruction",
+            "information",
+            "information.fact"
+          ],
+          "authority": "deterministic_route_schema",
+          "evidence_sha256": "1212121212121212121212121212121212121212121212121212121212121212"
+        },
+        "confidentiality": "internal",
+        "integrity": "untrusted",
+        "action_class": "inform",
+        "scope": "global",
+        "session_id": "phase1-ob1-session",
+        "tool_action_event_id": null,
+        "created_at": "2026-09-01T16:00:00.000Z"
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "integrity_action_class_invalid"
+      }
+    },
+    {
+      "id": "derivation-parent-substitution",
+      "operation": "derivation",
+      "input": {
+        "child": {
+          "action_class": "none",
+          "actor": {
+            "agent_id": "codex-auditor",
+            "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "valid_from": "2026-08-10T18:49:54.000Z"
+          },
+          "classification": {
+            "authority": "system_producer_schema",
+            "evidence_sha256": "1616161616161616161616161616161616161616161616161616161616161616",
+            "family_ids": [
+              "action_input",
+              "action_input.executable_instruction",
+              "derived",
+              "derived.summary",
+              "information",
+              "information.fact"
+            ],
+            "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24"
+          },
+          "company_id": "hom",
+          "confidentiality": "internal",
+          "content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "created_at": "2026-09-01T16:01:00.000Z",
+          "integrity": "untrusted",
+          "memory_id": "20000000-0000-4000-8000-000000000002",
+          "occurrence_id": "30000000-0000-4000-8000-000000000002",
+          "origin": {
+            "channel_identity_sha256": "1414141414141414141414141414141414141414141414141414141414141414",
+            "ingress_channel": "agent_self"
+          },
+          "parents": {
+            "origin_sha256s": [
+              "9292929292929292929292929292929292929292929292929292929292929292"
+            ]
+          },
+          "request": {
+            "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "receipt_id": "10000000-0000-4000-8000-000000000001"
+          },
+          "schema": "hom.aimos.memory-origin-binding/v1",
+          "scope": "global",
+          "session_id": "phase1-ob1-session",
+          "tool_action_event_id": null,
+          "binding_sha256": "3e32cd59ddd7458a8d1dfd646d9850e78b3e8636929061085c222dcdb8e42ab9"
+        },
+        "parents": [
+          {
+            "action_class": "none",
+            "actor": {
+              "agent_id": "codex-auditor",
+              "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "valid_from": "2026-08-10T18:49:54.000Z"
+            },
+            "classification": {
+              "authority": "deterministic_route_schema",
+              "evidence_sha256": "1212121212121212121212121212121212121212121212121212121212121212",
+              "family_ids": [
+                "action_input",
+                "action_input.executable_instruction",
+                "information",
+                "information.fact"
+              ],
+              "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24"
+            },
+            "company_id": "hom",
+            "confidentiality": "internal",
+            "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "created_at": "2026-09-01T16:00:00.000Z",
+            "integrity": "untrusted",
+            "memory_id": "20000000-0000-4000-8000-000000000001",
+            "occurrence_id": "30000000-0000-4000-8000-000000000001",
+            "origin": {
+              "channel_identity_sha256": "1313131313131313131313131313131313131313131313131313131313131313",
+              "ingress_channel": "untrusted_external"
+            },
+            "parents": {
+              "origin_sha256s": []
+            },
+            "request": {
+              "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "receipt_id": "10000000-0000-4000-8000-000000000001"
+            },
+            "schema": "hom.aimos.memory-origin-binding/v1",
+            "scope": "global",
+            "session_id": "phase1-ob1-session",
+            "tool_action_event_id": null,
+            "binding_sha256": "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+          }
+        ]
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "parent_binding_invalid"
+      }
+    },
+    {
+      "id": "derivation-family-stripping",
+      "operation": "derivation",
+      "input": {
+        "child": {
+          "action_class": "none",
+          "actor": {
+            "agent_id": "codex-auditor",
+            "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "valid_from": "2026-08-10T18:49:54.000Z"
+          },
+          "classification": {
+            "authority": "system_producer_schema",
+            "evidence_sha256": "1616161616161616161616161616161616161616161616161616161616161616",
+            "family_ids": [
+              "derived",
+              "derived.summary"
+            ],
+            "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24"
+          },
+          "company_id": "hom",
+          "confidentiality": "internal",
+          "content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "created_at": "2026-09-01T16:01:00.000Z",
+          "integrity": "untrusted",
+          "memory_id": "20000000-0000-4000-8000-000000000002",
+          "occurrence_id": "30000000-0000-4000-8000-000000000002",
+          "origin": {
+            "channel_identity_sha256": "1414141414141414141414141414141414141414141414141414141414141414",
+            "ingress_channel": "agent_self"
+          },
+          "parents": {
+            "origin_sha256s": [
+              "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+            ]
+          },
+          "request": {
+            "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "receipt_id": "10000000-0000-4000-8000-000000000001"
+          },
+          "schema": "hom.aimos.memory-origin-binding/v1",
+          "scope": "global",
+          "session_id": "phase1-ob1-session",
+          "tool_action_event_id": null,
+          "binding_sha256": "d3c454bb074d52a982b35c6bb7cb4991abf78f37efef8e3920de9412925707b8"
+        },
+        "parents": [
+          {
+            "action_class": "none",
+            "actor": {
+              "agent_id": "codex-auditor",
+              "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "valid_from": "2026-08-10T18:49:54.000Z"
+            },
+            "classification": {
+              "authority": "deterministic_route_schema",
+              "evidence_sha256": "1212121212121212121212121212121212121212121212121212121212121212",
+              "family_ids": [
+                "action_input",
+                "action_input.executable_instruction",
+                "information",
+                "information.fact"
+              ],
+              "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24"
+            },
+            "company_id": "hom",
+            "confidentiality": "internal",
+            "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "created_at": "2026-09-01T16:00:00.000Z",
+            "integrity": "untrusted",
+            "memory_id": "20000000-0000-4000-8000-000000000001",
+            "occurrence_id": "30000000-0000-4000-8000-000000000001",
+            "origin": {
+              "channel_identity_sha256": "1313131313131313131313131313131313131313131313131313131313131313",
+              "ingress_channel": "untrusted_external"
+            },
+            "parents": {
+              "origin_sha256s": []
+            },
+            "request": {
+              "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "receipt_id": "10000000-0000-4000-8000-000000000001"
+            },
+            "schema": "hom.aimos.memory-origin-binding/v1",
+            "scope": "global",
+            "session_id": "phase1-ob1-session",
+            "tool_action_event_id": null,
+            "binding_sha256": "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+          }
+        ]
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "family_closure_invalid"
+      }
+    },
+    {
+      "id": "derivation-confidentiality-downgrade",
+      "operation": "derivation",
+      "input": {
+        "child": {
+          "action_class": "none",
+          "actor": {
+            "agent_id": "codex-auditor",
+            "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "valid_from": "2026-08-10T18:49:54.000Z"
+          },
+          "classification": {
+            "authority": "system_producer_schema",
+            "evidence_sha256": "1616161616161616161616161616161616161616161616161616161616161616",
+            "family_ids": [
+              "action_input",
+              "action_input.executable_instruction",
+              "derived",
+              "derived.summary",
+              "information",
+              "information.fact"
+            ],
+            "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24"
+          },
+          "company_id": "hom",
+          "confidentiality": "internal",
+          "content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "created_at": "2026-09-01T16:01:00.000Z",
+          "integrity": "untrusted",
+          "memory_id": "20000000-0000-4000-8000-000000000002",
+          "occurrence_id": "30000000-0000-4000-8000-000000000002",
+          "origin": {
+            "channel_identity_sha256": "1414141414141414141414141414141414141414141414141414141414141414",
+            "ingress_channel": "agent_self"
+          },
+          "parents": {
+            "origin_sha256s": [
+              "a6423025dcdff93e1b9fc2116e61329093b66d5ca118926b74424f3fd27f7a83"
+            ]
+          },
+          "request": {
+            "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "receipt_id": "10000000-0000-4000-8000-000000000001"
+          },
+          "schema": "hom.aimos.memory-origin-binding/v1",
+          "scope": "global",
+          "session_id": "phase1-ob1-session",
+          "tool_action_event_id": null,
+          "binding_sha256": "8660ba75c880e37e08e9d6346e1079fec3a9c7340eca6f157287cd4ffcfb973e"
+        },
+        "parents": [
+          {
+            "action_class": "none",
+            "actor": {
+              "agent_id": "codex-auditor",
+              "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "valid_from": "2026-08-10T18:49:54.000Z"
+            },
+            "classification": {
+              "authority": "deterministic_route_schema",
+              "evidence_sha256": "1212121212121212121212121212121212121212121212121212121212121212",
+              "family_ids": [
+                "action_input",
+                "action_input.executable_instruction",
+                "information",
+                "information.fact"
+              ],
+              "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24"
+            },
+            "company_id": "hom",
+            "confidentiality": "confidential",
+            "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "created_at": "2026-09-01T16:00:00.000Z",
+            "integrity": "untrusted",
+            "memory_id": "20000000-0000-4000-8000-000000000001",
+            "occurrence_id": "30000000-0000-4000-8000-000000000001",
+            "origin": {
+              "channel_identity_sha256": "1313131313131313131313131313131313131313131313131313131313131313",
+              "ingress_channel": "untrusted_external"
+            },
+            "parents": {
+              "origin_sha256s": []
+            },
+            "request": {
+              "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "receipt_id": "10000000-0000-4000-8000-000000000001"
+            },
+            "schema": "hom.aimos.memory-origin-binding/v1",
+            "scope": "global",
+            "session_id": "phase1-ob1-session",
+            "tool_action_event_id": null,
+            "binding_sha256": "a6423025dcdff93e1b9fc2116e61329093b66d5ca118926b74424f3fd27f7a83"
+          }
+        ]
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "confidentiality_downgrade"
+      }
+    },
+    {
+      "id": "derivation-integrity-elevation",
+      "operation": "derivation",
+      "input": {
+        "child": {
+          "action_class": "inform",
+          "actor": {
+            "agent_id": "codex-auditor",
+            "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "valid_from": "2026-08-10T18:49:54.000Z"
+          },
+          "classification": {
+            "authority": "system_producer_schema",
+            "evidence_sha256": "1616161616161616161616161616161616161616161616161616161616161616",
+            "family_ids": [
+              "action_input",
+              "action_input.executable_instruction",
+              "derived",
+              "derived.summary",
+              "information",
+              "information.fact"
+            ],
+            "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24"
+          },
+          "company_id": "hom",
+          "confidentiality": "internal",
+          "content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "created_at": "2026-09-01T16:01:00.000Z",
+          "integrity": "agent",
+          "memory_id": "20000000-0000-4000-8000-000000000002",
+          "occurrence_id": "30000000-0000-4000-8000-000000000002",
+          "origin": {
+            "channel_identity_sha256": "1414141414141414141414141414141414141414141414141414141414141414",
+            "ingress_channel": "agent_self"
+          },
+          "parents": {
+            "origin_sha256s": [
+              "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+            ]
+          },
+          "request": {
+            "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "receipt_id": "10000000-0000-4000-8000-000000000001"
+          },
+          "schema": "hom.aimos.memory-origin-binding/v1",
+          "scope": "global",
+          "session_id": "phase1-ob1-session",
+          "tool_action_event_id": null,
+          "binding_sha256": "c41445c8a3980e2d2ccb0314dd76ce948bff84449717a5db30295f60268e6847"
+        },
+        "parents": [
+          {
+            "action_class": "none",
+            "actor": {
+              "agent_id": "codex-auditor",
+              "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "valid_from": "2026-08-10T18:49:54.000Z"
+            },
+            "classification": {
+              "authority": "deterministic_route_schema",
+              "evidence_sha256": "1212121212121212121212121212121212121212121212121212121212121212",
+              "family_ids": [
+                "action_input",
+                "action_input.executable_instruction",
+                "information",
+                "information.fact"
+              ],
+              "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24"
+            },
+            "company_id": "hom",
+            "confidentiality": "internal",
+            "content_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+            "created_at": "2026-09-01T16:00:00.000Z",
+            "integrity": "untrusted",
+            "memory_id": "20000000-0000-4000-8000-000000000001",
+            "occurrence_id": "30000000-0000-4000-8000-000000000001",
+            "origin": {
+              "channel_identity_sha256": "1313131313131313131313131313131313131313131313131313131313131313",
+              "ingress_channel": "untrusted_external"
+            },
+            "parents": {
+              "origin_sha256s": []
+            },
+            "request": {
+              "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "receipt_id": "10000000-0000-4000-8000-000000000001"
+            },
+            "schema": "hom.aimos.memory-origin-binding/v1",
+            "scope": "global",
+            "session_id": "phase1-ob1-session",
+            "tool_action_event_id": null,
+            "binding_sha256": "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+          }
+        ]
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "integrity_elevation"
+      }
+    },
+    {
+      "id": "derivation-action-elevation",
+      "operation": "derivation",
+      "input": {
+        "child": {
+          "action_class": "inform",
+          "actor": {
+            "agent_id": "codex-auditor",
+            "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "valid_from": "2026-08-10T18:49:54.000Z"
+          },
+          "classification": {
+            "authority": "system_producer_schema",
+            "evidence_sha256": "1616161616161616161616161616161616161616161616161616161616161616",
+            "family_ids": [
+              "action_input",
+              "action_input.financial_value",
+              "derived",
+              "derived.summary"
+            ],
+            "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24"
+          },
+          "company_id": "hom",
+          "confidentiality": "confidential",
+          "content_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "created_at": "2026-09-01T16:01:00.000Z",
+          "integrity": "trusted",
+          "memory_id": "20000000-0000-4000-8000-000000000002",
+          "occurrence_id": "30000000-0000-4000-8000-000000000002",
+          "origin": {
+            "channel_identity_sha256": "9393939393939393939393939393939393939393939393939393939393939393",
+            "ingress_channel": "system_internal"
+          },
+          "parents": {
+            "origin_sha256s": [
+              "10dafd3b0067b9acc66cf99cc0a2c28a6c7f2360f9f5b7af3615af36342b5dbe"
+            ]
+          },
+          "request": {
+            "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "receipt_id": "10000000-0000-4000-8000-000000000001"
+          },
+          "schema": "hom.aimos.memory-origin-binding/v1",
+          "scope": "global",
+          "session_id": "phase1-ob1-session",
+          "tool_action_event_id": null,
+          "binding_sha256": "8e181c32566f3c089c8e9e25b1d01c7d0e388d6a8c1e2bbe640413ef65ff8a36"
+        },
+        "parents": [
+          {
+            "action_class": "none",
+            "actor": {
+              "agent_id": "codex-auditor",
+              "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "valid_from": "2026-08-10T18:49:54.000Z"
+            },
+            "classification": {
+              "authority": "deterministic_field_schema",
+              "evidence_sha256": "1717171717171717171717171717171717171717171717171717171717171717",
+              "family_ids": [
+                "action_input",
+                "action_input.financial_value"
+              ],
+              "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24"
+            },
+            "company_id": "hom",
+            "confidentiality": "confidential",
+            "content_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "created_at": "2026-09-01T16:02:00.000Z",
+            "integrity": "trusted",
+            "memory_id": "20000000-0000-4000-8000-000000000003",
+            "occurrence_id": "30000000-0000-4000-8000-000000000003",
+            "origin": {
+              "channel_identity_sha256": "1515151515151515151515151515151515151515151515151515151515151515",
+              "ingress_channel": "authenticated_user"
+            },
+            "parents": {
+              "origin_sha256s": []
+            },
+            "request": {
+              "mutation_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              "receipt_id": "10000000-0000-4000-8000-000000000001"
+            },
+            "schema": "hom.aimos.memory-origin-binding/v1",
+            "scope": "payment.create",
+            "session_id": "phase1-ob1-session",
+            "tool_action_event_id": "60000000-0000-4000-8000-000000000001",
+            "binding_sha256": "10dafd3b0067b9acc66cf99cc0a2c28a6c7f2360f9f5b7af3615af36342b5dbe"
+          }
+        ]
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "action_class_elevation"
+      }
+    },
+    {
+      "id": "elevation-correlated-corroborators",
+      "operation": "elevation",
+      "input": {
+        "schema": "hom.aimos.origin-elevation/v1",
+        "company_id": "hom",
+        "elevation_id": "40000000-0000-4000-8000-000000000001",
+        "value_sha256": "5151515151515151515151515151515151515151515151515151515151515151",
+        "family_id": "action_input.external_destination",
+        "action_scope": "payment.create",
+        "risk_class": "consequential",
+        "base_origin_sha256s": [
+          "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+        ],
+        "corroborators": [
+          {
+            "principal_id": "bank-registry",
+            "valid_from": "2026-09-01T15:00:00.000Z",
+            "administrative_domain_sha256": "2121212121212121212121212121212121212121212121212121212121212121",
+            "upstream_source_sha256": "3131313131313131313131313131313131313131313131313131313131313131",
+            "license_sha256": "4141414141414141414141414141414141414141414141414141414141414141"
+          },
+          {
+            "principal_id": "internal-registry",
+            "valid_from": "2026-09-01T15:00:00.000Z",
+            "administrative_domain_sha256": "2121212121212121212121212121212121212121212121212121212121212121",
+            "upstream_source_sha256": "3232323232323232323232323232323232323232323232323232323232323232",
+            "license_sha256": "4242424242424242424242424242424242424242424242424242424242424242"
+          }
+        ],
+        "threshold": 2,
+        "user_authorization_sha256": null,
+        "maximum_uses": 1,
+        "valid_from": "2026-09-01T16:00:00.000Z",
+        "valid_until": "2026-09-01T17:00:00.000Z",
+        "created_at": "2026-09-01T16:03:00.000Z"
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "corroborator_independence_invalid"
+      }
+    },
+    {
+      "id": "elevation-insufficient-corroborators",
+      "operation": "elevation",
+      "input": {
+        "schema": "hom.aimos.origin-elevation/v1",
+        "company_id": "hom",
+        "elevation_id": "40000000-0000-4000-8000-000000000001",
+        "value_sha256": "5151515151515151515151515151515151515151515151515151515151515151",
+        "family_id": "action_input.external_destination",
+        "action_scope": "payment.create",
+        "risk_class": "consequential",
+        "base_origin_sha256s": [
+          "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+        ],
+        "corroborators": [
+          {
+            "principal_id": "bank-registry",
+            "valid_from": "2026-09-01T15:00:00.000Z",
+            "administrative_domain_sha256": "2121212121212121212121212121212121212121212121212121212121212121",
+            "upstream_source_sha256": "3131313131313131313131313131313131313131313131313131313131313131",
+            "license_sha256": "4141414141414141414141414141414141414141414141414141414141414141"
+          }
+        ],
+        "threshold": 2,
+        "user_authorization_sha256": null,
+        "maximum_uses": 1,
+        "valid_from": "2026-09-01T16:00:00.000Z",
+        "valid_until": "2026-09-01T17:00:00.000Z",
+        "created_at": "2026-09-01T16:03:00.000Z"
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "elevation_authority_invalid"
+      }
+    },
+    {
+      "id": "verdict-untrusted-without-authority",
+      "operation": "action_verdict",
+      "input": {
+        "schema": "hom.aimos.action-origin-verdict/v1",
+        "company_id": "hom",
+        "verdict_id": "50000000-0000-4000-8000-000000000001",
+        "actor": {
+          "agent_id": "codex-auditor",
+          "valid_from": "2026-08-10T18:49:54.000Z",
+          "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "tool_name": "payment-create",
+        "action_scope": "payment.create",
+        "risk_class": "consequential",
+        "arguments_sha256": "6161616161616161616161616161616161616161616161616161616161616161",
+        "security_values": [
+          {
+            "value_sha256": "6262626262626262626262626262626262626262626262626262626262626262",
+            "family_ids": [
+              "action_input",
+              "action_input.external_destination"
+            ]
+          },
+          {
+            "value_sha256": "6363636363636363636363636363636363636363636363636363636363636363",
+            "family_ids": [
+              "action_input",
+              "action_input.financial_value"
+            ]
+          }
+        ],
+        "family_ids": [
+          "action_input",
+          "action_input.external_destination",
+          "action_input.financial_value"
+        ],
+        "input_origin_sha256s": [
+          "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+        ],
+        "untrusted_influence": true,
+        "elevation_sha256": null,
+        "user_authorization_sha256": null,
+        "decision": "ALLOW",
+        "failure_code": null,
+        "previous_verdict_sha256": null,
+        "created_at": "2026-09-01T16:04:00.000Z"
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "verdict_semantics_invalid"
+      }
+    },
+    {
+      "id": "verdict-deny-without-failure",
+      "operation": "action_verdict",
+      "input": {
+        "schema": "hom.aimos.action-origin-verdict/v1",
+        "company_id": "hom",
+        "verdict_id": "50000000-0000-4000-8000-000000000001",
+        "actor": {
+          "agent_id": "codex-auditor",
+          "valid_from": "2026-08-10T18:49:54.000Z",
+          "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "tool_name": "payment-create",
+        "action_scope": "payment.create",
+        "risk_class": "consequential",
+        "arguments_sha256": "6161616161616161616161616161616161616161616161616161616161616161",
+        "security_values": [
+          {
+            "value_sha256": "6262626262626262626262626262626262626262626262626262626262626262",
+            "family_ids": [
+              "action_input",
+              "action_input.external_destination"
+            ]
+          },
+          {
+            "value_sha256": "6363636363636363636363636363636363636363636363636363636363636363",
+            "family_ids": [
+              "action_input",
+              "action_input.financial_value"
+            ]
+          }
+        ],
+        "family_ids": [
+          "action_input",
+          "action_input.external_destination",
+          "action_input.financial_value"
+        ],
+        "input_origin_sha256s": [
+          "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+        ],
+        "untrusted_influence": true,
+        "elevation_sha256": "52c4b0e850d6006a8f5e2a2441c155953a7500089501d4d029079edd2d294b77",
+        "user_authorization_sha256": null,
+        "decision": "DENY",
+        "failure_code": null,
+        "previous_verdict_sha256": null,
+        "created_at": "2026-09-01T16:04:00.000Z"
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "verdict_semantics_invalid"
+      }
+    },
+    {
+      "id": "verdict-value-family-substitution",
+      "operation": "action_verdict",
+      "input": {
+        "schema": "hom.aimos.action-origin-verdict/v1",
+        "company_id": "hom",
+        "verdict_id": "50000000-0000-4000-8000-000000000001",
+        "actor": {
+          "agent_id": "codex-auditor",
+          "valid_from": "2026-08-10T18:49:54.000Z",
+          "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "tool_name": "payment-create",
+        "action_scope": "payment.create",
+        "risk_class": "consequential",
+        "arguments_sha256": "6161616161616161616161616161616161616161616161616161616161616161",
+        "security_values": [
+          {
+            "value_sha256": "6262626262626262626262626262626262626262626262626262626262626262",
+            "family_ids": [
+              "action_input",
+              "action_input.financial_value"
+            ]
+          },
+          {
+            "value_sha256": "6363636363636363636363636363636363636363636363636363636363636363",
+            "family_ids": [
+              "action_input",
+              "action_input.financial_value"
+            ]
+          }
+        ],
+        "family_ids": [
+          "action_input",
+          "action_input.external_destination",
+          "action_input.financial_value"
+        ],
+        "input_origin_sha256s": [
+          "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+        ],
+        "untrusted_influence": true,
+        "elevation_sha256": "52c4b0e850d6006a8f5e2a2441c155953a7500089501d4d029079edd2d294b77",
+        "user_authorization_sha256": null,
+        "decision": "ALLOW",
+        "failure_code": null,
+        "previous_verdict_sha256": null,
+        "created_at": "2026-09-01T16:04:00.000Z"
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "security_value_family_binding_invalid"
+      }
+    },
+    {
+      "id": "verdict-security-value-order",
+      "operation": "action_verdict",
+      "input": {
+        "schema": "hom.aimos.action-origin-verdict/v1",
+        "company_id": "hom",
+        "verdict_id": "50000000-0000-4000-8000-000000000001",
+        "actor": {
+          "agent_id": "codex-auditor",
+          "valid_from": "2026-08-10T18:49:54.000Z",
+          "cert_fingerprint_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "tool_name": "payment-create",
+        "action_scope": "payment.create",
+        "risk_class": "consequential",
+        "arguments_sha256": "6161616161616161616161616161616161616161616161616161616161616161",
+        "security_values": [
+          {
+            "value_sha256": "6363636363636363636363636363636363636363636363636363636363636363",
+            "family_ids": [
+              "action_input",
+              "action_input.financial_value"
+            ]
+          },
+          {
+            "value_sha256": "6262626262626262626262626262626262626262626262626262626262626262",
+            "family_ids": [
+              "action_input",
+              "action_input.external_destination"
+            ]
+          }
+        ],
+        "family_ids": [
+          "action_input",
+          "action_input.external_destination",
+          "action_input.financial_value"
+        ],
+        "input_origin_sha256s": [
+          "bd5c1fc01daf3dc3d71ffd55c086576b9e2c487aa683eb81277fcfff3cbefb98"
+        ],
+        "untrusted_influence": true,
+        "elevation_sha256": "52c4b0e850d6006a8f5e2a2441c155953a7500089501d4d029079edd2d294b77",
+        "user_authorization_sha256": null,
+        "decision": "ALLOW",
+        "failure_code": null,
+        "previous_verdict_sha256": null,
+        "created_at": "2026-09-01T16:04:00.000Z"
+      },
+      "expected": {
+        "valid": false,
+        "failure_code": "security_value_order_invalid"
+      }
+    }
+  ],
+  "vectors_root_sha256": "ebecfce05fe630dcfd8fa9724761601b4939f35bbbd8b01aa6b2245f580adc46",
+  "manifest_sha256": "112a6b69aa2e7218a1a7f5973cdab4710771dd0f654e5b43112add85c81054b1"
+}

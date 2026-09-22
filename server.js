@@ -2,13 +2,43 @@ import express from 'express';
 import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { randomUUID } from 'crypto';
-import { pool } from './db/connection.js';
+import { readFileSync } from 'node:fs';
+import { pool, agentPool, schedulerLockPool } from './db/connection.js';
+import { beginServingWork, beginServingDrain, finishServingDrain, getServingWorkState, cancelServingWork } from './services/runtime/serving-control.js';
 import statusRoutes from './routes/status.js';
 import { authGate } from './services/security/auth-gate.js';
 import { systemConfigStore } from './services/security/system-config-store.js';
 import { loadCredentialCache, reloadCredentialCache, peekCachedCredential } from './services/security/credential-cache.js';
+import { assertUniqueJsonMembers } from './services/security/protocol/canonical-json.js';
 
 const app = express();
+let listener = null;
+let shutdownPromise = null;
+let listenerClosed = false;
+const sockets = new Set();
+const responses = new Set();
+const DRAIN_WAIT_MS = 20_000;
+
+// Native ingress stops before parsing/authentication. Work already admitted
+// retains its original owners and DB access until they settle or the bounded
+// stop is explicitly recorded as indeterminate.
+app.use((req, res, next) => {
+  if (getServingWorkState().phase !== 'running') {
+    res.setHeader('Connection', 'close');
+    return res.status(503).json({ error: { code: 'runtime_draining' }, ready: false });
+  }
+  if (!backgroundReady && !['/', '/health', '/healthz'].includes(req.path)) {
+    res.setHeader('Retry-After', '1');
+    return res.status(503).json({ error: { code: 'runtime_initializing' }, ready: false });
+  }
+  const finish = beginServingWork('http_response');
+  responses.add(res);
+  let done = false;
+  const release = () => { if (!done) { done = true; responses.delete(res); finish(); } };
+  res.once('finish', release);
+  res.once('close', release);
+  next();
+});
 // AIMOS owns 9100. Reserved legacy ports are never part of this runtime.
 // Runtime configuration is ledger-backed; an environment override here would
 // reintroduce an unverified authority path before the ledger is even loaded.
@@ -27,7 +57,12 @@ let cr7BootRecoveryComplete = false;
 let schedulerStatus = Object.freeze({ ready: false, state: 'not_started', required_jobs: 5 });
 
 app.use(cors({ origin: /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/ }));
-app.use(express.json({ limit: '1mb' }));
+// Keep Express's native flat query parser; no qs extended/comma/prototype mode.
+app.set('query parser', 'simple');
+app.use(express.json({ limit: '1mb', verify(_req, _res, bytes, encoding) {
+  try { assertUniqueJsonMembers(new TextDecoder(encoding, { fatal: true }).decode(bytes)); }
+  catch (error) { error.status = 400; throw error; }
+} }));
 
 // ─── Request id — correlates client responses with server log lines ──────────
 // Assigned as early as possible so every downstream middleware, route, and the
@@ -168,7 +203,7 @@ function buildHealthPayload() {
   return {
     service: 'FORGE Memory Aimos',
     version: '1.0.0',
-    ready: backgroundReady && schedulerStatus.ready === true,
+    ready: getServingWorkState().phase === 'running' && backgroundReady && schedulerStatus.ready === true,
     bootError: backgroundBootError,
     readiness: {
       scheduler: schedulerStatus,
@@ -179,6 +214,7 @@ function buildHealthPayload() {
       database_name: DATABASE_NAME,
       server_port: PORT,
       benchmark_scratch: DATABASE_NAME.startsWith('aimos_benchmark_'),
+      lifecycle: getServingWorkState(),
     },
   };
 }
@@ -231,8 +267,34 @@ app.use((err, req, res, next) => {
 async function startBackgroundServices() {
   if (backgroundBootPromise) return backgroundBootPromise;
 
+  const finishBoot = beginServingWork('background_boot');
   backgroundBootPromise = (async () => {
     const companyId = 'hom';
+    // Readiness checks the required native deployment, never applies DDL or
+    // invokes installation. Source and SQL must agree before SAVE is ready.
+    for (const [file,name,args,executable] of [
+      ['atomic-save-origin.sql','ob3_native_save_input_ids','text,text,text,text,jsonb',true],
+      ['atomic-save-origin.sql','commit_memory_origin_binding_v2','jsonb,bytea,bytea,uuid,bytea,timestamptz,text,bytea,timestamptz,bytea,json',true],
+      ['signed-json-bytes.sql','signed_json_shape_v1','json,integer',false],
+      ['signed-json-bytes.sql','signed_json_bytes_commitment_v1','text,bytea',false],
+      ['signed-event-bytes.sql','ob2_verify_signed_event','uuid,text',false],
+      ['signed-event-bytes.sql','require_signed_event_bytes_v1','',false],
+      ['cognitive-ancestry.sql','verify_cognitive_ancestry_bridge_v1','uuid,bytea,bytea,bytea',false],
+      ['cognitive-ancestry.sql','apply_signed_cognitive_reweight','uuid,double precision,double precision,bytea,bytea',true],
+      ['cognitive-ancestry.sql','verify_cognitive_weight_chain','uuid',true],
+      ['request-target.sql','request_target_valid_v5','text',false],
+      ['request-target.sql','request_signature_message_v5','bytea,text,text,jsonb,text,bigint',false],
+    ]) {
+      const nativeSql=readFileSync(new URL('./db/'+file,import.meta.url),'utf8');
+      const definition=nativeSql.indexOf('CREATE OR REPLACE FUNCTION public.'+name+'(');
+      const bodyStart=nativeSql.indexOf('AS $function$',definition)+'AS $function$'.length;
+      const bodyEnd=nativeSql.indexOf('$function$;',bodyStart);
+      const row=(await pool.query(`SELECT prosrc,has_function_privilege('agent_runtime',oid,'EXECUTE') AS executable
+        FROM pg_proc WHERE oid=to_regprocedure($1)`,['public.'+name+'('+args+')'])).rows[0];
+      if (definition<0 || bodyEnd<bodyStart || row?.prosrc!==nativeSql.slice(bodyStart,bodyEnd) || row.executable!==executable) {
+        throw new Error('native_save_definition_not_deployed:'+name);
+      }
+    }
     const { ensureGovernanceReady } = await import('./services/orchestration/governance-resolver.js');
     const skillsRuntime = await import('./services/orchestration/skills-runtime.js');
     const { startScheduler, getSchedulerReadiness } = await import('./services/orchestration/scheduler.js');
@@ -271,6 +333,17 @@ async function startBackgroundServices() {
     const embeddingReadiness = await prewarmEmbeddingRuntime();
     console.log(`[embeddings] Runtime ready: ${embeddingReadiness.dimension}d in ${embeddingReadiness.runtime_ms}ms`);
 
+    // Freeze the completely verified recovery prefix before scheduler
+    // admission can append a new Housekeeper event. Starting the scheduler
+    // first creates a TOCTOU race between recovery-head verification and the
+    // guarded checkpoint append.
+    await checkpointCr7RecoveryAtBoot();
+    // Recall readiness includes the retained calibration stream. Verify it
+    // during boot so the first signed recall does not perform a cold full-
+    // history proof inside the request deadline.
+    const { getVerifiedCalibrationSnapshot } = await import('./services/retrieval/recall-calibrator.js');
+    const calibrationSnapshot = await getVerifiedCalibrationSnapshot(companyId);
+    console.log(`[calibration] Verified at boot: ${calibrationSnapshot.calibrationMutationHash}`);
     try {
       schedulerStatus = await startScheduler({ bootRecoveryComplete: cr7BootRecoveryComplete });
     } catch (error) {
@@ -279,11 +352,12 @@ async function startBackgroundServices() {
     }
 
     // ─── BOOT: run pending outcome scoring (don't wait for nightly dream) ─────
-    import('./services/agent-learning.js').then(({ scoreDueRecommendations }) => {
-      scoreDueRecommendations().then(r => {
+    const finishScoring = beginServingWork('boot_scoring');
+    import('./services/agent-learning.js').then(async ({ scoreDueRecommendations }) => {
+      await scoreDueRecommendations().then(r => {
         if (r?.scored?.length) console.log(`📊 Boot: scored ${r.scored.length} pending recommendations`);
       }).catch(() => {});
-    }).catch(() => {});
+    }).catch(() => {}).finally(finishScoring);
 
     // ─── BOOT INTEGRITY: auto-verify architecture + services on startup ────
     try {
@@ -296,48 +370,201 @@ async function startBackgroundServices() {
     // Readiness means the complete background boot has reached a terminal
     // state, including integrity inspection. Advertising ready before this
     // point lets a controlled restart terminate the process mid-audit.
-    backgroundReady = true;
+    backgroundReady = getServingWorkState().phase === 'running';
     backgroundBootError = null;
     console.log('🧩 Background services ready');
   })().catch((error) => {
     backgroundReady = false;
     backgroundBootError = error?.message || String(error);
     console.error('Background boot failed:', backgroundBootError);
-  });
+  }).finally(finishBoot);
 
   return backgroundBootPromise;
 }
 
+function cr7Metadata(event) {
+  if (event?.metadata && typeof event.metadata === 'object') return event.metadata;
+  try { return JSON.parse(event?.metadata || '{}'); } catch { return {}; }
+}
+
+function createCr7OpenReducer(createReducer, owners) {
+  const eventId = (event) => String(event?.id || event?.event_id || '');
+  const parentId = (event) => String(event?.parent_event_id || '');
+  const schemaId = (schema) => (event) => cr7Metadata(event).schema === schema;
+  const material = schemaId('hom.aimos.material-effect/v1');
+  const tool = schemaId('aimos.tool-action/v1');
+  const contextStart = schemaId('hom.aimos.tool-context/v1');
+  const contextTerminal = (event) => ['hom.aimos.model-context-result/v1',
+    'hom.aimos.model-context-terminal/v1'].includes(cr7Metadata(event).schema);
+  const saveStart = schemaId('hom.aimos.canonical-save-action-start/v2');
+  const run = schemaId('hom.aimos.agent-run-state/v1');
+  const session = schemaId('hom.aimos.session-lane-transition/v1');
+  const systemJob = schemaId('hom.aimos.system-job-run/v1');
+  const schedule = schemaId('hom.aimos.schedule/v1');
+  const definitions = [
+    {
+      name: 'material_effect', startOperations: ['material_effect_started'],
+      terminalOperations: ['material_effect_terminal'],
+      startId: (event) => material(event) ? cr7Metadata(event).action_id || event.key : null,
+      terminalId: (event) => material(event) ? cr7Metadata(event).action_id || event.key : null,
+      validate: owners.reconstructMaterialEffectTraces,
+    },
+    {
+      name: 'tool_action', startOperations: ['tool_execution_started'],
+      terminalOperations: ['tool_execution_terminal', 'tool_execution_succeeded',
+        'tool_execution_failed', 'tool_execution_indeterminate'],
+      startId: (event) => tool(event) ? eventId(event) : null,
+      terminalId: (event) => tool(event) ? cr7Metadata(event).tool_action_event_id : null,
+      validate: owners.reconstructToolActionTraces,
+    },
+    {
+      name: 'model_context', startOperations: ['tool_context_prepared'],
+      terminalOperations: ['model_context_completed', 'model_context_terminal'],
+      startId: (event) => contextStart(event) ? eventId(event) : null,
+      terminalId: (event) => contextTerminal(event)
+        ? cr7Metadata(event).context_event_id || parentId(event) : null,
+      validate: owners.reconstructModelContextTraces,
+    },
+    {
+      name: 'canonical_save_action', startOperations: ['canonical_save_action_started'],
+      terminalOperations: ['canonical_save_terminal', 'canonical_save_action_recovery_terminal'],
+      relatedOperations: ['canary_write_scan_passed', 'canary_write_retained_quarantine',
+        'security_content_decision'],
+      relatedParentId: parentId,
+      startId: (event) => saveStart(event) ? eventId(event) : null,
+      terminalId: (event) => {
+        const metadata = cr7Metadata(event);
+        if (event.operation === 'canonical_save_action_recovery_terminal') {
+          return metadata.start_event_id || parentId(event) || null;
+        }
+        const receipt = metadata.stages?.[1]?.evidence;
+        return receipt?.kind === 'verified_housekeeper_action' ? receipt.event_id || null : null;
+      },
+      validate: owners.reconstructCanonicalSaveActionTraces,
+    },
+    {
+      name: 'agent_run', startOperations: ['agent_run_started'],
+      terminalOperations: ['agent_run_terminal'], relatedOperations: ['agent_run_awaiting_approval'],
+      relatedParentId: parentId,
+      startId: (event) => run(event) ? cr7Metadata(event).run_id || event.key : null,
+      terminalId: (event) => run(event) ? cr7Metadata(event).run_id || event.key : null,
+      validate: owners.reconstructRunTraces,
+    },
+    {
+      name: 'session_lane', startOperations: ['session_lane_started'],
+      terminalOperations: ['session_lane_terminal'],
+      startId: (event) => session(event) ? `${cr7Metadata(event).session_key}:${cr7Metadata(event).run_id}` : null,
+      terminalId: (event) => session(event) ? `${cr7Metadata(event).session_key}:${cr7Metadata(event).run_id}` : null,
+      validate: owners.reconstructSessionLaneTraces,
+    },
+    {
+      name: 'system_job', startOperations: ['system_job_started'],
+      terminalOperations: ['system_job_terminal'],
+      startId: (event) => systemJob(event) ? cr7Metadata(event).run_id || event.key : null,
+      terminalId: (event) => systemJob(event) ? cr7Metadata(event).run_id || event.key : null,
+      validate: owners.reconstructSystemJobRuns,
+    },
+    {
+      name: 'schedule_run', startOperations: ['schedule_run_reserved'],
+      terminalOperations: ['schedule_run_completed', 'schedule_run_failed'],
+      startId: (event) => schedule(event) ? cr7Metadata(event).run_id || null : null,
+      terminalId: (event) => schedule(event) ? cr7Metadata(event).run_id || null : null,
+      validate: owners.reconstructDelegatedScheduleRuns,
+    },
+  ];
+  return createReducer(definitions.filter(definition => typeof definition.validate === 'function'));
+}
+
 async function reconcileCr7OpenActionsAtBoot() {
-  const { readVerifiedEventHistory } = await import('./services/observe/event-ledger.js');
+  const { readVerifiedRecoveryHistory, createVerifiedOpenEventReducer } = await import('./services/observe/event-ledger.js');
   const { materialEffectOwner, reconstructMaterialEffectTraces } = await import('./services/security/material-effect-owner.js');
-  const { reconcileOpenToolActions, reconstructToolActionTraces } = await import('./services/orchestration/tool-action-ledger.js');
+  const { reconcileOpenToolActions, reconstructToolActionTraces,
+    reconcileOpenModelContexts, reconstructModelContextTraces } = await import('./services/orchestration/tool-action-ledger.js');
   const { credentialLedger } = await import('./services/security/credential-ledger.js');
   const { reconcileOpenCanonicalSaveActions, reconstructCanonicalSaveActionTraces } = await import('./services/write/canonical-save-owner.js');
   const { reconcileOpenRuns, reconstructRunTraces } = await import('./services/orchestration/run-metadata.js');
   const { reconcileOpenSessionLanes, reconstructSessionLaneTraces } = await import('./services/orchestration/session-runner.js');
-  const events = await readVerifiedEventHistory(AIMOS_COMPANY_ID, { signerAgentId: 'housekeeper' });
-  const noOpen = () => Object.freeze({ scanned: events.length, reconciled: Object.freeze([]), remainingOpen: 0 });
-  const results = [];
-  results.push(['material_effect', reconstructMaterialEffectTraces(events).open.length
-    ? await materialEffectOwner.reconcileOpen() : noOpen()]);
-  results.push(['tool_action', reconstructToolActionTraces(events).open.length
-    ? await reconcileOpenToolActions() : noOpen()]);
+  const operations = [
+    'material_effect_started', 'material_effect_terminal',
+    'tool_execution_started', 'tool_execution_terminal', 'tool_execution_succeeded',
+    'tool_execution_failed', 'tool_execution_indeterminate',
+    'tool_context_prepared', 'model_context_completed', 'model_context_terminal',
+    'canonical_save_action_started', 'canonical_save_terminal',
+    'canonical_save_action_recovery_terminal', 'canary_write_scan_passed',
+    'canary_write_retained_quarantine', 'security_content_decision',
+    'agent_run_started', 'agent_run_awaiting_approval', 'agent_run_terminal',
+    'session_lane_started', 'session_lane_terminal',
+  ];
+  const reducerOwners = { reconstructMaterialEffectTraces, reconstructToolActionTraces,
+    reconstructModelContextTraces, reconstructCanonicalSaveActionTraces,
+    reconstructRunTraces, reconstructSessionLaneTraces };
+  const handlers = {
+    material_effect: readHistoryFn => materialEffectOwner.reconcileOpen({ historyFn:readHistoryFn }),
+    tool_action: readHistoryFn => reconcileOpenToolActions({ readHistoryFn }),
+    model_context: readHistoryFn => reconcileOpenModelContexts({ readHistoryFn }),
+    canonical_save_action: readHistoryFn => reconcileOpenCanonicalSaveActions({ readHistoryFn }),
+    agent_run: readHistoryFn => reconcileOpenRuns({ readHistoryFn }),
+    session_lane: readHistoryFn => reconcileOpenSessionLanes({ readHistoryFn }),
+  };
+  const counts = Object.fromEntries(Object.keys(handlers).map(name => [name,0]));
+  await readVerifiedRecoveryHistory(AIMOS_COMPANY_ID, {
+    signerAgentId: 'housekeeper', operations,
+    reducer: createCr7OpenReducer(createVerifiedOpenEventReducer, reducerOwners),
+    onOpenGroup: async (_rows,{family,readHistoryFn}) => {
+      const result=await handlers[family](readHistoryFn);
+      if(result.remainingOpen!==0)throw new Error('cr7_recovery_open_actions_remain:'+family+':'+result.remainingOpen);
+      counts[family]+=result.reconciled.length;
+    },
+  });
   const openCredentialUses = await credentialLedger.findOpenCredentialUses();
-  results.push(['credential_use', openCredentialUses.length
-    ? await credentialLedger.reconcileOpenCredentialUses() : noOpen()]);
-  results.push(['canonical_save_action', reconstructCanonicalSaveActionTraces(events).open.length
-    ? await reconcileOpenCanonicalSaveActions() : noOpen()]);
-  results.push(['agent_run', reconstructRunTraces(events).open.length
-    ? await reconcileOpenRuns() : noOpen()]);
-  results.push(['session_lane', reconstructSessionLaneTraces(events).open.length
-    ? await reconcileOpenSessionLanes() : noOpen()]);
-  for (const [family, result] of results) {
-    if (result.remainingOpen !== 0) throw new Error(`cr7_recovery_open_actions_remain:${family}:${result.remainingOpen}`);
+  if(openCredentialUses.length) {
+    const result=await credentialLedger.reconcileOpenCredentialUses();
+    if(result.remainingOpen!==0)throw new Error('cr7_recovery_open_actions_remain:credential_use:'+result.remainingOpen);
+    counts.credential_use=result.reconciled.length;
+  } else {
+    counts.credential_use=0;
   }
-  console.log('[BOOT] CR7 action recovery complete:', results.map(([family, result]) => (
-    `${family}=${result.reconciled.length}`
+  console.log('[BOOT] CR7 action recovery complete:', Object.entries(counts).map(([family, count]) => (
+    `${family}=${count}`
   )).join(' '));
+}
+
+async function checkpointCr7RecoveryAtBoot() {
+  const { readVerifiedRecoveryHistory, writeVerifiedRecoveryCheckpoint,
+    createVerifiedOpenEventReducer } = await import('./services/observe/event-ledger.js');
+  const { reconstructMaterialEffectTraces } = await import('./services/security/material-effect-owner.js');
+  const { reconstructToolActionTraces, reconstructModelContextTraces } = await import('./services/orchestration/tool-action-ledger.js');
+  const { reconstructCanonicalSaveActionTraces } = await import('./services/write/canonical-save-owner.js');
+  const { reconstructRunTraces } = await import('./services/orchestration/run-metadata.js');
+  const { reconstructSessionLaneTraces } = await import('./services/orchestration/session-runner.js');
+  const { reconstructSystemJobRuns, reconstructDelegatedScheduleRuns } = await import('./services/orchestration/scheduler.js');
+  const operations = [
+    'material_effect_started', 'material_effect_terminal',
+    'tool_execution_started', 'tool_execution_terminal', 'tool_execution_succeeded',
+    'tool_execution_failed', 'tool_execution_indeterminate',
+    'tool_context_prepared', 'model_context_completed', 'model_context_terminal',
+    'canonical_save_action_started', 'canonical_save_terminal',
+    'canonical_save_action_recovery_terminal', 'canary_write_scan_passed',
+    'canary_write_retained_quarantine', 'security_content_decision',
+    'agent_run_started', 'agent_run_awaiting_approval', 'agent_run_terminal',
+    'session_lane_started', 'session_lane_terminal',
+    'system_job_started', 'system_job_terminal',
+    'schedule_run_reserved', 'schedule_run_completed', 'schedule_run_failed',
+  ];
+  let remaining = 0;
+  const recovery = await readVerifiedRecoveryHistory(AIMOS_COMPANY_ID, {
+    signerAgentId: 'housekeeper', operations,
+    reducer: createCr7OpenReducer(createVerifiedOpenEventReducer, {
+      reconstructMaterialEffectTraces, reconstructToolActionTraces,
+      reconstructModelContextTraces, reconstructCanonicalSaveActionTraces,
+      reconstructRunTraces, reconstructSessionLaneTraces,
+      reconstructSystemJobRuns, reconstructDelegatedScheduleRuns,
+    }),
+    onOpenGroup: async () => { remaining += 1; },
+  });
+  if (remaining !== 0) throw new Error(`event_recovery_checkpoint_open_actions:${remaining}`);
+  const receipt = await writeVerifiedRecoveryCheckpoint(AIMOS_COMPANY_ID, recovery.summary);
+  console.log('[BOOT] verified recovery checkpoint:', receipt.existing ? 'current' : receipt.event_id);
 }
 
 async function startServer() {
@@ -358,24 +585,32 @@ async function startServer() {
   try {
     await loadCredentialCache();
   } catch (err) {
-    console.error('[BOOT] credentialCache loadAll failed — getCachedCredential returns null:', err?.message || String(err));
+    console.error('[BOOT] credentialCache load failed — server admission remains closed:', err?.message || String(err));
+    throw err;
   }
   // Reconstruct and close every retained orphan before accepting traffic.
   // Recovery appends INDETERMINATE terminals only; it never replays SAVE,
   // provider, tool, credential, file, process, run, response, or session work.
   await reconcileCr7OpenActionsAtBoot();
   cr7BootRecoveryComplete = true;
-  app.listen(PORT, '127.0.0.1', () => {
+  if (getServingWorkState().phase !== 'running') return;
+  listener = app.listen(PORT, '127.0.0.1', () => {
+    if (getServingWorkState().phase !== 'running') return;
     console.log(`🧠 FORGE Aimos running on 127.0.0.1:${PORT} (localhost only)`);
     // Warm heavy dependencies in the background so health/status can respond immediately.
     void startBackgroundServices();
   });
+  listener.on('connection', socket => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+  });
 }
 
+const finishServerBoot = beginServingWork('server_boot');
 startServer().catch((err) => {
   console.error('Failed to start server:', err.message);
   process.exit(1);
-});
+}).finally(finishServerBoot);
 
 // ─── UNCAUGHT EXCEPTION / REJECTION HANDLER ───────────────────────────────────
 // uncaughtException leaves the process in an unknown state → exit so the process
@@ -399,33 +634,82 @@ process.on('unhandledRejection', (reason) => {
   // Deliberately do NOT exit — see rationale above.
 });
 
-async function shutdown() {
-  try {
-    const { stopScheduler } = await import('./services/orchestration/scheduler.js');
-    stopScheduler();
-  } catch (error) {
-    console.warn('Shutdown warning:', error?.message || String(error));
-  }
-  // session-runner.js starts a conversation-session cleanup interval at module
-  // load (line 383) but nothing was clearing it on shutdown — the only genuine
-  // setInterval gap of defect 11 (the other three watchers already stop cleanly).
-  // Without this, the lingering interval keeps the event loop alive past SIGTERM.
-  try {
-    const { stopConversationSessionCleanup } = await import('./services/orchestration/session-runner.js');
-    stopConversationSessionCleanup();
-  } catch { /* already stopped */ }
-  await pool.end();
+function shutdown(signal) {
+  if (shutdownPromise) return shutdownPromise;
+  beginServingDrain();
+  const workAtSignal = getServingWorkState();
+  backgroundReady = false;
+  const startedAt = performance.now();
+  // The manager grants40s. This watchdog reports failure, never successful
+  // rollback, if even the terminal ledger or pool close cannot settle in30s.
+  const watchdog = setTimeout(() => {
+    console.error('[shutdown-indeterminate]', JSON.stringify({ signal, runtime: getServingWorkState(),
+      reason: 'shutdown_terminal_or_resource_close_deadline', durable_actions_replayed: false }));
+    process.exit(1);
+  }, 30_000);
+  shutdownPromise = (async () => {
+    if (listener) {
+      listener.close(() => { listenerClosed = true; });
+      listener.closeIdleConnections();
+    } else listenerClosed = true;
+    const scheduler = await import('./services/orchestration/scheduler.js');
+    scheduler.stopScheduler();
+    const sessions = await import('./services/orchestration/session-runner.js');
+    sessions.stopSessionAdmission();
+    const mcp = await import('./routes/aimos-mcp-streamable.js');
+    mcp.closeMcpStreamsForShutdown();
+    const { logEvent } = await import('./services/observe/event-ledger.js');
+    const start = await logEvent(AIMOS_COMPANY_ID, 'housekeeper', 'runtime_shutdown_started', String(process.pid), {
+      signal, pid: process.pid, deadline_ms: DRAIN_WAIT_MS, work_at_signal: workAtSignal,
+      reasoning: 'Managed shutdown stopped native request, session and scheduler admission before joining accepted work.',
+    }, null, { returnReceipt: true });
+    while (performance.now() - startedAt < DRAIN_WAIT_MS) {
+      if (!getServingWorkState().active && !scheduler.getSchedulerWorkState().activeJobs && listenerClosed) break;
+      const state = getServingWorkState();
+      if (state.active === (state.counts.http_response || 0) && !scheduler.getSchedulerWorkState().activeJobs) {
+        for (const res of responses) {
+          if (String(res.getHeader('Content-Type') || '').includes('text/event-stream') && !res.writableEnded) res.end();
+        }
+      }
+      if (performance.now() - startedAt >= 15_000) {
+        cancelServingWork();
+        scheduler.cancelSchedulerWork();
+      }
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    const remaining = getServingWorkState();
+    const jobs = scheduler.getSchedulerWorkState();
+    const drained = remaining.active === 0 && jobs.activeJobs === 0 && listenerClosed;
+    await logEvent(AIMOS_COMPANY_ID, 'housekeeper', 'runtime_shutdown_terminal', String(process.pid), {
+      signal, pid: process.pid, disposition: drained ? 'DRAINED' : 'INDETERMINATE',
+      remaining_work: remaining, remaining_jobs: jobs.activeJobs,
+      start_event_id: start.event_id, start_mutation_hash: start.mutation_hash,
+      reasoning: drained ? 'Accepted native owners settled before database closure.'
+        : 'The drain deadline expired; retained action starts remain for independent restart reconciliation. No rollback or successful completion is inferred.',
+    }, start.event_id);
+    if (!drained) {
+      listener?.closeAllConnections();
+      for (const socket of sockets) socket.destroy();
+      // In-flight owners may still hold transactions. Exiting closes their
+      // connections; next boot reconstructs commit truth, never replays effects.
+      process.exitCode = 1;
+      return;
+    }
+    finishServingDrain();
+    await Promise.all([schedulerLockPool.end(), agentPool.end(), pool.end()]);
+    process.exitCode = 0;
+  })().catch(error => {
+    console.error('[shutdown-indeterminate]', error?.stack || error);
+    process.exitCode = 1;
+  }).finally(() => {
+    clearTimeout(watchdog);
+    process.exit(process.exitCode || 0);
+  });
+  return shutdownPromise;
 }
 
-process.on('SIGINT', async () => {
-  await shutdown();
-  process.exit(0);
-});
-
-process.on('SIGTERM', async () => {
-  await shutdown();
-  process.exit(0);
-});
+process.on('SIGINT', () => { void shutdown('SIGINT'); });
+process.on('SIGTERM', () => { void shutdown('SIGTERM'); });
 
 // ─── SIGHUP — config reload (Unix pattern: nginx/apache/synapse) ───────────────
 // set-system-config.js sends SIGHUP after a delegation commit to
@@ -434,6 +718,9 @@ process.on('SIGTERM', async () => {
 // last-known-good values — the server does NOT silently shadow. Operator can
 // diagnose via /status.
 process.on('SIGHUP', async () => {
+  if (getServingWorkState().phase !== 'running') return;
+  const finishReload = beginServingWork('configuration_reload');
+  try {
   console.log('[SIGHUP] received — reloading systemConfigStore + credentialCache from signed authority');
   try {
     await systemConfigStore.reload();
@@ -445,6 +732,7 @@ process.on('SIGHUP', async () => {
     await reloadCredentialCache();
     console.log('[SIGHUP] credentialCache reloaded');
   } catch (err) {
-    console.error('[SIGHUP] credentialCache reload failed — keeping last-known-good values:', err?.message || String(err));
+    console.error('[SIGHUP] credentialCache reload published explicit unavailable state for affected slots:', err?.message || String(err));
   }
+  } finally { finishReload(); }
 });

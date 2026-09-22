@@ -89,6 +89,7 @@ export async function extractTemporalMarkers(text, opts = {}) {
       prompt,
       provider: opts.provider,
       model: opts.model,
+      useContext: opts.useContext,
       providerConfigKeys: ['AIMOS_INGEST_PROVIDER', 'LLM_PROVIDER'],
       modelConfigKeys: ['AIMOS_INGEST_MODEL', 'LLM_MODEL']
     });

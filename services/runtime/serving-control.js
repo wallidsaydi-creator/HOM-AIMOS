@@ -20,6 +20,38 @@
 // schedulers/predictors without the paper-backed validation set.
 // ─────────────────────────────────────────────────────────────────────────────
 
+// Native process work ownership. This is operational lifecycle accounting,
+// independent of the paper-derived diagnostic formulas below. Producers call
+// begin/finish directly; no route proxy, callback wrapper or signing authority.
+const servingWork = new Map();
+let servingPhase = 'running';
+const servingCancellation = new AbortController();
+export function getServingAbortSignal() { return servingCancellation.signal; }
+export function cancelServingWork() {
+  servingCancellation.abort(new DOMException('Runtime drain deadline exceeded', 'AbortError'));
+}
+export function beginServingWork(kind) {
+  if (servingPhase === 'stopped') throw new Error('runtime_stopped');
+  const token = Symbol(kind);
+  servingWork.set(token, kind);
+  let finished = false;
+  return () => {
+    if (finished) throw new Error('runtime_work_double_finish');
+    finished = true;
+    servingWork.delete(token);
+  };
+}
+export function beginServingDrain() { if (servingPhase === 'running') servingPhase = 'draining'; }
+export function finishServingDrain() {
+  if (servingWork.size) throw new Error('runtime_work_not_drained');
+  servingPhase = 'stopped';
+}
+export function getServingWorkState() {
+  const counts = {};
+  for (const kind of servingWork.values()) counts[kind] = (counts[kind] || 0) + 1;
+  return { phase: servingPhase, active: servingWork.size, counts };
+}
+
 export const NIYAMA_SOURCE = 'Niyama: Breaking the Silos of LLM Inference Serving';
 export const KEYED_PREFETCH_SOURCE = 'Low-Latency Stateful Stream Processing through Timely and Accurate Prefetching';
 export const TOKENSCALE_SOURCE = 'TokenScale: Timely and Accurate Autoscaling for Disaggregated LLM Serving with Token Velocity';

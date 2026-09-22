@@ -308,6 +308,46 @@ test('streamable MCP SAVE verifies the exact signed nested intent', () => {
   assert.equal(verifyRecallEvidenceRow(ambiguous).reason, 'signed_save_intent_missing_or_ambiguous');
 });
 
+test('legacy MCP SAVE retains its exact nested derivation input declaration', () => {
+  const sourceMemoryIds = [
+    '11111111-1111-4111-8111-111111111111',
+    '22222222-2222-4222-8222-222222222222',
+  ];
+  const intent = {
+    key: 'proof:legacy-mcp:origin-inputs',
+    value: 'This retained MCP memory binds both declared derivation inputs without dropping their ancestry.',
+    scope: 'private',
+    memory_type: 'episodic',
+    clearance_level: 12,
+    source_memory_ids: sourceMemoryIds,
+  };
+  const outerBody = { name: 'aimos_save', arguments: intent };
+  const { row } = fixture(3, {
+    outerBody,
+    signedPath: '/aimos/mcp/tools/call',
+    intentValue: intent.value,
+  });
+  row.live_key = intent.key;
+  row.live_value = intent.value;
+  row.live_scope = intent.scope;
+  row.live_memory_type = intent.memory_type;
+  row.live_clearance_level = intent.clearance_level;
+  row.live_data_class = 'restricted';
+  row.live_source = 'agent';
+  row.live_content_hash = computeLiveRowContentHash({
+    key: row.live_key,
+    value: row.live_value,
+    scope: row.live_scope,
+    memory_type: row.live_memory_type,
+    clearance_level: row.live_clearance_level,
+    data_class: row.live_data_class,
+    source: row.live_source,
+  });
+  row.snapshot_live_content_hash = row.live_content_hash;
+  assert.equal(verifyRecallEvidenceRow(row).valid, true);
+  assert.deepEqual(outerBody.arguments.source_memory_ids, sourceMemoryIds);
+});
+
 test('REST SAVE reconstructs structured object and array values without weakening exact strings', () => {
   for (const intentValue of [
     { summary: 'signed structured evidence', evidence: { marker: 'SECRET-3810AEFF' } },

@@ -16,6 +16,7 @@ const RETIRED_EFFECTS = Object.freeze([
   ['c3568c1268fa0ba32cb4074146e8b544eb2385aad34d863befee0df9e2e21894', 'unowned_connect_identity_directory_write_removed'],
   ['3aa427cd10133826dd0cf96a2de660291ab7cd0b75c4c1cbe7dc251da7920e93', 'raw_private_key_copy_removed'],
   ['48aee47955c346dca8210ce718787a22141b4eeeb694673aac475eafdec75da3', 'raw_private_key_copy_chmod_removed'],
+  ['ffd261f4353cb23f01b8cdf58ba482095fb6dcfe30f325ddabd4676a4574b931', 'duplicate_scheming_provider_transport_removed'],
 ]);
 
 const SOURCE_FILES = Object.freeze([
@@ -49,7 +50,7 @@ export function proveCr7R5MaterialEffectAudit() {
   ));
   const open = current.filter((effect) => effect.ownership_status === 'OPEN_UNRECONCILED');
   assert(open.length === 0, `open_effects:${open.length}`);
-  assert(current.length === 63, `current_effect_count:${current.length}`);
+  assert(current.length === 62, `current_effect_count:${current.length}`);
   assert(current.length + RETIRED_EFFECTS.length === INITIAL_R5_EFFECT_COUNT, 'initial_current_retired_partition');
 
   const owner = read('services/security/material-effect-owner.js');
@@ -75,7 +76,10 @@ export function proveCr7R5MaterialEffectAudit() {
   assert((provider.match(/materialEffectOwner\.finish\(/g) || []).length >= 6, 'provider_terminals_incomplete');
 
   const mcp = read('routes/mcp.js');
-  assert(/operation: 'mcp_remote_call'/.test(mcp) && /assertSafeUrl[\s\S]*fetchWithTimeout/.test(mcp), 'mcp_owner_missing');
+  const http = read('services/orchestration/http.js');
+  assert(/operation: 'mcp_remote_call'/.test(mcp) && /destinationPolicy: 'public'/.test(mcp), 'mcp_owner_missing');
+  assert(/lookup: publicHttpLookup/.test(http) && /addresses\.some/.test(http)
+    && /http_destination_redirect_forbidden/.test(http), 'mcp_dial_authority_missing');
   const integrationRoute = read('routes/integrations.js');
   assert(!/execFile\s*\(\s*['"]osascript/.test(integrationRoute), 'duplicate_route_applescript_present');
   const integration = read('services/integrations/integration-tools.js');

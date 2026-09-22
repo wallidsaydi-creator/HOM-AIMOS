@@ -6,9 +6,9 @@ import { proveCr7R7AggregateAudit } from '../../scripts/verification/prove-cr7-r
 test('R7 independently aggregates R0-R6 without erasing historical roots', () => {
   const proof = proveCr7R7AggregateAudit();
   assert.equal(proof.aggregate_static_verdict, 'PASSED');
-  assert.equal(proof.current_effect_count, 104);
+  assert.equal(proof.current_effect_count, 103);
   assert.equal(proof.current_open_effect_count, 0);
-  assert.equal(proof.recovery_family_count, 6);
+  assert.equal(proof.recovery_family_count, 7);
   assert.equal(Object.keys(proof.historical_roots_preserved).length, 9);
   assert.equal(Object.keys(proof.current_roots).length, 9);
   assert.match(proof.aggregate_audit_root_sha256, /^[0-9a-f]{64}$/);

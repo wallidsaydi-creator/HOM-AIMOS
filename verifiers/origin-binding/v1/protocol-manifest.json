@@ -1,0 +1,176 @@
+{
+  "schema": "hom.aimos.origin-binding-protocol-manifest/v1",
+  "version": 1,
+  "status": "ob1_protocol_frozen",
+  "canonicalization": "hom-aimos/canonical-json/v1-safe-integers",
+  "hash": "sha256",
+  "signature": "ed25519",
+  "schemas": {
+    "family_profile": "hom.aimos.origin-family-profile/v1",
+    "memory_binding": "hom.aimos.memory-origin-binding/v1",
+    "elevation": "hom.aimos.origin-elevation/v1",
+    "action_verdict": "hom.aimos.action-origin-verdict/v1"
+  },
+  "domains_hex": {
+    "family_profile": "686f6d2e61696d6f732e6f726967696e2d66616d696c792d70726f66696c652f763100",
+    "memory_binding": "686f6d2e61696d6f732e6d656d6f72792d6f726967696e2d62696e64696e672f763100",
+    "elevation": "686f6d2e61696d6f732e6f726967696e2d656c65766174696f6e2f763100",
+    "action_verdict": "686f6d2e61696d6f732e616374696f6e2d6f726967696e2d766572646963742f763100"
+  },
+  "limits": {
+    "maximum_body_bytes": 1048576,
+    "maximum_family_count": 64,
+    "maximum_parent_count": 64,
+    "maximum_corroborator_count": 16,
+    "maximum_identifier_bytes": 200
+  },
+  "integrity_order": [
+    "untrusted",
+    "agent",
+    "trusted"
+  ],
+  "confidentiality_order": [
+    "public",
+    "internal",
+    "confidential",
+    "restricted"
+  ],
+  "action_class_order": [
+    "none",
+    "inform",
+    "act"
+  ],
+  "risk_classes": [
+    "non_consequential",
+    "consequential",
+    "high_impact"
+  ],
+  "ingress_channels": [
+    "untrusted_external",
+    "agent_self",
+    "authenticated_agent",
+    "housekeeper_system",
+    "authenticated_tool",
+    "authenticated_user",
+    "system_internal"
+  ],
+  "classification_authorities": [
+    "deterministic_route_schema",
+    "deterministic_field_schema",
+    "authenticated_tool_schema",
+    "system_producer_schema",
+    "trusted_monitor_classifier",
+    "legacy_successor_review"
+  ],
+  "family_action_policies": [
+    "inform_only",
+    "exact_origin_verdict",
+    "exact_user_or_provider",
+    "exact_configuration_owner",
+    "inherit_parents",
+    "deny_action"
+  ],
+  "action_decisions": [
+    "ALLOW",
+    "DENY",
+    "INDETERMINATE"
+  ],
+  "action_failure_codes": [
+    "origin_missing",
+    "origin_invalid",
+    "family_missing",
+    "family_policy_unsatisfied",
+    "input_attribution_indeterminate",
+    "untrusted_influence_unlicensed",
+    "corroboration_insufficient",
+    "corroboration_not_independent",
+    "user_authorization_missing",
+    "user_authorization_invalid",
+    "user_authorization_replayed",
+    "action_substitution",
+    "scope_invalid",
+    "identity_epoch_invalid",
+    "evidence_expired_or_revoked"
+  ],
+  "protocol_failure_codes": [
+    "body_invalid",
+    "body_size_invalid",
+    "body_number_invalid",
+    "body_depth_invalid",
+    "schema_invalid",
+    "shape_invalid",
+    "identifier_invalid",
+    "uuid_invalid",
+    "sha256_invalid",
+    "timestamp_invalid",
+    "timestamp_order_invalid",
+    "integer_invalid",
+    "enum_invalid",
+    "family_profile_invalid",
+    "family_profile_hash_invalid",
+    "family_id_invalid",
+    "family_parent_invalid",
+    "family_cycle",
+    "family_order_invalid",
+    "family_duplicate",
+    "family_count_invalid",
+    "family_closure_invalid",
+    "family_confidentiality_floor_invalid",
+    "classification_authority_invalid",
+    "parent_order_invalid",
+    "parent_duplicate",
+    "parent_count_invalid",
+    "parent_binding_invalid",
+    "confidentiality_downgrade",
+    "integrity_elevation",
+    "action_class_elevation",
+    "channel_integrity_invalid",
+    "integrity_action_class_invalid",
+    "corroborator_shape_invalid",
+    "corroborator_order_invalid",
+    "corroborator_duplicate",
+    "corroborator_count_invalid",
+    "corroborator_independence_invalid",
+    "elevation_authority_invalid",
+    "security_value_shape_invalid",
+    "security_value_order_invalid",
+    "security_value_duplicate",
+    "security_value_family_binding_invalid",
+    "verdict_semantics_invalid",
+    "failure_code_invalid"
+  ],
+  "family_profile": {
+    "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24",
+    "family_count": 30,
+    "file_sha256": "c783a7b7c1d5d269e058dd361600592b8db36c5289529b8f57a08bda3ad5ad63"
+  },
+  "vectors": {
+    "intended_n": 25,
+    "valid_n": 6,
+    "invalid_n": 19,
+    "vectors_root_sha256": "ebecfce05fe630dcfd8fa9724761601b4939f35bbbd8b01aa6b2245f580adc46",
+    "manifest_sha256": "112a6b69aa2e7218a1a7f5973cdab4710771dd0f654e5b43112add85c81054b1",
+    "file_sha256": "755d3b65b213a5c5235255559cd1c5926453a6e33253cd63f30701e1cfd33e76"
+  },
+  "source_census": {
+    "direct_memory_read_file_count": 77,
+    "direct_memory_read_site_count": 243,
+    "model_or_action_influencing_site_count": 90,
+    "census_sha256": "f2b10c2ce0fb4d8731d54572c2e4f80032530f352ad985441cf3f63327f7748c",
+    "file_sha256": "23a540432cda1c312d786542081199cedc6a7395e9eb7c9052f880aff662ea9d"
+  },
+  "source_file_count": 481,
+  "source_root_sha256": "c0f78112d06bd351bea736c868e5f57352f3f2e2eec39a052eacb6c39238af5f",
+  "source_manifest": {
+    "schema": "hom.aimos.origin-binding-source-manifest/v1",
+    "manifest_sha256": "93fc7391a5134b4b07a6450e11e3ca89cc69b79e258f778aa09b8d2f423befab",
+    "file_sha256": "a93c0e7fbf50f4189936778541525f68cce82aa81f8f39fc136d00f4dba95a7d"
+  },
+  "production_runtime_importers": [],
+  "database_mutation": false,
+  "runtime_activation": false,
+  "memory_write": false,
+  "ob1_closed": true,
+  "next_required_owner": "OB-2_ATOMIC_ORIGIN_FAMILY_LEDGER",
+  "protocol_root_sha256": "7c9b7c56d3006a189f85e4326bd3b375f5eb521eeae5b7720d0ebba71894ece8"
+}

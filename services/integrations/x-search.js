@@ -4,6 +4,7 @@
 // ────────────────────────────────────────────────────────────────────────────────
 import { randomUUID } from 'node:crypto';
 
+import { performance } from 'node:perf_hooks';
 import { fetchWithTimeout } from '../orchestration/http.js';
 import { checkoutCachedCredential, peekCachedCredential } from '../security/credential-cache.js';
 import { credentialLedger, credentialUseEvidenceHash } from '../security/credential-ledger.js';
@@ -41,7 +42,7 @@ function toInt(value, fallback) {
   return fallback;
 }
 
-async function mintBearerFromKeySecret(useContext = {}) {
+async function mintBearerFromKeySecret(useContext = {}, deadlineAt = useContext.deadlineAt) {
   if (!peekCachedCredential('x_api_key') || !peekCachedCredential('x_api_secret')) return null;
 
   for (const base of X_API_BASES) {
@@ -84,6 +85,7 @@ async function mintBearerFromKeySecret(useContext = {}) {
     }
 
     let response;
+    let data;
     try {
       const basic = Buffer.from(`${key.value}:${secret.value}`).toString('base64');
       response = await fetchWithTimeout(`${base}/oauth2/token`, {
@@ -92,9 +94,16 @@ async function mintBearerFromKeySecret(useContext = {}) {
           Authorization: `Basic ${basic}`,
           'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
         },
-        body: requestBody
-      }, X_REQUEST_TIMEOUT_MS);
-    } catch (error) {
+        body: requestBody,
+      signal: useContext?.signal,
+      deadlineAt,
+      destinationPolicy: 'public',
+    }, X_REQUEST_TIMEOUT_MS);
+      data = await response.json();
+      if (response.ok && (typeof data?.access_token !== 'string' || !data.access_token)) {
+        throw new Error('x_oauth_response_invalid');
+      }
+  } catch (error) {
       const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
         credentialLedger.finalizeCredentialUse({
           reservation,
@@ -106,10 +115,12 @@ async function mintBearerFromKeySecret(useContext = {}) {
       )));
       const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
       if (terminalFailure) throw terminalFailure.reason;
-      continue;
-    }
+      throw error;
+    } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
+  }
 
-    const data = await response.json().catch(() => ({}));
+
     const responseSucceeded = response.ok && Boolean(data.access_token);
     const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
       credentialLedger.finalizeCredentialUse({
@@ -127,7 +138,7 @@ async function mintBearerFromKeySecret(useContext = {}) {
     const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
     if (terminalFailure) throw terminalFailure.reason;
 
-    if (!responseSucceeded) continue;
+    if (!responseSucceeded) throw new Error(`X token request rejected (${response.status})`);
     cachedBearerFromKeys = Object.freeze({
       value: data.access_token,
       credentials: Object.freeze([key, secret]),
@@ -137,20 +148,21 @@ async function mintBearerFromKeySecret(useContext = {}) {
   return null;
 }
 
-async function resolveBearerAuthorization(useContext = {}) {
+async function resolveBearerAuthorization(useContext = {}, deadlineAt = useContext.deadlineAt) {
   if (peekCachedCredential('x_bearer_token')) {
     const credential = checkoutCachedCredential('x_bearer_token');
     if (credential) return { value: credential.value, credentials: [credential] };
   }
-  return currentCachedDerivedBearer() || mintBearerFromKeySecret(useContext);
+  return currentCachedDerivedBearer() || mintBearerFromKeySecret(useContext, deadlineAt);
 }
 
 export async function xSearchRecent({ query, maxResults = 10, useContext = {} }) {
+  const deadlineAt = Math.min(useContext.deadlineAt ?? Infinity, performance.now() + X_REQUEST_TIMEOUT_MS);
   const capped = Math.min(Math.max(toInt(maxResults, 10), 10), 100);
   const q = String(query || '').trim();
   if (!q) throw new Error('query is required');
 
-  let authorization = await resolveBearerAuthorization(useContext);
+  let authorization = await resolveBearerAuthorization(useContext, deadlineAt);
   if (!authorization) {
     throw new Error('X_BEARER_TOKEN is missing (and X key/secret fallback unavailable)');
   }
@@ -203,13 +215,20 @@ export async function xSearchRecent({ query, maxResults = 10, useContext = {} })
     }
 
     let response;
-    try {
+    let responseText;
+    let data = null;
+  try {
       response = await fetchWithTimeout(url, {
         headers: {
           Authorization: `Bearer ${authorization.value}`
-        }
-      }, X_REQUEST_TIMEOUT_MS);
-    } catch (error) {
+        },
+      signal: useContext?.signal,
+      deadlineAt,
+      destinationPolicy: 'public',
+    }, X_REQUEST_TIMEOUT_MS);
+      responseText = await response.text();
+      if (response.ok) data = JSON.parse(responseText);
+  } catch (error) {
       const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
         credentialLedger.finalizeCredentialUse({
           reservation,
@@ -222,15 +241,12 @@ export async function xSearchRecent({ query, maxResults = 10, useContext = {} })
       const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
       if (terminalFailure) throw terminalFailure.reason;
       lastError = error?.message || String(error);
-      continue;
-    }
+      throw error;
+    } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
+  }
 
-    const responseText = await response.text().catch(() => '');
-    let data = null;
-    if (response.ok) {
-      try { data = JSON.parse(responseText); }
-      catch (error) { lastError = error?.message || String(error); }
-    }
+
     const responseSucceeded = response.ok && Boolean(data);
     const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
       credentialLedger.finalizeCredentialUse({
@@ -249,7 +265,7 @@ export async function xSearchRecent({ query, maxResults = 10, useContext = {} })
     if (terminalFailure) throw terminalFailure.reason;
 
     if (response.status === 401 && !peekCachedCredential('x_bearer_token')) {
-      const reminted = await mintBearerFromKeySecret(useContext);
+      const reminted = await mintBearerFromKeySecret(useContext, deadlineAt);
       if (reminted) {
         authorization = reminted;
         continue;

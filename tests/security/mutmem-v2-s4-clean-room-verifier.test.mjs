@@ -87,7 +87,9 @@ test('V2-S4 Python verifier has no AIMOS runtime, authority, network, or environ
     'hashlib',
     'json',
     'math',
+    're',
     'struct',
+    'urllib',
     'uuid',
     'dataclasses',
     'datetime',
@@ -95,8 +97,9 @@ test('V2-S4 Python verifier has no AIMOS runtime, authority, network, or environ
     'cryptography',
     'cryptography',
   ]);
+  assert.match(owner, /^from urllib\.parse import unquote_to_bytes$/m);
   assert.doesNotMatch(
-    owner,
+    owner.replace(/^from urllib\.parse import unquote_to_bytes\r?\n/m, ''),
     /process\.env|os\.environ|subprocess|socket|requests|urllib|services\/|routes\/|db\/|Keychain|private[_ -]?key/i,
   );
   assert.doesNotMatch(cli, /process\.env|os\.environ|subprocess|socket|requests|urllib/);

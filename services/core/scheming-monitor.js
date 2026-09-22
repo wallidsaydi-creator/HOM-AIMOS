@@ -31,9 +31,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
-import { systemConfigStore } from '../security/system-config-store.js';
-import { fetchWithTimeout } from '../orchestration/http.js';
-import { materialEffectOwner } from '../security/material-effect-owner.js';
+import { runProvider } from './providers.js';
 
 const COMPANY = 'hom';
 
@@ -116,6 +114,7 @@ export function buildAntiPretendTrajectoryDiagnostics(events = []) {
 }
 
 export async function auditTrajectory(agentId, trajectoryEvents, options = {}) {
+  const inheritedRuntimeInputs = Boolean(options.nativeToolInputs);
   const observableTrace = trajectoryEvents
     .filter(e => ['user_message', 'tool_call', 'tool_response', 'agent_response'].includes(e.type))
     .map(e => `[${e.type}] ${truncate(e.content, 500)}`)
@@ -157,10 +156,11 @@ export async function auditTrajectory(agentId, trajectoryEvents, options = {}) {
       ts: new Date().toISOString()
     }),
     memory_type: 'event_log',
-    scope: 'global',
-    clearance_level: 7,
+    scope: inheritedRuntimeInputs ? 'private' : 'global',
+    clearance_level: inheritedRuntimeInputs ? 12 : 7,
+    data_class: inheritedRuntimeInputs ? 'restricted' : 'confidential',
     source: 'scheming-monitor',
-  });
+  }, { nativeToolInputs: options.nativeToolInputs || null });
 
   return { score, warning_signs: warningSigns, reasoning, self_preservation: selfPreservation, anti_pretend: antiPretend, alert: score >= 7 };
 }
@@ -234,65 +234,25 @@ export function detectSelfPreservationSignals(events = []) {
 }
 
 async function callScoringLLM(prompt, options) {
-  // Node 18+ has global fetch; the old dynamic import of an uninstalled package
-  // was never a dependency and this path is live (imported by agent-runner.js).
-  // Route through fetchWithTimeout so the call is bounded (30s deadline) instead
-  // of hanging on an unresponsive Ollama.
-  const baseUrl = systemConfigStore.readConfigString('OLLAMA_BASE_URL') || 'http://localhost:11434';
-  const model = options.model || systemConfigStore.readConfigString('OLLAMA_MODEL') || 'llama3.2';
-
-  const effect = await materialEffectOwner.begin({
-    kind: 'external',
-    operation: 'scheming_monitor_scoring',
-    targetIdentifier: `${baseUrl}/api/generate`,
-    inputProjection: { model, prompt, stream: false, format: 'json' },
-    subjectAgentId: options?.executionContext?.actorAgentId || 'housekeeper',
-    authority: options?.executionContext || null,
-    parentEventId: options?.executionContext?.autonomousActionEventId
-      || options?.executionContext?.requestAdmissionEventId
-      || null,
+  const provider = String(options.provider || '').trim().toLowerCase();
+  const model = String(options.model || '').trim();
+  if (!provider || !model) throw new Error('scheming_monitor_model_selection_required');
+  return runProvider({
+    provider,
+    model,
+    userPrompt: prompt,
+    responseSchema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['score', 'warning_signs', 'reasoning'],
+      properties: {
+        score: { type: 'integer', minimum: 1, maximum: 10 },
+        warning_signs: { type: 'array', items: { type: 'string' } },
+        reasoning: { type: 'string' },
+      },
+    },
+    useContext: options.executionContext || {},
   });
-  let terminalCommitted = false;
-  try {
-    const res = await fetchWithTimeout(`${baseUrl}/api/generate`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, prompt, stream: false, format: 'json' })
-    });
-    if (!res.ok) {
-      await materialEffectOwner.finish({
-        action: effect,
-        disposition: 'FAILED',
-        resultProjection: { status: res.status },
-        resultClass: 'scoring_provider_rejected',
-      });
-      terminalCommitted = true;
-      throw new Error(`Scoring LLM returned HTTP ${res.status}`);
-    }
-    const data = await res.json();
-    await materialEffectOwner.finish({
-      action: effect,
-      disposition: 'SUCCEEDED',
-      resultProjection: { status: res.status, response: data.response },
-      resultClass: 'scoring_provider_response',
-    });
-    terminalCommitted = true;
-    return data.response;
-  } catch (error) {
-    if (!terminalCommitted) {
-      try {
-        await materialEffectOwner.finish({
-          action: effect,
-          disposition: 'INDETERMINATE',
-          resultProjection: { error_class: error?.name || 'scoring_provider_error' },
-          resultClass: 'scoring_provider_completion_not_proven',
-        });
-      } catch (terminalError) {
-        error.materialEffectTerminalError = terminalError?.message || String(terminalError);
-      }
-    }
-    throw error;
-  }
 }
 
 function truncate(str, max) {

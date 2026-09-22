@@ -1,6 +1,7 @@
 /**
- * TRUST SCORE — WEIGHTED FORMULA FOR MEMORY RELIABILITY
- * Sources: PageRank (authority scoring), Aladdin (credit attribution)
+ * RANKING SUPPORT — native usage/reference/reported-usefulness heuristic.
+ * Historical API name `trust_score` is retained for compatibility; this is
+ * neither calibrated correctness nor permission/corroboration authority.
  * Additive Batch 6/7 authority: ReAlign (reasoning-guided alignment).
  * This service exposes usage-outcome alignment diagnostics only. It does not
  * implement ReAlign KL distribution alignment, contrastive retraining, or
@@ -10,7 +11,9 @@
  *                + 0.25 * cross_reference_count_normalized
  *                + 0.25 * credit_attribution_score
  *
- * Range: 0-1 (higher = more trustworthy)
+ * Range: 0-1 (higher ranking support, not proven trustworthiness).
+ * AUD-021: only verified Housekeeper credit contributes; no measurement adds
+ * zero credit contribution (reported score remains null), never a fake 0.5.
  *
  * Scale-adaptive (Batch 10.7 Lane 7, Phase 2):
  *   Normalization ceilings scale with memory count:
@@ -19,15 +22,8 @@
  *   At N=14000: identical to hardcoded values (100, 20).
  *   Paper: Bridging Philosophy and Machine Learning (structural alignment)
  *
- * Epistemology validation (Batch 10.7 Lane 7, Phase 3.6):
- *   Concentration of measure proves that in 768d embedding space,
- *   single-metric ranking (e.g., pure cosine similarity) is uninformative —
- *   direction matters, not magnitude. The trust formula's multi-signal
- *   approach (0.5 access + 0.25 refs + 0.25 credit) is
- *   epistemologically justified as context-sensitive navigation through
- *   learned geometric structure. Structural agency validates combining
- *   trust scoring with MVS context sufficiency gating.
- *   Paper: Epistemology of Generative AI — The Geometry of Knowing
+ * These existing mixture coefficients are engineering choices. Neither
+ * concentration of measure nor a Hebbian paper proves their retrieval quality.
  *
  * Batch 10 Lane 6: Contradictory memory injection tests (MemBench)
  *   Inject contradictory memories with different trust scores.
@@ -46,10 +42,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { getMaxAccessNormalization, getMaxCrossRefNormalization } from '../shared/scale-baseline.js';
+import { memoryCreditValue } from '../security/protocol/memory-credit.js';
 
 /**
  * Compute trust score for a memory
- * Formula: T = 0.4 * freq + 0.2 * refs + 0.2 * recency + 0.2 * credit
+ * Formula: T = 0.5 * freq + 0.25 * refs + 0.25 * reported usefulness
  * Scale-adaptive: normalization ceilings grow with memory count.
  *
  * @param {object} memory - Memory object with properties
@@ -67,19 +64,17 @@ export function computeTrustScore(memory, options = {}) {
 
   // Normalize components
   const freqScore = normalizeAccessFrequency(
-    memory.access_count || 0,
+    memory.access_count ?? 0,
     maxAccess
   );
 
+  if (memory.graph_links != null && !Array.isArray(memory.graph_links)) throw new Error('ranking_reference_list_invalid');
   const refsScore = normalizeCrossRefs(
-    (memory.graph_links || []).length,
+    (memory.graph_links ?? []).length,
     maxRefs
   );
 
-  const creditScore = normalizeCreditAttribution(
-    memory.credit_score || 0,
-    100  // max credit score
-  );
+  const creditScore = memoryCreditValue(memory) ?? 0;
 
   // Weighted sum
   const trust = (
@@ -101,16 +96,21 @@ export function computeTrustScore(memory, options = {}) {
  * @param {number} maxAccessCount - Maximum observed access count (default: 100, scale-adaptive)
  * @returns {number} Normalized 0-1
  */
+function normalizeCount(value, maximum) {
+  if (!['number', 'string'].includes(typeof value) || String(value).trim() === ''
+    || !Number.isFinite(Number(value)) || Number(value) < 0
+    || typeof maximum !== 'number' || !Number.isFinite(maximum) || maximum <= 0) {
+    throw new Error('ranking_count_domain_invalid');
+  }
+  return Math.min(1, Number(value) / maximum);
+}
 export function normalizeAccessFrequency(accessCount, maxAccessCount = 100) {
-  if (maxAccessCount <= 0) return 0;
-
-  const normalized = Math.min(1.0, accessCount / maxAccessCount);
-  return normalized;
+  return normalizeCount(accessCount, maxAccessCount);
 }
 
 /**
  * Normalize cross-reference count
- * More references = more trusted (validated by multiple sources).
+ * Reference count is ranking support; it does not prove source independence.
  * Scale-adaptive: maxLinks scales with memory count via getMaxCrossRefNormalization().
  * At N=14000: maxLinks=20 (unchanged).
  *
@@ -119,25 +119,7 @@ export function normalizeAccessFrequency(accessCount, maxAccessCount = 100) {
  * @returns {number} Normalized 0-1
  */
 export function normalizeCrossRefs(graphLinksCount, maxLinks = 20) {
-  if (maxLinks <= 0) return 0;
-
-  const normalized = Math.min(1.0, graphLinksCount / maxLinks);
-  return normalized;
-}
-
-/**
- * Normalize credit attribution score
- * Agent-assigned credit for contribution quality.
- *
- * @param {number} creditScore - Credit score 0-100
- * @param {number} maxCredit - Maximum credit score
- * @returns {number} Normalized 0-1
- */
-function normalizeCreditAttribution(creditScore, maxCredit = 100) {
-  if (maxCredit <= 0) return 0;
-
-  const normalized = Math.min(1.0, creditScore / maxCredit);
-  return normalized;
+  return normalizeCount(graphLinksCount, maxLinks);
 }
 
 /**
@@ -245,13 +227,14 @@ export function getTrustBreakdown(memory, options = {}) {
   const maxAccess = options.memoryCount ? getMaxAccessNormalization(options.memoryCount) : 100;
   const maxRefs = options.memoryCount ? getMaxCrossRefNormalization(options.memoryCount) : 20;
 
-  const freqScore = normalizeAccessFrequency(memory.access_count || 0, maxAccess);
+  if (memory.graph_links != null && !Array.isArray(memory.graph_links)) throw new Error('ranking_reference_list_invalid');
+  const freqScore = normalizeAccessFrequency(memory.access_count ?? 0, maxAccess);
   const refsScore = normalizeCrossRefs((memory.graph_links || []).length, maxRefs);
-  const creditScore = normalizeCreditAttribution(memory.credit_score || 0, 100);
+  const creditScore = memoryCreditValue(memory) ?? 0;
 
   return {
     key: memory.key,
-    total_trust: computeTrustScore(memory),
+    total_trust: computeTrustScore(memory, options),
     components: {
       access_frequency: { score: freqScore, weight: 0.5, contribution: freqScore * 0.5 },
       cross_references: { score: refsScore, weight: 0.25, contribution: refsScore * 0.25 },
@@ -261,7 +244,8 @@ export function getTrustBreakdown(memory, options = {}) {
     age_hours: (new Date().getTime() - new Date(memory.created_at).getTime()) / (1000 * 60 * 60),
     retrieval_weight: memory.retrieval_weight,
     cross_refs_count: (memory.graph_links || []).length,
-    credit_score: memory.credit_score
+    credit_score: memoryCreditValue(memory),
+    credit_state: memory.memory_credit?.state ?? 'UNMEASURED'
   };
 }
 
@@ -343,7 +327,7 @@ export function getRecommendedThreshold(scenario = 'balanced') {
 // Paper: MemBench
 // Inject contradictory memories with different trust scores.
 // Verify higher-trust memory is returned in 95%+ of conflicts.
-// T = 0.4*access + 0.2*cross_refs + 0.2*recency + 0.2*credit_score
+// T = 0.5*access + 0.25*cross_refs + 0.25*reported_usefulness
 // Aladdin: trust scoring only affects retrieval ranking, never deletes memory.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -370,7 +354,7 @@ export function evaluateContradictoryResolution(memoryA, memoryB) {
     trust_b: Number(trustB.toFixed(6)),
     trust_gap: Number(trustGap.toFixed(6)),
     resolution_confidence: Number(resolutionConfidence.toFixed(6)),
-    formula: 'T = 0.4*access + 0.2*cross_refs + 0.2*recency + 0.2*credit_score',
+    formula: 'T = 0.5*access + 0.25*cross_refs + 0.25*reported_usefulness',
     source_paper: 'MemBench',
     aladdin: 'trust_scoring_only_affects_retrieval_ranking_never_deletes',
   };

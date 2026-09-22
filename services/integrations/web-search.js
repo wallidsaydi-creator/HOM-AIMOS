@@ -2,24 +2,32 @@
 // ← Called by: governance-resolver.js, telegram-bot.js, scheduler.js, tool-registry.js
 // Pipeline: Cross-cutting search | Position: Web search provider (Perplexity/Brave)
 // ─────────────────────────────────────────────────────────────────────────────
-import { fetchWithTimeout } from '../orchestration/http.js';
+import { fetchWithTimeout, markHttpIndeterminate } from '../orchestration/http.js';
 import { checkoutCachedCredential } from '../security/credential-cache.js';
 import { credentialLedger, credentialUseEvidenceHash } from '../security/credential-ledger.js';
 import { systemConfigStore } from '../security/system-config-store.js';
+import { performance } from 'node:perf_hooks';
 
 const WEB_REQUEST_TIMEOUT_MS = 12_000;
 
 export async function searchWeb({ query, maxResults = 5, useContext = {} }) {
-  const primary = await searchPerplexity(query, useContext).catch(() => null);
+  const deadlineAt = Math.min(useContext.deadlineAt ?? Infinity, performance.now() + WEB_REQUEST_TIMEOUT_MS);
+  const primary = await searchPerplexity(query, useContext, deadlineAt).catch(error => {
+    if (useContext.signal?.aborted || /Timeout|Abort/.test(error?.name || '') || error?.httpOutcome === 'INDETERMINATE') throw error;
+    return null;
+  });
   if (primary) return { provider: 'perplexity', ...primary };
 
-  const fallback = await searchBrave(query, maxResults, useContext).catch(() => null);
+  const fallback = await searchBrave(query, maxResults, useContext, deadlineAt).catch(error => {
+    if (useContext.signal?.aborted || /Timeout|Abort/.test(error?.name || '')) throw error;
+    return null;
+  });
   if (fallback) return { provider: 'brave', ...fallback };
 
   return { provider: 'none', answer: null, results: [] };
 }
 
-async function searchPerplexity(query, useContext) {
+async function searchPerplexity(query, useContext, deadlineAt) {
   const credential = checkoutCachedCredential('perplexity_api_key');
   if (!credential) return null;
   const model = systemConfigStore.readConfigString('PERPLEXITY_MODEL') || 'sonar-pro';
@@ -48,6 +56,7 @@ async function searchPerplexity(query, useContext) {
   });
 
   let res;
+  let data;
   try {
     res = await fetchWithTimeout('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
@@ -55,9 +64,14 @@ async function searchPerplexity(query, useContext) {
         'Authorization': `Bearer ${credential.value}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(requestBody)
+      body: JSON.stringify(requestBody),
+      signal: useContext?.signal,
+      deadlineAt,
+      destinationPolicy: 'public',
     }, WEB_REQUEST_TIMEOUT_MS);
+    data = await res.json();
   } catch (error) {
+    error = markHttpIndeterminate(error);
     await credentialLedger.finalizeCredentialUse({
       reservation,
       outcome: 'indeterminate',
@@ -66,6 +80,8 @@ async function searchPerplexity(query, useContext) {
       errorClass: error?.name || 'transport_error',
     });
     throw error;
+  } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
   }
   if (!res.ok) {
     const text = await res.text();
@@ -79,7 +95,7 @@ async function searchPerplexity(query, useContext) {
     throw new Error(`Perplexity error (${res.status}): ${text}`);
   }
 
-  const data = await res.json();
+
   await credentialLedger.finalizeCredentialUse({
     reservation,
     outcome: 'completed',
@@ -95,7 +111,7 @@ async function searchPerplexity(query, useContext) {
   return { answer, results: citations.map(url => ({ title: url, url, description: '' })) };
 }
 
-async function searchBrave(query, maxResults, useContext) {
+async function searchBrave(query, maxResults, useContext, deadlineAt) {
   const credential = checkoutCachedCredential('brave_api_key');
   if (!credential) return null;
 
@@ -119,10 +135,15 @@ async function searchBrave(query, maxResults, useContext) {
     autonomousActionEventId: useContext.autonomousActionEventId || null,
   });
   let res;
+  let data;
   try {
     res = await fetchWithTimeout(url, {
-      headers: { 'X-Subscription-Token': credential.value }
+      headers: { 'X-Subscription-Token': credential.value },
+      signal: useContext?.signal,
+      deadlineAt,
+      destinationPolicy: 'public',
     }, WEB_REQUEST_TIMEOUT_MS);
+    data = await res.json();
   } catch (error) {
     await credentialLedger.finalizeCredentialUse({
       reservation,
@@ -132,6 +153,8 @@ async function searchBrave(query, maxResults, useContext) {
       errorClass: error?.name || 'transport_error',
     });
     throw error;
+  } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
   }
   if (!res.ok) {
     const text = await res.text();
@@ -145,7 +168,7 @@ async function searchBrave(query, maxResults, useContext) {
     throw new Error(`Brave error (${res.status}): ${text}`);
   }
 
-  const data = await res.json();
+
   await credentialLedger.finalizeCredentialUse({
     reservation,
     outcome: 'completed',

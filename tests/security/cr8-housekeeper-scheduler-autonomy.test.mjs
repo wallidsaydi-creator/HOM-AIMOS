@@ -61,12 +61,16 @@ test('independent CR8 audit proves truthful scheduler authority without local-mo
   assert.match(proof.proof_root_sha256, /^[0-9a-f]{64}$/);
 });
 
-test('scheduler startup reuses one verified event snapshot when no jobs are open', () => {
+test('scheduler startup reconstructs and reconciles one verified action group at a time', () => {
   const source = fs.readFileSync(path.join(ROOT, 'services/orchestration/scheduler.js'), 'utf8');
   const start = source.indexOf('export async function startScheduler');
   const end = source.indexOf('\nexport function stopScheduler', start);
   const owner = source.slice(start, end);
-  assert.equal((owner.match(/readVerifiedEventHistory\(/g) || []).length, 1);
-  assert.match(owner, /reconstructSystemJobRuns\(recoveryEvents\)/);
-  assert.match(owner, /reconstructDelegatedScheduleRuns\(recoveryEvents\)/);
+  assert.equal((owner.match(/readVerifiedRecoveryHistory\(/g) || []).length, 1);
+  assert.match(owner, /recoveryOperations/);
+  assert.match(owner, /validate: reconstructSystemJobRuns/);
+  assert.match(owner, /validate: reconstructDelegatedScheduleRuns/);
+  assert.match(owner, /onOpenGroup/);
+  assert.match(owner, /await reconcileOpenSystemJobs\(\{readHistoryFn\}\)/);
+  assert.match(owner, /await reconcileOpenDelegatedSchedules\(\{schedules,readHistoryFn\}\)/);
 });

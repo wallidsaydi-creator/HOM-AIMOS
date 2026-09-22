@@ -4,9 +4,101 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import { pool } from '../../db/connection.js';
-import { canonicalJson, getAgentCert, verifyCertChain } from '../../services/security/agent-identity.js';
+import { canonicalJson, getAgentCert, verifyCertChain, issueCert } from '../../services/security/agent-identity.js';
 import { AIMOS_COMPANY_ID } from '../../services/core/runtime-config.js';
 import { logEvent, readVerifiedEventById } from '../../services/observe/event-ledger.js';
+import { recallAuthorizationService } from '../../services/security/recall-authorization.js';
+
+// Renewal appends a certificate epoch for an existing key. It is not enrollment,
+// key rotation, an UPDATE of historical identity bytes, or a new permission.
+export async function inspectAgentRenewal(agentId, publicKey, validityDays, { client = null } = {}) {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(String(agentId))
+      || ['housekeeper', 'aimos_flag_signer', 'aimos-master'].includes(String(agentId).toLowerCase())
+      || !Number.isInteger(validityDays) || validityDays < 1 || validityDays > 365) {
+    throw new Error('identity_renewal_input_invalid');
+  }
+  const run = client ? client.query.bind(client) : pool.query.bind(pool);
+  const row = (await run(`SELECT * FROM agent_identity WHERE agent_id=$1
+    ORDER BY valid_from DESC LIMIT 1${client ? ' FOR UPDATE' : ''}`, [agentId])).rows[0];
+  if (!row || row.is_system_role === true || row.pubkey !== publicKey) throw new Error('identity_renewal_key_continuity_invalid');
+  const revoked = await run('SELECT 1 FROM aimos_agent_revocation_events WHERE agent_id=$1 AND agent_valid_from=$2', [agentId,row.valid_from]);
+  if (row.revoked_at || revoked.rowCount) throw new Error('identity_renewal_revoked_epoch');
+  const master = (await run('SELECT master_pubkey,fingerprint,keychain_service,keychain_account FROM aimos_master_identity WHERE id=1')).rows[0];
+  if (!master) throw new Error('identity_renewal_master_missing');
+  const oldProof = verifyCertChain(row.cert,master.master_pubkey,{nowFn:()=>Math.floor(new Date(row.valid_from).getTime()/1000)});
+  const projection = enrollmentProjection(row);
+  if (!oldProof.valid || oldProof.body?.agent_id !== agentId || oldProof.body.pubkey !== publicKey
+      || oldProof.body.device_fp !== row.device_fp
+      || new Date(oldProof.body.valid_until*1000).toISOString() !== projection.valid_until
+      || new Date(oldProof.body.valid_from*1000).toISOString() !== projection.valid_from) {
+    throw new Error('identity_renewal_predecessor_invalid');
+  }
+  const grant = await recallAuthorizationService.getEffective({ companyId:AIMOS_COMPANY_ID,
+    subjectAgentId:agentId,subjectValidFrom:row.valid_from,client });
+  if (!grant?.allowed) throw new Error('identity_renewal_existing_grant_not_allowed');
+  if (new Date(row.valid_until).getTime() > Date.now()) {
+    const receipt = (await run(`SELECT id FROM aimos_events WHERE company_id=$1
+      AND operation='identity_certificate_renewed' AND key=$2
+      AND metadata->'successor'->>'certificate_sha256'=$3 ORDER BY ts DESC LIMIT 1`,
+    [AIMOS_COMPANY_ID,agentId,projection.certificate_sha256])).rows[0];
+    if (!receipt) throw new Error('identity_renewal_current_certificate_not_expired');
+    const event = await readVerifiedEventById(receipt.id,AIMOS_COMPANY_ID,{client});
+    if (event.metadata.validity_days !== validityDays
+        || event.metadata.grant_mutation_hash !== grant.mutationHash.toString('hex')
+        || canonicalJson(event.metadata.successor) !== canonicalJson(projection)) {
+      throw new Error('identity_renewal_existing_terminal_mismatch');
+    }
+    return { row,master,grant,projection,alreadyRenewed:true,terminalId:event.id };
+  }
+  return { row,master,grant,projection,alreadyRenewed:false };
+}
+
+export async function renewAgentCertificate({ agentId,publicKey,validityDays,expectedCertificateSha256,
+  masterPrivkeyB64u,signingMaterialSha256 }) {
+  if (!/^[0-9a-f]{64}$/.test(String(signingMaterialSha256))) throw new Error('identity_renewal_key_commitment_invalid');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[`identity-enrollment:${agentId}`]);
+    const state = await inspectAgentRenewal(agentId,publicKey,validityDays,{client});
+    if (state.alreadyRenewed) { await client.query('COMMIT'); return { alreadyRenewed:true,terminalId:state.terminalId,successor:state.projection }; }
+    if (state.projection.certificate_sha256 !== expectedCertificateSha256) throw new Error('identity_renewal_predecessor_changed');
+    // The existing grant writer locks this same predecessor identity row.
+    // Holding it prevents a concurrent grant/revocation change during copying.
+    const now = Math.floor(Date.now()/1000);
+    const certBody = { v:1,agent_id:agentId,pubkey:publicKey,device_fp:state.row.device_fp,
+      valid_from:now,valid_until:now+validityDays*86400,issuer:'aimos-master',issued_at:now };
+    const certificate = issueCert(masterPrivkeyB64u,certBody);
+    if (!verifyCertChain(certificate,state.master.master_pubkey).valid) throw new Error('identity_renewal_certificate_self_check_failed');
+    const row = { agent_id:agentId,pubkey:publicKey,cert:certificate,device_fp:state.row.device_fp,
+      valid_from:new Date(certBody.valid_from*1000).toISOString(),valid_until:new Date(certBody.valid_until*1000).toISOString() };
+    await client.query(`INSERT INTO agent_identity(agent_id,pubkey,cert,device_fp,valid_from,valid_until)
+      VALUES($1,$2,$3,$4,$5,$6)`,[row.agent_id,row.pubkey,row.cert,row.device_fp,row.valid_from,row.valid_until]);
+    const grant = await recallAuthorizationService.commit({ companyId:AIMOS_COMPANY_ID,
+      subjectAgentId:agentId,subjectValidFrom:row.valid_from,allowed:state.grant.allowed,
+      writeAllowed:state.grant.writeAllowed,clearanceCeiling:state.grant.clearanceCeiling,
+      dataClassCeiling:state.grant.dataClassCeiling,masterPrivkeyB64u,masterFingerprint:state.master.fingerprint,
+      reason:'certificate_renewal_preserve_verified_grant',client });
+    const successor = enrollmentProjection(row);
+    const terminal = await logEvent(AIMOS_COMPANY_ID,agentId,'identity_certificate_renewed',agentId,{
+      schema:'hom.aimos.identity-certificate-renewal/v1',predecessor:state.projection,successor,
+      validity_days:validityDays,signing_material_sha256:signingMaterialSha256,
+      previous_grant_mutation_hash:state.grant.mutationHash.toString('hex'),
+      grant_mutation_hash:grant.mutationHash.toString('hex'),grant_event_id:grant.recall_authorization_event_id,
+      allowed:state.grant.allowed,write_allowed:state.grant.writeAllowed,
+      clearance_ceiling:state.grant.clearanceCeiling,data_class_ceiling:state.grant.dataClassCeiling,
+      same_key:true,same_agent:true,historical_identity_preserved:true,
+      reasoning:'Operator-authorized renewal appends a master-signed certificate for the existing key and exactly preserves the verified memory grant. Both rows and this terminal commit atomically.'
+    },null,{client,returnReceipt:true});
+    const verified = await readVerifiedEventById(terminal.event_id,AIMOS_COMPANY_ID,{client});
+    if (verified.metadata.successor.certificate_sha256 !== successor.certificate_sha256) throw new Error('identity_renewal_terminal_binding_invalid');
+    await client.query('COMMIT');
+    return { alreadyRenewed:false,terminalId:terminal.event_id,successor,grantMutationHash:grant.mutationHash.toString('hex') };
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch { /* a lost commit ACK must be reconciled by the signed terminal */ }
+    throw error;
+  } finally { client.release(); }
+}
 
 export async function getMaster() {
   const r = await pool.query(

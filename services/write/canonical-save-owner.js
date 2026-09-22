@@ -14,17 +14,20 @@
  */
 
 import { createHash } from 'node:crypto';
+import { beginServingWork } from '../runtime/serving-control.js';
 
-import { withTransaction } from '../../db/connection.js';
+import { withTransaction, getTransactionOutcome } from '../../db/connection.js';
 import { semanticCache } from '../caching/semantic-cache.js';
 import { detectEncodingStyle } from '../context/mnemonic-encoder.js';
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { enforceVersionOnlyMemoryPolicy } from '../governance/aladdin-compliance.js';
-import { logEvent, readVerifiedEventHistory } from '../observe/event-ledger.js';
+import { logEvent, readVerifiedEventHistory, readVerifiedEventById } from '../observe/event-ledger.js';
 import { evaluateCanaryWrite } from '../security/canary-write-gate.js';
 import { canonicalJson } from '../security/protocol/canonical-json.js';
 import { serializeMemoryValue } from '../security/protocol/memory-value.js';
 import { recallAuthorizationService } from '../security/recall-authorization.js';
+import { refreshCachedCredential } from '../security/credential-cache.js';
+import { memoryProvenanceLedger } from '../security/memory-provenance.js';
 import {
   detectTierFromCert,
   extractValidFromIso,
@@ -39,6 +42,7 @@ import { cacheTransformation, computeSchemaHash, getCachedTransformation } from 
 import { validateWrite } from './write-validator.js';
 import {
   appendCanonicalSaveStage,
+  normalizeSourceMemoryIds,
   canonicalSaveActionCommitment,
   createCanonicalSaveTrace,
   finalizeCanonicalSaveTrace,
@@ -172,7 +176,9 @@ async function resolveAuthority(spec, authority, recallService) {
       grantMutationHash: Buffer.from(grant.mutationHash).toString('hex'),
     };
   }
-  if (!authority.actionEventId || !authority.actionMutationHash) {
+  // beginToolAction and verifyToolActionAuthority own this exact native shape.
+  // Housekeeper actions use different field names; do not alias the two kinds.
+  if (!authority.eventId || !authority.eventMutationHash) {
     throw Object.assign(new Error('canonical_save_tool_action_incomplete'), { stage: 'AUTH' });
   }
   return {
@@ -187,7 +193,8 @@ function actionProjection(spec, authority, resolved) {
   const requestBodyHash = authority?.kind === 'verified_request'
     ? evidenceHash(authority.body) : null;
   return {
-    schema: 'hom.aimos.canonical-save-action/v1',
+    schema: spec.source_memory_ids === undefined ? 'hom.aimos.canonical-save-action/v1' : 'hom.aimos.canonical-save-action/v2',
+    ...(spec.source_memory_ids === undefined ? {} : { source_memory_ids:normalizeSourceMemoryIds(spec.source_memory_ids) }),
     company_id: resolved.companyId,
     subject_agent_id: resolved.subjectAgentId,
     actor_agent_id: resolved.actorAgentId,
@@ -222,11 +229,11 @@ async function bindReceipt({ spec, authority, resolved, actionSha256, logEventFn
   }
   if (resolved.kind === 'verified_tool_action') {
     return {
-      parentEventId: authority.actionEventId,
+      parentEventId: authority.eventId,
       evidence: {
         kind: 'verified_tool_action',
-        action_event_id: String(authority.actionEventId),
-        action_mutation_hash: String(authority.actionMutationHash),
+        action_event_id: String(authority.eventId),
+        action_mutation_hash: String(authority.eventMutationHash),
       },
     };
   }
@@ -248,18 +255,18 @@ async function bindReceipt({ spec, authority, resolved, actionSha256, logEventFn
   throw new Error('canonical_save_receipt_authority_invalid');
 }
 
-async function appendTerminal({ spec, authority, resolved, trace, outcome, failedStage, failureCode, parentEventId, terminalEvidence, client = null, logEventFn }) {
+async function appendTerminal({ spec, authority, resolved, trace, outcome, failedStage, failureCode, parentEventId, terminalEvidence, operation = null, client = null, logEventFn }) {
   const finalized = finalizeCanonicalSaveTrace(trace, {
     outcome,
     failedStage,
     failureCode,
-    terminalEvidence,
+    terminalEvidence: { ...terminalEvidence, ...(operation ? { operation_id:operation.id, intent_sha256:operation.intentSha256 } : {}) },
   });
   const verification = verifyCanonicalSaveTrace(finalized);
   if (!verification.valid) throw new Error(`canonical_save_trace_self_check_failed:${verification.reason}`);
   const receipt = await logEventFn(resolved?.companyId || AIMOS_COMPANY_ID,
     resolved?.subjectAgentId || actorFor(authority, spec.agent_id),
-    'canonical_save_terminal', String(spec.key || ''), {
+    'canonical_save_terminal', operation?.key || String(spec.key || ''), {
       ...finalized,
       failed_stage: failedStage,
       failure_code: failureCode,
@@ -271,8 +278,163 @@ async function appendTerminal({ spec, authority, resolved, trace, outcome, faile
       client,
       authority: authorityForEvent(authority),
       returnReceipt: true,
+      exclusiveOperationKey: operation !== null,
     });
   return { trace: finalized, receipt };
+}
+
+function saveOperation(spec, authority, resolved) {
+  const id = spec.save_operation_id ?? authority.requestReceiptId ?? authority.actionEventId ?? authority.eventId;
+  if (typeof id !== 'string' || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id)) {
+    throw Object.assign(new Error('canonical_save_operation_id_invalid'), { statusCode:400 });
+  }
+  const intent = Object.fromEntries(Object.entries(spec)
+    .filter(([key,value])=>key!=='save_operation_id' && value!==undefined));
+  return Object.freeze({ id:id.toLowerCase(), intentSha256:evidenceHash(intent),
+    key:'canonical-save:'+evidenceHash({schema:'hom.aimos.canonical-save-operation/v1',
+      company_id:resolved.companyId,actor_agent_id:resolved.actorAgentId,
+      actor_valid_from:resolved.actorValidFromIso,operation_id:id.toLowerCase()}) });
+}
+
+// Only immutable, non-secret result facts are retained for idempotent readback.
+// The native stage/result receipt remains the authority, not process cache.
+function saveResultSnapshot(saved) {
+  const facts = {};
+  for (const name of ['id','memory_tier','quarantined','conflict_detected','correction_applied',
+    'corrections_applied','occurrence_reasserted','epistemic_label','epistemic_confidence_milli',
+    'epistemic_classification_event_id','epistemic_classification_hash',
+    'epistemic_related_memory_ids_reclassified','origin_bindings']) {
+    if (saved[name] !== undefined) facts[name] = saved[name];
+  }
+  if (saved.credential_lane) {
+    facts.custody_service_name = saved.credential_service_name;
+    facts.custody_slot = saved.keychain_slot;
+  }
+  const bytes = value => value == null ? null : Buffer.from(value).toString('hex');
+  const chain = value => value ? {
+    mutation_hash:bytes(value.mutationHash ?? value.chainHash), content_hash:bytes(value.contentHash),
+    prev_mutation_hash:bytes(value.prevMutationHash), is_genesis:value.isGenesis ?? null,
+  } : null;
+  return { schema:'hom.aimos.canonical-save-result/v1',facts,
+    result_kind:saved.credential_lane ? 'custody_reference' : 'memory',
+    live_content_hash:bytes(saved.live_content_hash),
+    save_chain:chain(saved.ledger_commit),bind_chain:chain(saved.binding_commit),
+    envelope_chain:chain(saved.envelope_commit),custody_chain:chain(saved.credential_ledger_commit),
+    occurrence_event_id:saved.save_feedback?.occurrence_event_id || null,
+    occurrence_commitment:saved.save_feedback?.occurrence_commitment || null };
+}
+
+function savedFromSnapshot(snapshot) {
+  if (snapshot?.schema !== 'hom.aimos.canonical-save-result/v1' || !snapshot.facts?.id) {
+    throw new Error('canonical_save_result_snapshot_invalid');
+  }
+  const bytes = value => {
+    if (value === null) return null;
+    if (typeof value !== 'string' || !/^[0-9a-f]{64}$/.test(value)) throw new Error('canonical_save_result_hash_invalid');
+    return Buffer.from(value,'hex');
+  };
+  const chain = (value,envelope=false) => value ? {
+    [envelope?'chainHash':'mutationHash']:bytes(value.mutation_hash),contentHash:bytes(value.content_hash),
+    prevMutationHash:bytes(value.prev_mutation_hash),isGenesis:value.is_genesis,
+  } : null;
+  return { ...snapshot.facts,
+    credential_service_name:snapshot.facts.custody_service_name,
+    keychain_slot:snapshot.facts.custody_slot,
+    live_content_hash:bytes(snapshot.live_content_hash),
+    ledger_commit:chain(snapshot.save_chain),binding_commit:chain(snapshot.bind_chain),
+    envelope_commit:chain(snapshot.envelope_chain,true),credential_ledger_commit:chain(snapshot.custody_chain),
+    credential_lane:snapshot.result_kind==='custody_reference',
+    save_feedback:{occurrence_event_id:snapshot.occurrence_event_id,occurrence_commitment:snapshot.occurrence_commitment} };
+}
+
+async function readCompletedSave(client, operation, resolved, deps) {
+  const rows = (await client.query(`SELECT id FROM aimos_events
+    WHERE company_id=$1 AND key=$2 AND operation='canonical_save_terminal' AND ledger_version=1 LIMIT 2`,
+  [resolved.companyId,operation.key])).rows;
+  if (!rows.length) return null;
+  if (rows.length!==1) throw new Error('canonical_save_operation_terminal_fork');
+  const event = await deps.readVerifiedEventById(rows[0].id,resolved.companyId,{client});
+  const trace = typeof event.metadata==='string'?JSON.parse(event.metadata):event.metadata;
+  const terminalEvidence = trace?.stages?.at(-1)?.evidence;
+  if (event.company_id!==resolved.companyId || event.agent_id!==resolved.subjectAgentId
+    || event.operation!=='canonical_save_terminal' || event.key!==operation.key
+    || event.signer_agent_id!=='housekeeper'
+    || trace?.stages?.[0]?.evidence?.actor_agent_id!==resolved.actorAgentId
+    || trace?.stages?.[0]?.evidence?.actor_valid_from!==resolved.actorValidFromIso
+    || !verifyCanonicalSaveTrace(trace).valid || terminalEvidence?.operation_id!==operation.id) {
+    throw new Error('canonical_save_operation_receipt_invalid');
+  }
+  if (terminalEvidence.intent_sha256!==operation.intentSha256) {
+    throw Object.assign(new Error('canonical_save_operation_conflict'),{statusCode:409});
+  }
+  const receipt = {event_id:event.id,mutation_hash:Buffer.from(event.mutation_hash).toString('hex')};
+  if (trace.outcome!=='SUCCESS') return {rejected:true,reason:trace.failure_code||'canonical_save_previously_rejected',
+    http_status:409,canonical_save_trace:trace,terminal_receipt:receipt,save_operation_id:operation.id};
+  const saved = savedFromSnapshot(terminalEvidence.result_snapshot);
+  if (saved.id!==terminalEvidence.memory_id
+    || saved.live_content_hash?.toString('hex')!==terminalEvidence.live_content_hash
+    || canonicalJson(saved.origin_bindings)!==canonicalJson(terminalEvidence.origin_bindings)) {
+    throw new Error('canonical_save_recovery_result_binding_invalid');
+  }
+  const ids = [...new Set((saved.origin_bindings||[]).map(b=>b.memory_id))];
+  if (!ids.includes(saved.id)) throw new Error('canonical_save_recovery_origin_missing');
+  const verified = await deps.verifyEvidence({memoryIds:ids,client});
+  if (verified.rejected.length || ids.some(id=>!verified.verified.has(id))
+    || verified.proofs.get(saved.id)?.live_content_hash!==saved.live_content_hash?.toString('hex')) {
+    throw new Error('canonical_save_recovery_evidence_invalid');
+  }
+  return {saved,terminal:{trace,receipt},replayed:true};
+}
+
+async function publishCommittedSave({committed,operation,resolved,diagnostics,pendingTransform,deps}) {
+  if (committed.rejected) return committed;
+  if (pendingTransform) {
+    try {
+      await deps.cacheTransformation(pendingTransform.inputHash, pendingTransform.outputHash, {
+        memory_id:committed.saved.id,memory_tier:committed.saved.memory_tier,
+        encoding_style:diagnostics.encoding?.style||null,
+      });
+    } catch (error) {
+      diagnostics.transformation_cache={...diagnostics.transformation_cache,store_status:'DEGRADED',
+        store_error_code:safeFailureCode(error,'transformation_cache_store_unavailable')};
+    }
+  }
+  try { deps.semanticCache.invalidate('canonical_save_commit'); }
+  catch (error) { diagnostics.semantic_cache={status:'DEGRADED_AFTER_COMMIT',error_code:safeFailureCode(error)}; }
+  if (committed.saved.credential_lane) {
+    try {
+      const publication = await deps.refreshCachedCredential(committed.saved.credential_service_name);
+      diagnostics.credential_cache = { status:'PUBLISHED_AFTER_COMMIT',
+        service_name:committed.saved.credential_service_name,
+        generation:publication.generation };
+    } catch (error) {
+      const errorCode = safeFailureCode(error,'credential_cache_refresh_unavailable');
+      diagnostics.credential_cache = { status:'COMMITTED_PUBLICATION_UNAVAILABLE',
+        service_name:committed.saved.credential_service_name,error_code:errorCode,retryable:true };
+      try {
+        await deps.logEvent(resolved.companyId, resolved.subjectAgentId,
+          'credential_cache_refresh_failed', operation.id, {
+            schema:'hom.aimos.credential-cache-publication/v1',
+            save_operation_id:operation.id,
+            custody_service_name:committed.saved.credential_service_name,
+            custody_slot:committed.saved.keychain_slot,
+            custody_lifecycle_mutation_sha256:committed.saved.credential_ledger_commit?.mutationHash?.toString('hex')||null,
+            error_class:error?.name||'credential_cache_refresh_failure',
+            error_code:errorCode,
+            durable_save_committed:true,
+            reasoning:'Credential custody committed, while postcommit cache publication remained explicitly unavailable and retryable without replaying SAVE.',
+            source_knowledge:'canonical-save-owner.js — confirmed-commit credential publication owner',
+          }, committed.terminal.receipt.event_id, {returnReceipt:true,exclusiveOperationKey:true});
+      } catch (ledgerError) {
+        if (ledgerError?.message!=='event_operation_key_exists') {
+          diagnostics.credential_cache.failure_event_status='UNAVAILABLE';
+        }
+      }
+    }
+  }
+  return {...committed.saved,canonical_save_trace:committed.terminal.trace,
+    terminal_receipt:committed.terminal.receipt,save_diagnostics:diagnostics,
+    save_operation_id:operation.id,operation_replayed:committed.replayed===true};
 }
 
 function appendFailureAtCurrentStage(trace, stage, status, code, evidence = {}) {
@@ -294,6 +456,9 @@ function appendFailureAtCurrentStage(trace, stage, status, code, evidence = {}) 
 
 const DEFAULT_SAVE_DEPS = Object.freeze({
   withTransaction,
+  getTransactionOutcome,
+  readVerifiedEventById,
+  refreshCachedCredential,
   semanticCache,
   detectEncodingStyle,
   enforceVersionOnlyMemoryPolicy,
@@ -308,12 +473,15 @@ const DEFAULT_SAVE_DEPS = Object.freeze({
   computeSchemaHash,
   getCachedTransformation,
   validateWrite,
+  verifyEvidence: (args) => memoryProvenanceLedger.verifyRecallEvidence(args),
 });
 
 /** Create the only canonical SAVE contract owner; overrides are for isolated proof only. */
 export function createCanonicalSaveOwner(overrides = {}) {
   const deps = Object.freeze({ ...DEFAULT_SAVE_DEPS, ...overrides });
   return async function executeCanonicalSaveOwned(input = {}) {
+  const finishWork = beginServingWork('canonical_save');
+  try {
   const spec = { ...input };
   const authority = spec.mutation_authority;
   delete spec.client;
@@ -333,11 +501,14 @@ export function createCanonicalSaveOwner(overrides = {}) {
   let resolved = null;
   let receiptBinding = { parentEventId: null, evidence: null };
   let currentParentEventId = null;
+  let operation = null;
+  const diagnostics = { rpe:null,encoding:null,transformation_cache:null,sensible_screening:null };
+  let pendingTransform = null;
 
   const reject = async (stage, reason, httpStatus = 400, status = 'REJECTED', evidence = {}) => {
     appendFailureAtCurrentStage(trace, stage, status, reason, evidence);
     const terminal = await appendTerminal({
-      spec, authority, resolved, trace,
+      spec, authority, resolved, trace, operation,
       outcome: status === 'REJECTED' ? 'REJECTED' : 'FAILED',
       failedStage: stage,
       failureCode: reason,
@@ -376,16 +547,34 @@ export function createCanonicalSaveOwner(overrides = {}) {
       subjectAgentId: actorFor(authority, spec.agent_id),
       actorAgentId: actorFor(authority, spec.agent_id),
     };
-    return reject('AUTH', safeFailureCode(error), 403);
+    return await reject('AUTH', safeFailureCode(error), 403);
   }
 
   try {
     receiptBinding = await bindReceipt({ spec, authority, resolved, actionSha256, logEventFn: deps.logEvent });
     currentParentEventId = receiptBinding.parentEventId;
+    operation = saveOperation(spec,authority,resolved);
     appendCanonicalSaveStage(trace, 'RECEIPT', 'PASS', receiptBinding.evidence);
   } catch (error) {
-    return reject('RECEIPT', safeFailureCode(error), 503, 'FAILED');
+    return await reject('RECEIPT', safeFailureCode(error), error.statusCode===400?400:503,
+      error.statusCode===400?'REJECTED':'FAILED');
   }
+
+  // Current admission/grant is still required. An exact already-completed
+  // operation is readback, not another pass through custody or model diagnostics.
+  let retained;
+  try {
+    retained = await deps.withTransaction(client=>readCompletedSave(client,operation,resolved,deps),{
+      restricted:true,readOnly:true,client_id:resolved.companyId,agent_id:resolved.subjectAgentId,
+    });
+  } catch(error) {
+    if (error.statusCode===409) throw error;
+    error.statusCode=503;
+    error.canonicalSaveOutcome=Object.freeze({state:'INDETERMINATE',operationId:operation.id,
+      terminalEventId:null,repeatSave:false});
+    throw error;
+  }
+  if (retained) return await publishCommittedSave({committed:retained,operation,resolved,diagnostics,pendingTransform,deps});
 
   let canaryDecision;
   try {
@@ -406,7 +595,7 @@ export function createCanonicalSaveOwner(overrides = {}) {
       mutation_hash: canaryDecision.event_receipt?.mutation_hash || null,
     });
   } catch (error) {
-    return reject('CANARY', safeFailureCode(error), 503, 'FAILED');
+    return await reject('CANARY', safeFailureCode(error), 503, 'FAILED');
   }
 
   appendCanonicalSaveStage(trace, 'SE', 'DISABLED', {
@@ -425,7 +614,7 @@ export function createCanonicalSaveOwner(overrides = {}) {
     verifyTargetKey: spec.verify_target_key,
   });
   if (aladdin.status === 'blocked_requires_supersession') {
-    return reject('ALADDIN', aladdin.reason || 'aladdin_supersession_required', 409);
+    return await reject('ALADDIN', aladdin.reason || 'aladdin_supersession_required', 409);
   }
   appendCanonicalSaveStage(trace, 'ALADDIN', 'PASS', {
     retention: 'long_term',
@@ -441,6 +630,8 @@ export function createCanonicalSaveOwner(overrides = {}) {
     });
   } else {
     let validation;
+    const actorIdentityTier = resolved.kind === 'verified_tool_action'
+      ? authority.actorIdentityTier : authority.identityTier;
     try {
       validation = await deps.validateWrite(
         resolved.subjectAgentId,
@@ -453,23 +644,23 @@ export function createCanonicalSaveOwner(overrides = {}) {
               verifiedAgentId: 'housekeeper',
             }
           : {
-              identityTier: authority.identityTier,
+              identityTier: actorIdentityTier,
               verifiedAgentId: resolved.actorAgentId,
               executionContext: {
                 actorAgentId: resolved.actorAgentId,
                 actorValidFromIso: resolved.actorValidFromIso,
-                identityTier: authority.identityTier,
+                identityTier: actorIdentityTier,
                 companyId: resolved.companyId,
               },
             },
       );
     } catch (error) {
-      return reject('VALIDATOR', 'write_validator_unavailable', 503, 'FAILED', {
+      return await reject('VALIDATOR', 'write_validator_unavailable', 503, 'FAILED', {
         error_class: error?.name || 'Error',
       });
     }
     if (!validation.valid) {
-      return reject('VALIDATOR', validation.reason || 'write_validation_failed', validation.retryable ? 503 : 400);
+      return await reject('VALIDATOR', validation.reason || 'write_validation_failed', validation.retryable ? 503 : 400);
     }
     appendCanonicalSaveStage(trace, 'VALIDATOR', 'PASS', {
       diagnostics_sha256: evidenceHash(validation.diagnostics || {}),
@@ -486,7 +677,7 @@ export function createCanonicalSaveOwner(overrides = {}) {
     clearance_level: spec.clearance_level,
   });
   if (!quality.pass) {
-    return reject('QUALITY', quality.reason || 'quality_gate_rejected', 422, 'REJECTED', {
+    return await reject('QUALITY', quality.reason || 'quality_gate_rejected', 422, 'REJECTED', {
       quality_score: quality.score,
       walls_sha256: evidenceHash(quality.walls || {}),
     });
@@ -498,15 +689,13 @@ export function createCanonicalSaveOwner(overrides = {}) {
 
   const credentialLane = isCredentialLaneSave(spec);
   if (authority?.kind === 'verified_request' && safeValue !== securityInput && !credentialLane) {
-    return reject('SECRET_BOUNDARY', 'secret_material_requires_credential_lane', 422);
+    return await reject('SECRET_BOUNDARY', 'secret_material_requires_credential_lane', 422);
   }
   appendCanonicalSaveStage(trace, 'SECRET_BOUNDARY', credentialLane ? 'CREDENTIAL_ISOLATED' : safeValue !== securityInput ? 'REDACTED' : 'PASS', {
     sensitive_lane_isolated: credentialLane,
     redaction_applied: safeValue !== securityInput,
   });
 
-  const diagnostics = { rpe: null, encoding: null, transformation_cache: null, sensible_screening: null };
-  let pendingTransform = null;
   if (credentialLane) {
     // The credential lane is decided before every diagnostic consumer. The
     // plaintext may reach only signed custody/Keychain and the native
@@ -546,8 +735,15 @@ export function createCanonicalSaveOwner(overrides = {}) {
 
   const transactionBaseStages = [...trace.stages];
   let committed;
+  let preparedCommit = null;
   try {
     committed = await deps.withTransaction(async (client) => {
+      // Same owner/epoch/operation is serialized before any persistence or
+      // credential custody. A retry reads the signed result; it never repeats
+      // the native memory/custody effects of an already committed operation.
+      await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',[operation.key]);
+      const existing = await readCompletedSave(client,operation,resolved,deps);
+      if (existing) return existing;
       const protectedHead = await client.query(
         `SELECT clearance_level FROM aimos_memories
           WHERE company_id=$1 AND key=$2 AND clearance_level>=12
@@ -575,6 +771,17 @@ export function createCanonicalSaveOwner(overrides = {}) {
         error.rejectedResult = saved;
         throw error;
       }
+      if (!Array.isArray(saved.origin_bindings) || saved.origin_bindings.length === 0
+          || !saved.origin_bindings.some(binding => binding.memory_id === saved.id)) {
+        throw new Error('canonical_save_atomic_origin_missing');
+      }
+      const savedIds = [...new Set(saved.origin_bindings.map(binding => binding.memory_id))];
+      const nativeEvidence = await deps.verifyEvidence({ memoryIds: savedIds, client });
+      if (nativeEvidence.rejected.length || savedIds.some(id => !nativeEvidence.verified.has(id))) {
+        const error = new Error('canonical_save_native_evidence_invalid');
+        error.provenanceReason = nativeEvidence.rejected[0]?.reason || 'native_evidence_missing';
+        throw error;
+      }
       appendCanonicalSaveStage(trace, 'EMBEDDING', saved.embedding_disposition?.degraded ? 'DEGRADED' : 'PASS', {
         ...(saved.embedding_disposition || {}),
       });
@@ -582,6 +789,7 @@ export function createCanonicalSaveOwner(overrides = {}) {
         memory_id: saved.id,
         live_content_hash: saved.live_content_hash?.toString('hex') || null,
         occurrence_reasserted: saved.occurrence_reasserted === true,
+        origin_bindings: saved.origin_bindings,
       });
       appendCanonicalSaveStage(trace, 'PROVENANCE', 'COMMITTED', {
         save_mutation_hash: saved.ledger_commit?.mutationHash?.toString('hex') || saved.credential_ledger_commit?.mutationHash?.toString('hex') || null,
@@ -596,7 +804,7 @@ export function createCanonicalSaveOwner(overrides = {}) {
         label: saved.epistemic_label || 'unverified',
       });
       const terminal = await appendTerminal({
-        spec, authority, resolved, trace,
+        spec, authority, resolved, trace, operation,
         outcome: 'SUCCESS',
         failedStage: null,
         failureCode: null,
@@ -608,11 +816,14 @@ export function createCanonicalSaveOwner(overrides = {}) {
           save_mutation_hash: saved.ledger_commit?.mutationHash?.toString('hex') || null,
           binding_mutation_hash: saved.binding_commit?.mutationHash?.toString('hex') || null,
           epistemic_event_id: saved.epistemic_classification_event_id || null,
+          origin_bindings: saved.origin_bindings,
+          result_snapshot: saveResultSnapshot(saved),
         },
         client,
         logEventFn: deps.logEvent,
       });
-      return { saved, terminal };
+      preparedCommit = { saved, terminal };
+      return preparedCommit;
     }, {
       restricted: true,
       client_id: resolved.companyId,
@@ -620,6 +831,24 @@ export function createCanonicalSaveOwner(overrides = {}) {
       knowledge_proof: spec.knowledge_proof,
     });
   } catch (error) {
+    const outcome = deps.getTransactionOutcome(error);
+    if (!outcome || outcome.state!=='NOT_COMMITTED') {
+      // Positive authenticated readback can settle an uncertain acknowledgement;
+      // absence, read failure or an unresolved original backend cannot prove rollback.
+      try {
+        committed = await deps.withTransaction(client=>readCompletedSave(client,operation,resolved,deps),{
+          restricted:true,client_id:resolved.companyId,agent_id:resolved.subjectAgentId,
+        });
+      } catch (readError) { error.reconciliationCode = safeFailureCode(readError); }
+      if (!committed || committed.rejected) {
+        error.statusCode = 503;
+        error.canonicalSaveOutcome = Object.freeze({state:outcome?.state==='COMMITTED'?'COMMITTED':'INDETERMINATE',
+          operationId:operation.id,terminalEventId:preparedCommit?.terminal?.receipt?.event_id||null,
+          repeatSave:false});
+        throw error;
+      }
+    } else {
+    if (error.message==='canonical_save_operation_conflict') throw error;
     trace = createCanonicalSaveTrace(actionSha256);
     for (const entry of transactionBaseStages) {
       appendCanonicalSaveStage(trace, entry.stage, entry.status, entry.evidence);
@@ -627,43 +856,33 @@ export function createCanonicalSaveOwner(overrides = {}) {
     const stage = error.stage || (error.provenanceReason || error.envelopeReason ? 'PROVENANCE' : 'PERSISTENCE');
     const code = safeFailureCode(error);
     if (error.rejectedResult) {
-      return reject(stage, code, stage === 'QUALITY' || stage === 'SECRET_BOUNDARY' ? 422 : 400);
+      return await reject(stage, code, stage === 'QUALITY' || stage === 'SECRET_BOUNDARY' ? 422 : 400);
     }
-    appendFailureAtCurrentStage(trace, stage, 'FAILED', code, { transaction_rolled_back: true });
-    const terminal = await appendTerminal({
-      spec, authority, resolved, trace,
-      outcome: 'FAILED', failedStage: stage, failureCode: code,
-      parentEventId: currentParentEventId,
-      terminalEvidence: { domain_mutation_committed: false, transaction_rolled_back: true },
-      logEventFn: deps.logEvent,
-    });
+    appendFailureAtCurrentStage(trace, stage, 'FAILED', code, { transaction_rolled_back: outcome.rollbackAcknowledged });
+    let terminal;
+    try {
+      terminal = await appendTerminal({
+        spec, authority, resolved, trace, operation,
+        outcome: 'FAILED', failedStage: stage, failureCode: code,
+        parentEventId: currentParentEventId,
+        terminalEvidence: { domain_mutation_committed: false, transaction_rolled_back: outcome.rollbackAcknowledged },
+        logEventFn: deps.logEvent,
+      });
+    } catch (terminalError) {
+      terminalError.cause = error;
+      terminalError.canonicalCommitOutcome = Object.freeze({ state: outcome.state,
+        commitIssued: outcome.commitIssued, postgresStatus: outcome.postgresStatus,
+        rollbackAcknowledged: outcome.rollbackAcknowledged });
+      throw terminalError;
+    }
     error.canonicalSaveTerminal = terminal.receipt;
     error.canonicalSaveTrace = terminal.trace;
     throw error;
-  }
-
-  if (pendingTransform) {
-    try {
-      await deps.cacheTransformation(pendingTransform.inputHash, pendingTransform.outputHash, {
-        memory_id: committed.saved.id,
-        memory_tier: committed.saved.memory_tier,
-        encoding_style: diagnostics.encoding?.style || null,
-      });
-    } catch (error) {
-      diagnostics.transformation_cache = {
-        ...diagnostics.transformation_cache,
-        store_status: 'DEGRADED',
-        store_error_code: safeFailureCode(error, 'transformation_cache_store_unavailable'),
-      };
     }
   }
-  deps.semanticCache.invalidate('canonical_save_commit');
-  return {
-    ...committed.saved,
-    canonical_save_trace: committed.terminal.trace,
-    terminal_receipt: committed.terminal.receipt,
-    save_diagnostics: diagnostics,
-  };
+
+  return await publishCommittedSave({committed,operation,resolved,diagnostics,pendingTransform,deps});
+  } finally { finishWork(); }
   };
 }
 
@@ -679,7 +898,9 @@ export function createHousekeeperCanonicalSaveOwner(overrides = {}) {
   const executeSaveFn = overrides.executeCanonicalSave || executeCanonicalSave;
   const logEventFn = overrides.logEvent || logEvent;
   const getHousekeeperCertFn = overrides.getHousekeeperCert || getHousekeeperCert;
-  return async function executeHousekeeperCanonicalSaveOwned(input = {}) {
+  return async function executeHousekeeperCanonicalSaveOwned(input = {}, { nativeToolInputs = null } = {}) {
+  const finishWork = beginServingWork('housekeeper_save');
+  try {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new Error('housekeeper_save_spec_invalid');
   }
@@ -689,6 +910,14 @@ export function createHousekeeperCanonicalSaveOwner(overrides = {}) {
     throw new Error('housekeeper_save_authority_injection_forbidden');
   }
   const spec = { ...input };
+  let nativeInputs = null;
+  if (nativeToolInputs) {
+    const { readToolInputState } = await import('../orchestration/tool-action-ledger.js');
+    nativeInputs = readToolInputState(nativeToolInputs);
+    spec.source_memory_ids = normalizeSourceMemoryIds([...new Set([
+      ...nativeInputs.memory_ids, ...(normalizeSourceMemoryIds(spec.source_memory_ids) || []),
+    ])]);
+  }
   const companyId = String(spec.company_id || AIMOS_COMPANY_ID);
   const subjectAgentId = String(spec.agent_id || 'housekeeper').trim();
   const source = String(spec.source || '').trim();
@@ -739,23 +968,54 @@ export function createHousekeeperCanonicalSaveOwner(overrides = {}) {
     provisionalAuthority,
     resolved,
   ));
-  const actionReceipt = await logEventFn(
+  const retryOperation = spec.save_operation_id == null ? null : saveOperation(spec,provisionalAuthority,resolved);
+  const readStartedAction = async () => {
+    if (!retryOperation) return null;
+    return withTransaction(async client=>{
+      const rows=(await client.query(`SELECT id FROM aimos_events WHERE company_id=$1 AND key=$2
+        AND operation='canonical_save_action_started' AND ledger_version=1 LIMIT 2`,
+      [companyId,retryOperation.key+':start'])).rows;
+      if (!rows.length) return null;
+      if (rows.length!==1) throw new Error('housekeeper_save_operation_start_fork');
+      const row=await readVerifiedEventById(rows[0].id,companyId,{client});
+      const metadata=typeof row.metadata==='string'?JSON.parse(row.metadata):row.metadata;
+      if (row.agent_id!==subjectAgentId || row.signer_agent_id!=='housekeeper'
+        || metadata.action_sha256!==actionSha256 || metadata.action_context_sha256!==actionContextSha256
+        || metadata.intent_sha256!==retryOperation.intentSha256) throw new Error('housekeeper_save_operation_conflict');
+      return {event_id:row.id,mutation_hash:Buffer.from(row.mutation_hash).toString('hex'),
+        signer_agent_id:row.signer_agent_id,signer_valid_from:row.signer_valid_from};
+    },{restricted:true,readOnly:true,client_id:companyId,agent_id:'housekeeper'});
+  };
+  let actionReceipt = await readStartedAction();
+  if (!actionReceipt) {
+  try {
+  actionReceipt = await logEventFn(
     companyId,
     subjectAgentId,
     'canonical_save_action_started',
-    key,
+    retryOperation ? retryOperation.key+':start' : key,
     {
       schema: 'hom.aimos.canonical-save-action-start/v2',
       action_sha256: actionSha256,
       action_context_sha256: actionContextSha256,
+      ...(retryOperation ? {intent_sha256:retryOperation.intentSha256,memory_key:key} : {}),
       source,
       memory_type: String(spec.memory_type || 'declarative'),
+      ...(spec.source_memory_ids === undefined ? {} : { source_memory_ids:normalizeSourceMemoryIds(spec.source_memory_ids) }),
+      ...(nativeInputs ? { native_input_snapshot: nativeInputs } : {}),
       reasoning: 'Housekeeper committed the exact autonomous SAVE action projection before any canonical SAVE stage executed.',
       source_knowledge: 'canonical-save-owner.js — typed Housekeeper action ownership',
     },
     null,
-    { returnReceipt: true },
+    { returnReceipt: true, exclusiveOperationKey:retryOperation!==null },
   );
+  } catch(error) {
+    // Includes an acknowledgement lost after this exact signed start committed.
+    // A verified retained start may be reused; absence is not invented success.
+    actionReceipt = await readStartedAction();
+    if (!actionReceipt) throw error;
+  }
+  }
   if (actionReceipt.signer_agent_id !== 'housekeeper'
       || new Date(actionReceipt.signer_valid_from).toISOString() !== actorValidFromIso) {
     throw new Error('housekeeper_save_action_signer_mismatch');
@@ -771,7 +1031,8 @@ export function createHousekeeperCanonicalSaveOwner(overrides = {}) {
     enumerable: false,
   });
   Object.freeze(authority);
-  return executeSaveFn({ ...spec, mutation_authority: authority });
+  return await executeSaveFn({ ...spec, mutation_authority: authority });
+  } finally { finishWork(); }
   };
 }
 

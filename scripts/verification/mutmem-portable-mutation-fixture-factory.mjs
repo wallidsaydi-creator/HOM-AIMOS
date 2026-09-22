@@ -185,6 +185,7 @@ function bundle(input, id) {
 }
 
 const negative = [
+  ['MUTATION_ANCESTRY_BINDING_INVALID', (x) => { x.terminal.reweight_provenance.body_json.ancestry_binding = {}; }],
   ['MUTATION_OUTCOME_SCHEMA_INVALID', (x) => { x.outcome.schema = 'wrong'; }],
   ['MUTATION_RECALL_BINDING_INVALID', (x) => { x.recall.merkle_root = sha('wrong'); }],
   ['MUTATION_OUTCOME_EVENT_INVALID', (x) => { x.outcomeEvent.parent_event_id = UUID.outcome; }],

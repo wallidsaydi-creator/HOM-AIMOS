@@ -1,6 +1,6 @@
 // ─── PIPELINE CONNECTIONS ────────────────────────────────────────────────────
-// Status: Shadow-first (governor flags OFF) — commitGovernorMutation is
-// called by STDP and Oja inside the owning restricted weight transaction.
+// Status: LIVE — commitGovernorMutation is called by STDP, Hebbian consensus
+// and SPICED inside the owning restricted weight transaction.
 // It signs with the `housekeeper` system operational identity
 // (NOT a user-enrollable agent) and commits a REWEIGHT row to the live
 // aimos_memory_provenance ledger. The owning transaction treats a missing
@@ -42,6 +42,7 @@
  * Source: HOM Security Wiring Plan MASTER §10–§11 (Phase 4 grounding)
  */
 
+import { createHash } from 'node:crypto';
 import { memoryProvenanceLedger } from '../security/memory-provenance.js';
 import {
   signAsHousekeeper,
@@ -50,6 +51,7 @@ import {
 } from '../security/housekeeper-signer.js';
 import { contentHash } from '../security/identity-chain.js';
 import { logEvent } from '../observe/event-ledger.js';
+import { cognitiveAncestryBinding, cognitiveProjectionHash } from '../security/protocol/mutmem-protocol.js';
 
 const COMPANY = 'hom';
 
@@ -90,7 +92,24 @@ export async function commitGovernorMutation({
     return { ok: false, reason: 'malformed_input' };
   }
 
-    const body = {
+  if (!client || typeof client.query !== 'function') return { ok: false, reason: 'cognitive_transaction_required' };
+  // Same lock order as the existing weight/provenance owners. Both heads stay
+  // stable until their owning transaction commits or rolls back.
+  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+    [`cognitive-reweight:${COMPANY}:${memoryId}`]);
+  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+    [`memory-provenance:${memoryId}`]);
+  const nativeHead=await memoryProvenanceLedger.getLatestMutationHash(memoryId,client);
+  const heads=(await client.query(`SELECT h.projection_hash FROM aimos_cognitive_weight_projections h
+    WHERE h.company_id=$1 AND h.memory_id=$2 AND NOT EXISTS (
+      SELECT 1 FROM aimos_cognitive_weight_projections s WHERE s.memory_id=h.memory_id
+        AND s.prev_projection_hash=h.projection_hash) LIMIT 2`,[COMPANY,memoryId])).rows;
+  if(heads.length>1) throw new Error('cognitive_projection_multiple_heads');
+  const previousProjectionHash=heads[0]?.projection_hash || null;
+  const ancestryBinding=cognitiveAncestryBinding({nativePredecessorKind:nativeHead.predecessorKind,
+    nativePredecessorHash:nativeHead.prevMutationHash,nativePredecessorId:nativeHead.predecessorId,previousProjectionHash});
+
+  const body = {
     event_type: EVENT_TYPE_REWEIGHT,
     company_id: COMPANY,
     memory_id: memoryId,
@@ -99,79 +118,75 @@ export async function commitGovernorMutation({
     judge_valence: Number(judgeValence),
     governor_flag: governorFlag,
     reason,
-    ...extra
+    ...extra,
+    ancestry_binding: ancestryBinding
     // ts_signed is injected by signAsHousekeeper BEFORE signing — sig covers
     // the same body that gets persisted (verifyPayloadSig invariant).
   };
 
-  let signed;
-  try {
-    signed = await signAsHousekeeper(body);
-  } catch (err) {
-    await logEvent(COMPANY, 'governor_provenance', 'sign_failed_skip', memoryId, {
-      error: String(err?.message || err),
-      governor_flag: governorFlag,
-      reasoning: 'Housekeeper could not sign the proposed cognitive transition, so no provenance or retrieval-weight mutation was admitted.',
-    }).catch(() => {});
-    return { ok: false, reason: 'sign_failed' };
+  // The caller owns rollback and its post-transaction failure record. Opening
+  // another event transaction here could wait on our own held stream lock.
+  const signed = await signAsHousekeeper(body);
+
+  const result = await memoryProvenanceLedger.commitProvenance({
+    memoryId,
+    body: signed.body,                     // body with ts_signed populated
+    agentId: signed.agentId,                // 'housekeeper'
+    validFromIso: signed.validFromIso,
+    certString: signed.certString,
+    signedTs: signed.signedTs,
+    nonce: signed.nonce,
+    sigBytes: signed.sigBytes,
+    identityTier: signed.identityTier,
+    eventType: EVENT_TYPE_REWEIGHT,
+    bodyJson: signed.body,
+    client
+  });
+
+  if (!result?.ok) {
+    throw new Error(`governor_provenance_rejected:${result?.reason || 'commit_failed'}`);
   }
 
-  try {
-    const result = await memoryProvenanceLedger.commitProvenance({
-      memoryId,
-      body: signed.body,                     // body with ts_signed populated
-      agentId: signed.agentId,                // 'housekeeper'
-      validFromIso: signed.validFromIso,
-      certString: signed.certString,
-      signedTs: signed.signedTs,
-      nonce: signed.nonce,
-      sigBytes: signed.sigBytes,
-      identityTier: signed.identityTier,
-      eventType: EVENT_TYPE_REWEIGHT,
-      bodyJson: signed.body,
-      client
-    });
+  // Preserve the provenance content hash for the caller's receipt, then sign
+  // a distinct fixed-width transition preimage. The latter binds tenant,
+  // memory, integer-milliscaled old/new weights, and this exact provenance
+  // mutation hash; the database reconstructs and verifies those same bytes.
+  const contentHashBuf = contentHash(signed.body);
+  const transitionProof = signCognitiveTransitionAsHousekeeper({
+    companyId: COMPANY,
+    memoryId,
+    oldWeight,
+    newWeight,
+    provenanceMutationHash: result.mutationHash,
+  });
+  if ((result.prevMutationHash?.toString('hex') || null)
+      !== ancestryBinding.native_predecessor.commitment_hex) throw new Error('cognitive_native_head_changed');
+  const projectionHash=cognitiveProjectionHash({memoryId,oldWeightMilli:Math.round(oldWeight*1000),
+    newWeightMilli:Math.round(newWeight*1000),provenanceMutationHash:result.mutationHash,previousHash:previousProjectionHash});
+  const signerFingerprint=createHash('sha256').update(signed.certString).digest('hex');
+  const ancestryReceipt=await logEvent(COMPANY,'housekeeper','cognitive_ancestry_bound',result.mutationHash.toString('hex'),{
+    schema:'hom.aimos.cognitive-ancestry-bridge/v1',company_id:COMPANY,memory_id:memoryId,
+    native_mutation_hash:result.mutationHash.toString('hex'),
+    projection_hash:projectionHash.toString('hex'),ancestry_binding:ancestryBinding,
+    old_weight_milli:Math.round(oldWeight*1000),new_weight_milli:Math.round(newWeight*1000),
+    signer_agent_id:signed.agentId,signer_valid_from:signed.validFromIso,
+    cert_fingerprint:signerFingerprint,
+    attestation_kind:'atomic_transition',historical_origin_claimed:false,
+    reasoning:'The existing Housekeeper transaction binds the typed native predecessor and projection predecessor to this exact signed REWEIGHT and its derived projection; it grants no additional operation authority.',
+  },null,{client,returnReceipt:true,exclusiveOperationKey:true,signerConstraint:{agent_id:signed.agentId,
+    valid_from:signed.validFromIso,cert_fingerprint:signerFingerprint,
+    identity_tier:signed.identityTier}});
 
-    if (!result?.ok) {
-      await logEvent(COMPANY, 'governor_provenance', 'commit_failed', memoryId, {
-        reason: result?.reason,
-        governor_flag: governorFlag,
-        reasoning: 'The native provenance ledger rejected the signed cognitive transition; the owning transaction must roll back without changing retrieval weight.',
-      }).catch(() => {});
-      return { ok: false, reason: result?.reason || 'commit_failed' };
-    }
-
-    // Preserve the provenance content hash for the caller's receipt, then sign
-    // a distinct fixed-width transition preimage. The latter binds tenant,
-    // memory, integer-milliscaled old/new weights, and this exact provenance
-    // mutation hash; the database reconstructs and verifies those same bytes.
-    const contentHashBuf = contentHash(signed.body);
-    const transitionProof = signCognitiveTransitionAsHousekeeper({
-      companyId: COMPANY,
-      memoryId,
-      oldWeight,
-      newWeight,
-      provenanceMutationHash: result.mutationHash,
-    });
-
-    return {
-      ok: true,
-      mutationHash: result.mutationHash,
-      prevMutationHash: result.prevMutationHash,
-      isGenesis: result.isGenesis,
-      contentHash: contentHashBuf,
-      transitionHash: transitionProof.transitionHash,
-      transitionSig: transitionProof.transitionSig,
-    };
-  } catch (err) {
-    await logEvent(COMPANY, 'governor_provenance', 'commit_error', memoryId, {
-      error: String(err?.message || err),
-      stack: err?.stack,
-      governor_flag: governorFlag,
-      reasoning: 'The native provenance commit raised an infrastructure or relational error; the owning transaction must roll back without changing retrieval weight.',
-    }).catch(() => {});
-    return { ok: false, reason: 'commit_error', detail: String(err?.message || err) };
-  }
+  return {
+    ok: true,
+    mutationHash: result.mutationHash,
+    prevMutationHash: result.prevMutationHash,
+    isGenesis: result.isGenesis,
+    contentHash: contentHashBuf,
+    transitionHash: transitionProof.transitionHash,
+    transitionSig: transitionProof.transitionSig,
+    ancestryEventId: ancestryReceipt.event_id,
+  };
 }
 
 export default { commitGovernorMutation, GOVERNOR_PROVENANCE_CONSTANTS };

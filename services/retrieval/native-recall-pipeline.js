@@ -13,10 +13,14 @@ import { query } from '../../db/connection.js';
 import { getEmbedding } from '../core/embeddings.js';
 import { logEvent, readVerifiedEventsByIds } from '../observe/event-ledger.js';
 import { getAnisotropyStats } from './similarity-stats.js';
+import { beginServingWork } from '../runtime/serving-control.js';
 import {
   applyCalibrationSnapshot,
   getVerifiedCalibrationSnapshot,
+  createMemoryCreditReader,
+  readMemoryCreditCacheFrontier,
 } from './recall-calibrator.js';
+import { memoryCreditValue, memoryCreditEvidence } from '../security/protocol/memory-credit.js';
 import { rankByTrust } from '../learning/trust-score.js';
 import {
   CONCEPT_PPR_MAX_REQUEST_STATES,
@@ -1516,6 +1520,7 @@ async function calibrateAndFinalizeNativeRecallReturn({
     returnPath,
     memories: securityClosure.memories,
   });
+  for (const memory of securityClosure.memories) memoryCreditEvidence(memory);
   const bodyWithEmbeddingContinuity = {
     ...body,
     recall_meta: {
@@ -1528,6 +1533,21 @@ async function calibrateAndFinalizeNativeRecallReturn({
     body: bodyWithEmbeddingContinuity,
     runtimeBudget,
     responseLimit,
+  });
+  const originDisclosureByMemoryId = new Map(
+    securityClosure.memories.map((memory) => [String(memory.id), memory.origin_disclosure]),
+  );
+  const creditByMemoryId = new Map(securityClosure.memories.map(memory => [String(memory.id), memoryCreditEvidence(memory)]));
+  if (originDisclosureByMemoryId.size !== securityClosure.memories.length) {
+    throw new Error('native_recall_origin_disclosure_identity_duplicate');
+  }
+  calibrated.memories = calibrated.memories.map((memory) => {
+    const originDisclosure = originDisclosureByMemoryId.get(String(memory.id));
+    if (!originDisclosure) throw new Error('native_recall_origin_disclosure_projection_missing');
+    const result = { ...memory, origin_disclosure: originDisclosure, memory_credit: creditByMemoryId.get(String(memory.id)) };
+    memoryCreditEvidence(result);
+    result.credit_score = result.memory_credit.score;
+    return result;
   });
   const projection = buildNativeRecallReturnProjection({
     returnPath,
@@ -2231,13 +2251,16 @@ export async function executeCanonicalRecall({
   requestAuthority,
   transportBinding,
 } = {}) {
+  const finishWork = beginServingWork('canonical_recall');
+  try {
   const session = await openNativeRecallRequestSession({
     rawCommand,
     executionContext,
     requestAuthority,
     transportBinding,
   });
-  return executeNativeRecall(req, session.authority, { verifiedAdmissionSession: session });
+  return await executeNativeRecall(req, session.authority, { verifiedAdmissionSession: session });
+  } finally { finishWork(); }
 }
 
 export async function executeNativeRecall(req, recallAuthority, options = {}) {
@@ -2358,6 +2381,8 @@ export async function executeNativeRecall(req, recallAuthority, options = {}) {
     const calibrationSnapshot = await getVerifiedCalibrationSnapshot(company, {
       client: Object.freeze({ query: verifiedAdmissionSession.read }),
     });
+    const creditCacheFrontier = await readMemoryCreditCacheFrontier(company, recallAuthority,
+      Object.freeze({ query: verifiedAdmissionSession.read }));
     const corpusMemoryCount = await getMemoryCount(company, {
       queryFn: verifiedAdmissionSession.read,
       useCache: false,
@@ -2376,6 +2401,7 @@ export async function executeNativeRecall(req, recallAuthority, options = {}) {
         filterNativeRecallProposals(memories),
       ),
       evidenceScopeOwner: requestEpistemicEvidenceScope,
+      creditOwner: createMemoryCreditReader(company, Object.freeze({ query: verifiedAdmissionSession.read })),
     });
 
     const typeFilter = String(memory_type_filter || '').trim();
@@ -2432,6 +2458,8 @@ export async function executeNativeRecall(req, recallAuthority, options = {}) {
     debugRecallPoint('identifier_lookup_start');
     const identifierLookup = await lookupIdentifierCandidates({
       queryText: searchQuery,
+      exactKey: recallAuthority.command.key,
+      memoryId: recallAuthority.command.memory_id,
       companyId: company,
       agentId: agent,
       clearanceLevel: clearance,
@@ -2719,6 +2747,7 @@ export async function executeNativeRecall(req, recallAuthority, options = {}) {
         agentId: agent,
         clearanceLevel: clearance,
         calibrationMutationHash: calibrationSnapshot.calibrationMutationHash,
+        creditFrontier: creditCacheFrontier,
       };
       const cached = await semanticCache.get(queryEmbedding, searchQuery, cacheContext);
       if (cached) {
@@ -3667,12 +3696,8 @@ export async function executeNativeRecall(req, recallAuthority, options = {}) {
     }
     debugRecallPoint('reranking_done', { memories: memories.length, query_terms: queryTerms.length });
 
-    // ─── QMD RESCUE ADAPTATION: structured low-confidence lexical proposal ──
-    // Adaptive-RAG uses a trained complexity classifier. AIMOS does not claim
-    // that classifier: this is a deterministic confidence-routed adaptation.
-    // Fixes: (1) uses tsvector index not regex, (2) searches full value not LEFT(500),
-    // (3) unordered term matching, (4) computed rerank_score not hardcoded 1.0,
-    // (5) searches metadata (source, technique) for Knowledge Gate retrieval.
+    // QMD is an internal candidate channel of canonical recall. It has no
+    // route, transport, identity, disclosure, or action authority of its own.
     markStage('qmd_activation');
     let qmdActivated = false;
     let topRerank = memories.length > 0 ? (memories[0].rerank_score || 0) : 0;
@@ -3683,8 +3708,6 @@ export async function executeNativeRecall(req, recallAuthority, options = {}) {
       try {
         const qmdTerms = queryTerms.filter(t => t.length >= 3).slice(0, 6);
         if (qmdTerms.length >= 1) {
-          // Channel 1: Full-text search via tsvector (indexed, fast)
-          // Use OR between terms — ts_rank scores by coverage, so multi-term matches rank higher
           const tsqTerms = qmdTerms.join(' | ');
           const buildQmdScopedFilter = () => {
             const scopedParams = [company, clearance, requestingAgent];
@@ -3724,10 +3747,6 @@ export async function executeNativeRecall(req, recallAuthority, options = {}) {
              LIMIT 10`,
             qmdFtsScope.scopedParams
           );
-
-          // Channel 2: Key-pattern + metadata search (for Knowledge Gate: papers, techniques)
-          // Use OR between terms — any term matching key/metadata surfaces the memory.
-          // Scoring by term coverage happens downstream. Pick first 3 most distinctive terms.
           const qmdKeyTerms = qmdTerms.slice(0, 3);
           const qmdKeyScope = buildQmdScopedFilter();
           const keyLikePatterns = qmdKeyTerms.map(t => `%${t}%`);
@@ -3748,9 +3767,6 @@ export async function executeNativeRecall(req, recallAuthority, options = {}) {
              LIMIT 10`,
             qmdKeyScope.scopedParams
           );
-
-          // Merge both proposal channels without allowing an overlap with an
-          // earlier gear to erase QMD evidence.
           const qmdCandidates = new Map();
           for (const row of (qmdFtsResult.rows || [])) {
             qmdCandidates.set(row.id, { ...row, _fts_rank: parseFloat(row.fts_rank || 0), _source: 'qmd_fts' });
@@ -3760,7 +3776,6 @@ export async function executeNativeRecall(req, recallAuthority, options = {}) {
               qmdCandidates.set(row.id, { ...row, _fts_rank: 0, _source: 'qmd_key' });
             }
           }
-
           const qmdProposals = [...qmdCandidates.values()].map((row) => ({
             id: row.id, key: row.key, value: row.value,
             scope: row.scope, memory_type: row.memory_type,
@@ -3808,7 +3823,7 @@ export async function executeNativeRecall(req, recallAuthority, options = {}) {
       } catch (qmdError) {
         rethrowRecallBoundaryFailure(qmdError);
         recallBreadthPolicy.qmd_error = qmdError.message;
-        console.warn('[recall] QMD auto-switch error:', qmdError.message);
+        console.warn('[recall] internal QMD candidate error:', qmdError.message);
       }
     }
     debugRecallPoint('qmd_activation_done', {
@@ -3951,7 +3966,10 @@ export async function executeNativeRecall(req, recallAuthority, options = {}) {
 
     const graphFamilyStartedAt = performance.now();
     graphFamilyCandidate = composeNativeGraphFamilyChannel({
-      reconstructedGraphGear: reconstructedGraphCandidate,
+      // An empty admitted set still has the same one graph-family channel. Its
+      // native subgear emits zero ranks instead of disappearing and changing
+      // the production fusion topology.
+      reconstructedGraphGear: reconstructedGraphCandidate || { ranks: [] },
       limit: 50,
       contentStateProjection: contentStateOccurrenceAdmission.internalProjection(),
     });
@@ -4271,6 +4289,7 @@ export async function executeNativeRecall(req, recallAuthority, options = {}) {
             queryFn: verifiedAdmissionSession.optionalRead,
             nowMs: twinPrimeSignedRequestTimeMs,
             verifiedCrossRefCounts: verifiedGraphLinkCounts,
+            admittedMemories: new Map(memories.map(memory => [String(memory.id), memory])),
           });
           salienceFrequencySummary = applySalienceFrequencyAnnotations(memories, salienceFrequencyResults);
         }
@@ -4467,7 +4486,7 @@ export async function executeNativeRecall(req, recallAuthority, options = {}) {
 
     // ─── TIERED ACTIVATION: compress top memories into working memory ─────────
     markStage('context_building');
-    // Full store (15K+) → relevance scoring (recall+QMD+rerank) → working memory
+    // Full store → relevance scoring (including internal QMD candidates) → working memory
     // Only the most relevant ~200 tokens (~1200 chars) enter working context.
     const WORKING_MEMORY_MAX_CHARS = 1200;
     let workingMemory = '';
@@ -4514,10 +4533,7 @@ export async function executeNativeRecall(req, recallAuthority, options = {}) {
       const rerank = Number.isFinite(mem?.rerank_score)
         ? Math.max(0, Math.min(1, Number(mem.rerank_score)))
         : 0.45;
-      const creditRaw = Number(mem?.credit_score);
-      const creditNorm = Number.isFinite(creditRaw)
-        ? Math.max(0, Math.min(1, creditRaw / 2))
-        : 0.5;
+      const creditNorm = memoryCreditValue(mem) ?? 0;
 
       const createdAtTs = Date.parse(mem?.created_at || '');
       if (Number.isFinite(createdAtTs)) {
@@ -4936,6 +4952,7 @@ export async function executeNativeRecall(req, recallAuthority, options = {}) {
         agentId: agent,
         clearanceLevel: clearance,
         calibrationMutationHash: calibrationSnapshot.calibrationMutationHash,
+        creditFrontier: creditCacheFrontier,
         contentStateDecisionHash: normalFinalStateSelection.decision.decision_sha256,
         nativeFusionDecisionHash: nativeRetrievalFusion.decision.decision_sha256,
         epistemicDecisionHash: epistemicRecall.decision.decision_sha256,

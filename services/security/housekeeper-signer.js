@@ -36,7 +36,7 @@
 import crypto from 'node:crypto';
 import path from 'node:path';
 import { AIMOS_AGENT_KEY_ROOT } from '../core/runtime-config.js';
-import { loadAgentPrivkey, signPayload, signPayloadWithContext, getAgentCert, signRaw } from './agent-identity.js';
+import { loadAgentPrivkey, signPayload, signPayloadWithRequestTarget, getAgentCert, signRaw } from './agent-identity.js';
 import { cognitiveBaselineHash, cognitiveTransitionHash } from './protocol/mutmem-protocol.js';
 import { occurrenceSignatureMessageV3 } from './protocol/content-state-occurrence-v3.js';
 
@@ -207,7 +207,8 @@ export async function signAsHousekeeper(body, requestContext = null) {
   // where body.ts_signed === ts.
   const useRequestContext = requestContext?.method && requestContext?.path;
   const sigB64u = useRequestContext
-    ? signPayloadWithContext(privkey, body, requestContext.method, requestContext.path, nonce, signedTs)
+    ? signPayloadWithRequestTarget(privkey, body, requestContext.method, requestContext.path,
+        { prev_chain_hash: null, device_fp: null }, nonce, signedTs)
     : signPayload(privkey, body, nonce, signedTs);
   const sigBytes = Buffer.from(sigB64u, 'base64url');
   if (sigBytes.length !== 64) {
@@ -223,10 +224,10 @@ export async function signAsHousekeeper(body, requestContext = null) {
     validFromIso,
     agentId: HOUSEKEEPER_SIGNER_CONSTANTS.HOUSEKEEPER_AGENT_ID,
     identityTier: detectTierFromCert(certString),
-    sigForm: useRequestContext ? 3 : 1,
+    sigForm: useRequestContext ? 5 : 1,
     signedMethod: useRequestContext ? String(requestContext.method).toUpperCase() : null,
-    signedPath: useRequestContext ? String(requestContext.path).split('?')[0] : null,
-    signedClaims: null,
+    signedPath: useRequestContext ? String(requestContext.path) : null,
+    signedClaims: useRequestContext ? { prev_chain_hash: null, device_fp: null } : null,
     body
   };
 }

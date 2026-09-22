@@ -39,7 +39,7 @@ function witnessHash(body) {
 
 async function fullEvent(eventId) {
   const result = await pool.query(
-    `SELECT e.id::text,e.ts,e.company_id,e.agent_id,e.operation,e.key,e.metadata,
+    `SELECT e.*,e.id::text,e.ts,e.company_id,e.agent_id,e.operation,e.key,e.metadata,
             e.parent_event_id::text,e.proof_required,e.ledger_version,
             e.ledger_seq::text,e.signer_agent_id,e.signer_valid_from,
             e.cert_fingerprint,e.identity_tier,e.authority_kind,e.signed_body,
@@ -60,7 +60,7 @@ async function fullEvent(eventId) {
     subject_agent_id: row.agent_id,
     operation: row.operation,
     key: row.key,
-    metadata: object(row.metadata),
+    ...(row.signed_body_bytes == null ? { metadata: object(row.metadata) } : {}),
     parent_event_id: row.parent_event_id,
     proof_required: Boolean(row.proof_required),
     ledger_version: Number(row.ledger_version),
@@ -71,7 +71,8 @@ async function fullEvent(eventId) {
     cert_fingerprint: row.cert_fingerprint,
     identity_tier: row.identity_tier,
     authority_kind: row.authority_kind,
-    signed_body: object(row.signed_body),
+    ...(row.signed_body_bytes == null ? { signed_body: object(row.signed_body) }
+      : { signed_body_bytes_b64u: b64u(row.signed_body_bytes) }),
     content_hash: hex(row.content_hash),
     mutation_hash: hex(row.mutation_hash),
     prev_mutation_hash: hex(row.prev_mutation_hash),
@@ -118,9 +119,9 @@ async function fullValence(rowId) {
   };
 }
 
-async function fullProvenance(provenanceId) {
+async function fullProvenance(provenanceId, exactBody = false) {
   const result = await pool.query(
-    `SELECT p.*,i.pubkey,i.cert,i.valid_until
+    `SELECT p.*,i.pubkey,i.cert,i.valid_until,i.revoked_at AS identity_revoked_at
        FROM aimos_memory_provenance p
        JOIN agent_identity i ON i.agent_id=p.agent_id
                             AND i.valid_from=p.agent_valid_from
@@ -129,7 +130,7 @@ async function fullProvenance(provenanceId) {
   );
   if (result.rowCount !== 1) throw new Error(`p2_mutation_provenance_missing:${provenanceId}`);
   const row = result.rows[0];
-  return {
+  const proof = {
     provenance_id: String(row.provenance_id),
     memory_id: String(row.memory_id),
     agent_id: row.agent_id,
@@ -156,6 +157,18 @@ async function fullProvenance(provenanceId) {
     signer_public_key_b64u: row.pubkey,
     signer_certificate: row.cert,
   };
+  if(exactBody) {
+    delete proof.body_json;
+    proof.body_json_encoding='hom-aimos/canonical-json/v1';
+    proof.body_json_bytes_b64u=Buffer.from(canonicalJson(object(row.body_json))).toString('base64url');
+    proof.identity_revoked_at=iso(row.identity_revoked_at);
+    const revocations=(await pool.query(`SELECT signed_body,content_hash,mutation_hash,nonce,ts_signed,sig
+      FROM aimos_agent_revocation_events WHERE agent_id=$1 AND agent_valid_from=$2 ORDER BY ts_signed`,
+    [row.agent_id,row.agent_valid_from])).rows;
+    proof.revocation_events=revocations.map(r=>({signed_body:r.signed_body,content_hash:hex(r.content_hash),
+      mutation_hash:hex(r.mutation_hash),nonce:r.nonce,ts_signed:Number(r.ts_signed),signature_b64u:b64u(r.sig)}));
+  }
+  return proof;
 }
 
 async function project(entry, trustBundle) {
@@ -173,6 +186,15 @@ async function project(entry, trustBundle) {
       kind: 'terminal_event',
       event: await fullEvent(bundle.terminal.event.event_id || bundle.terminal.event.id),
     };
+  const binding=terminalProof.provenance?.body_json?.ancestry_binding;
+  let ancestry=null;
+  if(binding) {
+    const events=(await pool.query(`SELECT id FROM aimos_events WHERE company_id=$1
+      AND operation='cognitive_ancestry_bound' AND key=$2 LIMIT 2`,[bundle.company_id,bundle.cognitive_projection.provenance_mutation_hash])).rows;
+    if(events.length!==1) throw new Error('mutation_ancestry_event_ambiguous');
+    ancestry={ancestry_event:await fullEvent(events[0].id),native_predecessor:binding.native_predecessor.kind==='genesis'
+      ? null : await fullProvenance(binding.native_predecessor.provenance_id,true)};
+  }
   const body = {
     format: {
       schema: 'hom.aimos.mutmem-portable-mutation-witness/v1',
@@ -187,6 +209,7 @@ async function project(entry, trustBundle) {
     outcome_event: outcomeEvent,
     valence_evidence: valence,
     terminal_proof: terminalProof,
+    ...(ancestry || {}),
   };
   return { ...body, witness_sha256: witnessHash(body) };
 }

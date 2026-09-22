@@ -42,9 +42,10 @@ test('tool save and recall consume signed native authorities without raw memory 
 });
 
 test('v1 ASMR recall is signed POST over native-admitted evidence only', async () => {
-  const [route, asmr, nativeRecall, nativePipeline] = await Promise.all([
+  const [route, asmr, ensemble, nativeRecall, nativePipeline] = await Promise.all([
     readFile(new URL('routes/v1-api.js', ROOT), 'utf8'),
     readFile(new URL('services/retrieval/asmr-pipeline.js', ROOT), 'utf8'),
+    readFile(new URL('services/answering/ensemble-engine.js', ROOT), 'utf8'),
     readFile(new URL('services/retrieval/native-recall.js', ROOT), 'utf8'),
     readFile(new URL('services/retrieval/native-recall-pipeline.js', ROOT), 'utf8'),
   ]);
@@ -53,8 +54,13 @@ test('v1 ASMR recall is signed POST over native-admitted evidence only', async (
   assert.match(route, /executeCanonicalRecall/);
   assert.doesNotMatch(route, /resolveNativeRecallAuthority|executeNativeRecall\(/);
   assert.match(route, /asmrAnswerFromEvidence/);
+  assert.match(route, /resolveModelForRequest\(\{ taskType: 'chat'/);
+  assert.match(route, /model: selectedModel\.model, useContext: req\.executionContext/);
   assert.match(nativeRecall, /transportBinding\.transport === 'v1'/);
   assert.match(asmr, /asmr_admitted_evidence_required/);
+  assert.match(asmr, /asmr_model_provider_unavailable/);
+  assert.match(asmr, /useContext: opts\.useContext/);
+  assert.match(ensemble, /useContext: opts\.useContext/);
   assert.doesNotMatch(asmr, /runRetrieval|defaultPool|connectedTopK|graphWalkFn\s*=\s*async|timelineFn\s*=\s*async/);
   assert.match(asmr, /asmr_answer_receipt/);
   assert.match(asmr, /variant_results:\s*answerResult\?\.variantResults/);
@@ -67,4 +73,16 @@ test('v1 ASMR recall is signed POST over native-admitted evidence only', async (
   assert.match(asmr, /relationshipPersistence:\s*'extraction_only'/);
   assert.match(nativePipeline, /\[q, queryParam, recallAuthority\.command\.key, recallAuthority\.command\.memory_id\][\s\S]*\.find/);
   assert.doesNotMatch(nativePipeline, /q \?\? queryParam \?\? recallAuthority\.command\.key/);
+});
+
+test('QMD has no standalone surface and contributes only inside canonical recall', async () => {
+  const [route, nativePipeline] = await Promise.all([
+    readFile(new URL('routes/aimos.js', ROOT), 'utf8'),
+    readFile(new URL('services/retrieval/native-recall-pipeline.js', ROOT), 'utf8'),
+  ]);
+  assert.doesNotMatch(route, /router\.(?:get|post|all)\('\/qmd/);
+  assert.doesNotMatch(route, /qmd-parser|qmd-planner|executeQMD|buildQueryPlan/);
+  assert.match(nativePipeline, /markStage\('qmd_activation'\)/);
+  assert.match(nativePipeline, /qmdProposals\.length[\s\S]*contentStateOccurrenceAdmission\.admit\(qmdProposals\)/);
+  assert.match(nativePipeline, /qmdAdmission\.memories/);
 });

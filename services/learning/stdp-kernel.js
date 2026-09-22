@@ -41,7 +41,7 @@
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { createHash } from 'node:crypto';
-import { withTransaction } from '../../db/connection.js';
+import { withTransaction, getTransactionOutcome } from '../../db/connection.js';
 import { logEvent } from '../../services/observe/event-ledger.js';
 import { valenceLedger } from '../../services/governance/valence-ledger.js';
 import { computeValence } from '../../services/governance/valence-judge.js';
@@ -434,7 +434,23 @@ export async function applyRewardSignal(memoryId, rewardSign, context = {}) {
       reasoning: 'Signed outcome evidence moved retrieval frequency bidirectionally within Aladdin bounds; canonical memory remained fully retained.',
       source_knowledge: 'HOM age-neutral signed-valence reference-point update; DA-SSDP co-activation and lag retained as contextual evidence, not the direct weight equation',
     }, null, { client });
-  }, { restricted: true, agent_id: 'housekeeper', client_id: COMPANY });
+  }, { restricted: true, agent_id: 'housekeeper', client_id: COMPANY }).catch(async (error) => {
+    // withTransaction has finished rollback/disconnection reconciliation and
+    // released its client before this event can acquire the stream lock.
+    const transactionOutcome = getTransactionOutcome(error);
+    try {
+      await logEvent(COMPANY, 'housekeeper', 'cognitive_weight_adjustment_failed', memoryId, {
+        outcome_id: outcomeEvidence.outcome_id,
+        context_hash: contextHash,
+        transaction_outcome: transactionOutcome,
+        error: String(error?.message || error).slice(0, 1024),
+        reasoning: 'The native cognitive transaction did not return acknowledged success. Its owner completed rollback or commit-status reconciliation before recording this failure; the recorded transaction outcome, not the error alone, determines whether any effect committed.',
+      });
+    } catch (terminalError) {
+      throw new AggregateError([error, terminalError], 'cognitive_weight_failure_terminal_unavailable');
+    }
+    throw error;
+  });
 
   const deltaW = newWeight - oldWeight;
   updateSynapseTelemetry(memoryId, deltaW);

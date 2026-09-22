@@ -33,6 +33,7 @@ import {
   verifyCertChain,
   verifyPayloadSigWithContext,
   verifyPayloadSigWithEnvelopeClaims,
+  verifyPayloadSigWithRequestTarget,
 } from './agent-identity.js';
 import { masterPubkeyCache as defaultMasterCache } from './master-pubkey-cache.js';
 import { housekeeperPubkeyCache as defaultHousekeeperCache } from './housekeeper-pubkey-cache.js';
@@ -130,6 +131,7 @@ export function createAuthTier(deps = {}) {
   const verifySigWithEnvelopeClaimsFn = typeof deps.verifyPayloadSigWithEnvelopeClaims === 'function'
     ? deps.verifyPayloadSigWithEnvelopeClaims
     : verifyPayloadSigWithEnvelopeClaims;
+  const verifySigWithRequestTargetFn = verifyPayloadSigWithRequestTarget;
   const nowFn = typeof deps.nowFn === 'function'
     ? deps.nowFn
     : () => Math.floor(Date.now() / 1000);
@@ -166,7 +168,13 @@ export function createAuthTier(deps = {}) {
     if (lookup.proofInvalid) return t0('revocation_proof_invalid');
     if (lookup.revoked) return t0('agent_revoked');  // enforce, not shadow
 
-    const sigResult = verifySigWithContextFn(
+    if (env.prevChainHash !== null || env.deviceFp !== null) return t0('system_principal_tier_claims_forbidden');
+    const sigResult = env.sigForm === '5'
+      ? verifySigWithRequestTargetFn(housekeeperPubkey, env.body || {}, env.method, env.path,
+          { prev_chain_hash: null, device_fp: null }, env.nonce, env.ts, env.sig, { skewSeconds, nowFn })
+      : (env.sigForm !== '3' || env.path.includes('?')
+        ? { valid: false, reason: 'sig_form_5_required' }
+        : verifySigWithContextFn(
       housekeeperPubkey,
       env.body || {},
       env.method,
@@ -175,7 +183,7 @@ export function createAuthTier(deps = {}) {
       env.ts,
       env.sig,
       { skewSeconds, nowFn }
-    );
+    ));
     if (!sigResult.valid) return t0(sigResult.reason);
 
     if (nonceStore.seenAndRecord(HOUSEKEEPER_AGENT_ID, env.nonce)) {
@@ -192,10 +200,10 @@ export function createAuthTier(deps = {}) {
       sigBytes: Buffer.from(env.sig, 'base64url'),
       nonce: env.nonce,
       signedTs: env.ts,
-      requestSigForm: 3,
+      requestSigForm: Number(env.sigForm),
       signedMethod: env.method,
       signedPath: env.path,
-      signedClaims: null,
+      signedClaims: env.sigForm === '5' ? { prev_chain_hash: null, device_fp: null } : null,
     };
   }
 
@@ -205,6 +213,10 @@ export function createAuthTier(deps = {}) {
 
     if (env === null) return t0(null);
     if (env.incomplete) return t0('envelope_incomplete');
+    if (String(getHeader(headers, 'x-aimos-sig-form') || '') === '5') {
+      const timestamp = String(getHeader(headers, 'aimos-agent-timestamp') || '');
+      if (!/^[1-9][0-9]*$/.test(timestamp) || !Number.isSafeInteger(Number(timestamp))) return t0('malformed_input');
+    }
 
     // Self-signed housekeeper cert → T1_SYSTEM_SELF path (before the
     // master-pubkey hard gate, which would reject a self-signed cert).
@@ -216,7 +228,8 @@ export function createAuthTier(deps = {}) {
           ...env,
           body: req.body || {},
           method: req?.method || '',
-          path: rawPath.split('?')[0]
+          path: rawPath,
+          sigForm: String(getHeader(headers, 'x-aimos-sig-form') || '').trim(),
         });
       }
     }
@@ -251,9 +264,12 @@ export function createAuthTier(deps = {}) {
     const __method = req?.method || '';
     // PATH contract: pathname only, query stripped (see agent-identity.js).
     const __rawPath = req?.originalUrl || req?.url || '';
-    const __path = __rawPath.split('?')[0];
+    const __path = __declaredForm === '5' ? __rawPath : __rawPath.split('?')[0];
     const __hasTierClaims = env.prevChainHash !== null || env.deviceFp !== null;
-    const sigResult = __hasTierClaims
+    const sigResult = __declaredForm === '5'
+      ? verifySigWithRequestTargetFn(certBody.pubkey, req.body || {}, __method, __path,
+          { prev_chain_hash: env.prevChainHash, device_fp: env.deviceFp }, env.nonce, env.ts, env.sig, { skewSeconds, nowFn })
+      : (__rawPath.includes('?') ? { valid: false, reason: 'sig_form_5_required' } : (__hasTierClaims
       ? (__declaredForm === '4'
           ? verifySigWithEnvelopeClaimsFn(
               certBody.pubkey,
@@ -269,7 +285,7 @@ export function createAuthTier(deps = {}) {
           : { valid: false, reason: 'sig_form_4_required' })
       : (__declaredForm === '3'
           ? verifySigWithContextFn(certBody.pubkey, req.body || {}, __method, __path, env.nonce, env.ts, env.sig, { skewSeconds, nowFn })
-          : { valid: false, reason: 'sig_form_3_required' });
+          : { valid: false, reason: 'sig_form_3_required' })));
     const __sigFormUsed = sigResult.valid ? Number(__declaredForm) : null;
 
     if (!sigResult.valid) {
@@ -346,7 +362,7 @@ export function createAuthTier(deps = {}) {
       requestSigForm: __sigFormUsed,
       signedMethod: __method,
       signedPath: __path,
-      signedClaims: __sigFormUsed === 4
+      signedClaims: [4, 5].includes(__sigFormUsed)
         ? Object.freeze({
             prev_chain_hash: env.prevChainHash,
             device_fp: env.deviceFp,

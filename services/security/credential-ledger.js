@@ -341,7 +341,10 @@ export function verifyCredentialLifecycleChain(rows = [], masterPubkey = null) {
   };
 }
 
+import { beginServingWork } from '../runtime/serving-control.js';
+
 export function createCredentialLedger(deps = {}) {
+  const activeUses = new Map();
   const pool = deps.pool || defaultPool;
   const queryFn = typeof deps.queryFn === 'function'
     ? deps.queryFn
@@ -894,6 +897,8 @@ export function createCredentialLedger(deps = {}) {
     useGroupId = null,
   }) {
     const normalizedEndpoint = String(endpoint || '').trim();
+    const finishReservation = beginServingWork('credential_reservation');
+    try {
     if (!normalizedEndpoint || normalizedEndpoint.includes('?')) {
       throw new Error('credential_use_endpoint_must_be_credential_free_template');
     }
@@ -1033,6 +1038,7 @@ export function createCredentialLedger(deps = {}) {
       eventType: 'USE_RESERVED',
     });
     if (!committed.ok) throw new Error(`credential_use_reservation_failed:${committed.reason}`);
+    activeUses.set(useId, beginServingWork('credential_use'));
     return Object.freeze({
       useId,
       useGroupId: useGroupId || null,
@@ -1043,6 +1049,7 @@ export function createCredentialLedger(deps = {}) {
       reservationProvenanceId: committed.provenanceId,
       reservationMutationHash: committed.mutationHash.toString('hex'),
     });
+    } finally { finishReservation(); }
   }
 
   async function finalizeCredentialUse({
@@ -1108,7 +1115,10 @@ export function createCredentialLedger(deps = {}) {
       });
     };
     const existing = await findMatchingTerminal();
-    if (existing) return existing;
+    if (existing) {
+      activeUses.get(reservation.useId)?.(); activeUses.delete(reservation.useId);
+      return existing;
+    }
     const signed = await signAsHousekeeper(body);
     const committed = await commitCredentialLifecycle({
       serviceName: reservation.serviceName,
@@ -1127,10 +1137,14 @@ export function createCredentialLedger(deps = {}) {
     if (!committed.ok) {
       if (committed.reason === 'fork_race') {
         const raced = await findMatchingTerminal();
-        if (raced) return raced;
+        if (raced) {
+          activeUses.get(reservation.useId)?.(); activeUses.delete(reservation.useId);
+          return raced;
+        }
       }
       throw new Error(`credential_use_terminal_failed:${committed.reason}`);
     }
+    activeUses.get(reservation.useId)?.(); activeUses.delete(reservation.useId);
     return Object.freeze({
       useId: reservation.useId,
       outcome,

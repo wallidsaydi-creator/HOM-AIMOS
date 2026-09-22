@@ -139,8 +139,9 @@ test('agent runner reviews exactly the final assembled prompt before inference',
   assert.ok(securityReview > promptAssembly);
   assert.ok(modelInference > securityReview);
   assert.equal((runner.match(/await runSecurityPipeline\(/g) || []).length, 1);
-  assert.match(runner, /assembledSecurityPrompt[\s\S]*\$\{systemPrompt\}[\s\S]*\$\{llmUserPrompt\}/);
-  assert.match(runner, /conversationSecurityContext = contextGuard\.messages/);
+  assert.match(runner, /const securitySections = \[[\s\S]*\.\.\.systemPromptSections[\s\S]*origin: 'user_request'[\s\S]*String\(llmUserPrompt\)/);
+  assert.match(runner, /const assembledSecurityPrompt = securitySections\.map\(\(section\) => section\.content\)\.join\(''\)/);
+  assert.match(runner, /\.\.\.contextGuard\.messages\.flatMap\(\(message, index\) => \[/);
   assert.match(runner, /runSecurityPipeline\([\s\S]*reviewTier: effectiveReviewTier,[\s\S]*availableTools/);
   assert.match(runner, /await logEvent\([\s\S]*'security_admission_decision'/);
   assert.match(runner, /SECURITY_EVIDENCE_REQUIRED/);
@@ -148,4 +149,14 @@ test('agent runner reviews exactly the final assembled prompt before inference',
   assert.doesNotMatch(runner, /\bbloomTier\b/);
   assert.match(gates, /reviewTier: 'se_gate_only'/);
   assert.doesNotMatch(gates, /\bbloomTier\b/);
+});
+
+test('semantic classifier defers registered recall result authorization to the native tool owner', async () => {
+  const source = await readFile(new URL('services/security/security-classifier.js', ROOT), 'utf8');
+  assert.match(source, /The classifier does not replace those authorization owners/);
+  assert.match(source, /registered native recall tool for a specific memory is not exfiltration/);
+  assert.match(source, /result remains limited to what that tool actually authorizes and returns/);
+  assert.match(source, /requests another principal's or an unrestricted collection of internal data/);
+  assert.match(source, /asks the model to disclose data that the authorized tool did not return/);
+  assert.equal(securityRuleSetHash().length, 64);
 });

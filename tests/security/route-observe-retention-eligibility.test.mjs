@@ -45,7 +45,11 @@ test('route, job, temporal, and observer memory reads retain every canonical row
 
 test('retention expansion preserves tenant, security, provenance, and bounded diagnostic intent', async () => {
   const route = await source('routes/aimos.js');
-  assert.match(route, /WHERE company_id = :company AND clearance_level <= :clearance/);
+  const recall = await source('services/retrieval/native-recall-pipeline.js');
+  assert.doesNotMatch(route, /router\.(?:get|post|all)\('\/qmd/);
+  assert.match(recall, /const scopedParams = \[company, clearance, requestingAgent\]/);
+  assert.match(recall, /clearance_level <= \$2/);
+  assert.match(recall, /contentStateOccurrenceAdmission\.admit\(qmdProposals\)/);
   assert.match(route, /WHERE company_id = \$1 AND agent_id = \$2 AND memory_type = 'reasoning_state'/);
   assert.match(route, /m\.company_id = cr\.company_id/);
   assert.match(route, /m\.supersedes_id/);

@@ -19,19 +19,24 @@
  *
  *   b_t = max(b_min, b_0 / (1 + V_t/log(3) + rho_t)).
  *
- * The controlled proposal is
+ * For the persisted grid m=1000*w and direction d=sign(m*-m), v3 uses
  *
- *   x_{t+1} = x_t + sign(x*-x_t) min(|x*-x_t|, b_t).
+ *   b_eff = max(b_t, |log((m+d)/m)|) when d != 0.
  *
- * This preserves plasticity (b_t is never zero), reduces oscillatory movement,
- * and remains inside the database's independent [0.1,3.0] Aladdin bound.
+ * Select the furthest integer m' between m and m* with
+ * |log(m'/m)| <= b_eff. The nearest legal grid point is feasible, so nonzero
+ * grid proposals cannot be lost to rounding. Monotonicity permits binary
+ * search in O(log |m*-m|) time and O(1) space (at most 12 iterations here).
+ * Signed ppm magnitudes round UP: ceil(1e6*actual) <= ceil(1e6*b_eff).
+ * No historical v1/v2 decision is rewritten. This is a discrete local motion
+ * bound, not a claim of convergence or the paper's architecture algorithm.
  */
 
 import { createHash } from 'node:crypto';
 import { canonicalJson } from '../security/protocol/canonical-json.js';
 
 export const NEUROPLASTICITY_CONSTANTS = Object.freeze({
-  schema: 'hom.aimos.certified-neuroplasticity-control/v1',
+  schema: 'hom.aimos.certified-neuroplasticity-control/v3',
   minimum_weight_milli: 100,
   maximum_weight_milli: 3000,
   base_log_step: Math.log(1.3),
@@ -139,7 +144,16 @@ export function controlCertifiedTrajectoryProposal({
   }
   const totalVariation = Number(trajectory.total_log_variation_ppm) / 1_000_000;
   const reversalRate = Number(trajectory.reversal_rate_ppm) / 1_000_000;
-  if (!Number.isFinite(totalVariation) || totalVariation < 0
+  if (!Number.isSafeInteger(trajectory.chain_length) || trajectory.chain_length < 0
+      || !Number.isSafeInteger(trajectory.reversal_count) || trajectory.reversal_count < 0
+      || trajectory.reversal_count > Math.max(0, trajectory.chain_length - 1)
+      || !Number.isSafeInteger(trajectory.total_log_variation_ppm)
+      || !Number.isSafeInteger(trajectory.reversal_rate_ppm)
+      || trajectory.reversal_rate_ppm !== (trajectory.chain_length > 1
+        ? Math.round(trajectory.reversal_count / (trajectory.chain_length - 1) * 1_000_000) : 0)
+      || (trajectory.chain_length === 0 && (trajectory.total_log_variation_ppm !== 0
+        || trajectory.head_projection_hash !== '0'.repeat(64)))
+      || !Number.isFinite(totalVariation) || totalVariation < 0
       || !Number.isFinite(reversalRate) || reversalRate < 0 || reversalRate > 1) {
     throw new Error('neuroplasticity_trajectory_summary_invalid');
   }
@@ -147,24 +161,25 @@ export function controlCertifiedTrajectoryProposal({
   const current = currentMilli / 1000;
   const proposed = proposedMilli / 1000;
   const requestedLogStep = Math.log(proposed / current);
-  const trustRadius = Math.max(
+  const continuousRadius = Math.max(
     NEUROPLASTICITY_CONSTANTS.minimum_log_step,
     NEUROPLASTICITY_CONSTANTS.base_log_step
       / (1 + (totalVariation / NEUROPLASTICITY_CONSTANTS.variation_scale) + reversalRate),
   );
-  const controlledLogStep = direction(requestedLogStep)
-    * Math.min(Math.abs(requestedLogStep), trustRadius);
-  const controlled = Math.max(
-    NEUROPLASTICITY_CONSTANTS.minimum_weight_milli / 1000,
-    Math.min(
-      NEUROPLASTICITY_CONSTANTS.maximum_weight_milli / 1000,
-      current * Math.exp(controlledLogStep),
-    ),
-  );
-  const controlledMilli = Math.max(
-    NEUROPLASTICITY_CONSTANTS.minimum_weight_milli,
-    Math.min(NEUROPLASTICITY_CONSTANTS.maximum_weight_milli, Math.round(controlled * 1000)),
-  );
+  const stepDirection = direction(proposedMilli - currentMilli);
+  const gridMinimum = stepDirection === 0 ? 0
+    : Math.abs(Math.log((currentMilli + stepDirection) / currentMilli));
+  const trustRadius = Math.max(continuousRadius, gridMinimum);
+  let lower = 0;
+  let upper = Math.abs(proposedMilli - currentMilli);
+  while (lower < upper) {
+    const steps = Math.floor((lower + upper + 1) / 2);
+    const candidate = currentMilli + stepDirection * steps;
+    if (Math.abs(Math.log(candidate / currentMilli)) <= trustRadius) lower = steps;
+    else upper = steps - 1;
+  }
+  const controlledMilli = currentMilli + stepDirection * lower;
+  const actualLogStep = Math.abs(Math.log(controlledMilli / currentMilli));
   const body = Object.freeze({
     schema: NEUROPLASTICITY_CONSTANTS.schema,
     memory_id: String(memoryId || ''),
@@ -177,9 +192,11 @@ export function controlCertifiedTrajectoryProposal({
     total_log_variation_ppm: Number(trajectory.total_log_variation_ppm),
     reversal_count: Number(trajectory.reversal_count),
     reversal_rate_ppm: Number(trajectory.reversal_rate_ppm),
-    trust_radius_log_ppm: Math.round(trustRadius * 1_000_000),
+    continuous_trust_radius_log_ppm: Math.ceil(continuousRadius * 1_000_000),
+    grid_minimum_log_step_ppm: Math.ceil(gridMinimum * 1_000_000),
+    trust_radius_log_ppm: Math.ceil(trustRadius * 1_000_000),
     requested_log_step_ppm: Math.round(requestedLogStep * 1_000_000),
-    controlled_log_step_ppm: Math.round(Math.log((controlledMilli / 1000) / current) * 1_000_000),
+    controlled_log_step_ppm: stepDirection * Math.ceil(actualLogStep * 1_000_000),
     canonical_content: 'immutable',
     memory_existence: 'immutable',
     controlled_state: 'retrieval_weight_only',

@@ -18,15 +18,34 @@ import {
   memoryProvenanceLedger,
   orderProvenanceRowsByTopology,
   verifyRecallEvidenceRow,
+  verifyLiveRowContentHash,
 } from '../../services/security/memory-provenance.js';
+import { logEvent } from '../../services/observe/event-ledger.js';
 import { retainedProvenanceMerkleRoot } from '../../services/security/protocol/mutmem-protocol.js';
 import { commitHousekeeperSupersession } from '../../services/security/memory-lineage.js';
 import { resolveAimosDatabaseName } from '../../services/core/runtime-config.js';
 
 const live = process.argv.includes('--live');
 const database = resolveAimosDatabaseName();
+const option = (name) => process.argv.find(value => value.startsWith(name + '='))?.slice(name.length + 1);
+const selectedMemoryId = option('--memory-id');
+const expectedContent = option('--expected-content-sha256');
+const expectedPrefix = option('--expected-provenance-root');
+if (live && !selectedMemoryId) throw new Error('retained_repair_exact_target_required');
+if (selectedMemoryId && (!/^[0-9a-f-]{36}$/.test(selectedMemoryId)
+    || !/^[0-9a-f]{64}$/.test(expectedContent || '') || !/^[0-9a-f]{64}$/.test(expectedPrefix || ''))) {
+  throw new Error('retained_repair_exact_target_required');
+}
 
 async function census() {
+  if (selectedMemoryId) {
+    const result = await query(`SELECT m.id::text AS memory_id, encode(m.content_hash,'hex') AS content_sha256,
+      (SELECT count(*)::int FROM aimos_memory_provenance p WHERE p.memory_id=m.id) AS provenance_nodes,
+      (SELECT count(*)::int FROM aimos_memory_provenance p WHERE p.memory_id=m.id AND p.event_type='RETAINED_ATTEST') AS reviews
+      FROM aimos_memories m WHERE m.id=$1`, [selectedMemoryId]);
+    if (result.rows.length !== 1) throw new Error('retained_repair_target_missing');
+    return result.rows[0];
+  }
   const result = await query(
     `SELECT count(*)::int AS memories,
             count(*) FILTER (WHERE binding.memory_id IS NULL)::int AS requiring_upgrade,
@@ -80,6 +99,10 @@ async function attestMemory(memoryId) {
     if (!Buffer.isBuffer(memory.content_hash) || memory.content_hash.length !== 32) {
       throw new Error(`${memoryId}: live_content_hash_missing`);
     }
+    if (selectedMemoryId && (memory.content_hash.toString('hex') !== expectedContent
+      || !verifyLiveRowContentHash(memory, memory.content_hash))) {
+      throw new Error('retained_repair_content_changed');
+    }
 
     const existing = await client.query(
       `SELECT mutation_hash
@@ -89,6 +112,14 @@ async function attestMemory(memoryId) {
       [memoryId]
     );
     if (existing.rows[0]) {
+      if (selectedMemoryId) {
+        const verified = await memoryProvenanceLedger.verifyRecallEvidence({ memoryIds: [memoryId], client });
+        const review = await client.query("SELECT body_json FROM aimos_memory_provenance WHERE memory_id=$1 AND event_type='RETAINED_ATTEST'", [memoryId]);
+        if (!verified.verified.has(memoryId) || review.rows.length !== 1
+          || review.rows[0].body_json.retained_provenance_merkle_root !== expectedPrefix) {
+          throw new Error('retained_repair_existing_attestation_invalid');
+        }
+      }
       await client.query('ROLLBACK');
       return {
         memory_id: memoryId,
@@ -214,6 +245,16 @@ async function attestMemory(memoryId) {
       [memoryId]
     );
     const retainedRows = orderProvenanceRowsByTopology(provenance.rows);
+    if (selectedMemoryId) {
+      if (retainedProvenanceMerkleRoot(retainedRows).toString('hex') !== expectedPrefix) {
+        throw new Error('retained_repair_prefix_changed');
+      }
+      const failures = retainedRows.map(row => verifyRecallEvidenceRow(row)).filter(proof => !proof.valid);
+      if (failures.length !== 1 || failures[0].reason !== 'signed_save_intent_missing_or_ambiguous'
+        || retainedRows.filter(row => row.event_type === 'BIND' && Number(row.binding_schema_version) === 4).length !== 1) {
+        throw new Error('retained_repair_failure_outside_authorized_scope');
+      }
+    }
     const saveRows = retainedRows.filter((row) => row.event_type === 'SAVE');
     const originalSave = saveRows.length === 1 && verifyRecallEvidenceRow(saveRows[0]).valid
       ? saveRows[0]
@@ -317,6 +358,20 @@ async function attestMemory(memoryId) {
       client,
     });
     if (!binding.ok) throw new Error(`${memoryId}: ${binding.reason}`);
+    const verified = await memoryProvenanceLedger.verifyRecallEvidence({ memoryIds: [memoryId], client });
+    if (!verified.verified.has(memoryId)) {
+      throw new Error(`retained_repair_verification_failed:${verified.rejected[0]?.reason || 'missing'}`);
+    }
+    const receipt = await logEvent(memory.company_id, memory.agent_id, 'retained_memory_attestation_completed', memory.key, {
+      memory_id: memory.id,
+      content_sha256: memory.content_hash.toString('hex'),
+      retained_provenance_root: retainedProvenanceMerkleRoot(retainedRows).toString('hex'),
+      retained_provenance_nodes: retainedRows.length,
+      binding_mutation_hash: Buffer.from(binding.mutationHash).toString('hex'),
+      historical_origin_signature_claimed: false,
+      origin_evidence_state: originEvidenceState,
+      reasoning: 'Operator-authorized retained review appends present Housekeeper attestation over the exact unchanged content and prior chain; original incomplete intent remains historical evidence, not a newly asserted original signature.',
+    }, null, { client, returnReceipt: true });
     await client.query('COMMIT');
     return {
       memory_id: memoryId,
@@ -325,6 +380,7 @@ async function attestMemory(memoryId) {
       lineage_mutation_hash: lineageMutationHash,
       binding_content_hash: Buffer.from(binding.contentHash).toString('hex'),
       binding_mutation_hash: Buffer.from(binding.mutationHash).toString('hex'),
+      receipt_event_id: receipt.event_id,
     };
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch { /* connection may be gone */ }
@@ -339,17 +395,7 @@ try {
   if (!live) {
     console.log(JSON.stringify({ database, mode: 'DRY_RUN', before }, null, 2));
   } else {
-    const targets = await query(
-      `SELECT m.id::text
-         FROM aimos_memories m
-        WHERE NOT EXISTS (
-          SELECT 1 FROM aimos_memory_provenance p
-           WHERE p.memory_id = m.id
-             AND p.event_type = 'BIND'
-             AND p.binding_schema_version = 3
-        )
-        ORDER BY m.created_at, m.id`
-    );
+    const targets = { rows: [{ id: selectedMemoryId }] };
     const proofs = [];
     for (const target of targets.rows) proofs.push(await attestMemory(target.id));
     const after = await census();

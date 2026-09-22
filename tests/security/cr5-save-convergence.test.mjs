@@ -12,7 +12,7 @@ const VERIFIED_CALLS = new Map([
   ['routes/aimos.js', 5],
   ['routes/security.js', 1],
   ['routes/task.js', 1],
-  ['services/orchestration/tool-registry.js', 1],
+  ['services/orchestration/tool-registry.js', 2],
   ['services/retrieval/asmr-pipeline.js', 1],
 ]);
 
@@ -56,14 +56,14 @@ test('every verified SAVE caller supplies exact request or tool authority', () =
     for (const call of calls) assert.match(call, /mutation_authority\s*:/, file);
     total += calls.length;
   }
-  assert.equal(total, 11);
+  assert.equal(total, 12);
 });
 
 test('all autonomous writes use one typed owner and retain the memory subject', () => {
   const files = ['jobs', 'services'].flatMap(walk).filter((file) => file.endsWith('.js'));
   const calls = files.flatMap((file) => callWindows(source(file), 'executeHousekeeperCanonicalSave')
     .map((call) => ({ file, call })));
-  assert.equal(calls.length, 48);
+  assert.equal(calls.length, 46);
   for (const { file, call } of calls) {
     assert.doesNotMatch(call, /mutation_authority\s*:/, file);
     assert.match(call, /\bagent_id\s*(?::|[,}])/, `${file} must state the memory subject`);

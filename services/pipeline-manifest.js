@@ -226,7 +226,7 @@ export const PIPELINES = {
 
   // ─── RECALL ──────────────────────────────────────────────────────────────────
   recall: {
-    description: 'One canonical RECALL owner: signed authority + actor/grant lock → one restricted repeatable-read snapshot → per-lane provenance admission before influence → native dense/sparse/temporal/entity/QuIM/QMD/HyDE/concept gears → one bounded Reconstructed-Graph G2 family channel → central RRF fusion → signed epistemic and Canary/Aladdin closure → decision-bound output receipt; MAGMA remains retained dormant research with no pipeline edge',
+    description: 'One canonical RECALL owner: signed authority + actor/grant lock → one restricted repeatable-read snapshot → per-lane provenance admission before influence → native dense/sparse/temporal/entity/QuIM/internal-QMD/HyDE/concept gears → one bounded Reconstructed-Graph G2 family channel → central RRF fusion → signed epistemic and Canary/Aladdin closure → decision-bound output receipt; the standalone QMD surface is removed and MAGMA remains retained dormant research with no pipeline edge',
     entry: 'services/retrieval/native-recall-pipeline.js',
     services: [
       {
@@ -382,7 +382,7 @@ export const PIPELINES = {
 
   // ─── AGENT RUN ───────────────────────────────────────────────────────────────
   agent_run: {
-    description: 'Agent execution: prompt → constitution → governance → schema-mapper → LLM → STDP → reasoning extraction',
+    description: 'Agent execution: prompt → constitution → governance → provider-native tools → STDP → reasoning extraction',
     entry: 'services/orchestration/agent-runner.js',
     services: [
       {
@@ -488,10 +488,6 @@ export const PIPELINES = {
       {
         path: './security/security-classifier.js',
         exports: ['runSecurityPipeline'],
-      },
-      {
-        path: './shared/schema-mapper.js',
-        exports: ['getToolSchema', 'mapFactsToToolCalls', 'extractStructuredFacts'],
       },
       {
         path: './orchestration/escalation-resolver.js',

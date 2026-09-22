@@ -89,9 +89,12 @@ export function verifiedRequestAuthorityFromRequest(req) {
   if (!complete) throw new Error('verified_request_authority_incomplete');
   return Object.freeze({
     kind: 'verified_request',
+    authSource: 'envelope',
     body: req.body || {},
     agentId,
+    actorAgentId: agentId,
     validFromIso: context.actorValidFromIso,
+    actorValidFromIso: context.actorValidFromIso,
     certString: req.identityCertString,
     signedTs: req.identitySignedTs,
     nonce: req.identityNonce,

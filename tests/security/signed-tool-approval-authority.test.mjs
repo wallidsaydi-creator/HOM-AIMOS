@@ -24,19 +24,20 @@ function row({ id, operation, seq, parent = null, metadata = {} }) {
 }
 
 test('tool approval projection is append-only and requires one reserved execution', () => {
-  const args = { query: 'signed approval evidence' };
+  const args = { text: 'signed approval evidence' };
+  const operatorProof = { proof_sha256: 'ab'.repeat(32) };
   const rows = [
     row({
       id: 'request', operation: 'tool_approval_requested', seq: 1,
-      metadata: { tool: 'web_search', args, args_sha256: toolArgumentsHash(args), agent_id: 'auditor' },
+      metadata: { tool: 'x_post', args, args_sha256: toolArgumentsHash(args), agent_id: 'auditor' },
     }),
     row({
       id: 'approve', operation: 'tool_approval_approved', seq: 2, parent: 'request',
-      metadata: { approval_request_id: 'request', tool: 'web_search', args_sha256: toolArgumentsHash(args), agent_id: 'auditor' },
+      metadata: { approval_request_id: 'request', tool: 'x_post', args_sha256: toolArgumentsHash(args), agent_id: 'auditor', operator_proof: operatorProof, operator_proof_sha256: operatorProof.proof_sha256 },
     }),
     row({
       id: 'reserve', operation: 'tool_approval_execution_reserved', seq: 3, parent: 'approve',
-      metadata: { approval_request_id: 'request', tool: 'web_search', args_sha256: toolArgumentsHash(args), agent_id: 'auditor' },
+      metadata: { approval_request_id: 'request', tool: 'x_post', args_sha256: toolArgumentsHash(args), agent_id: 'auditor', operator_proof_sha256: operatorProof.proof_sha256 },
     }),
   ];
 
@@ -51,11 +52,11 @@ test('tool approval projection is append-only and requires one reserved executio
     ...rows,
     row({
       id: 'claim', operation: 'tool_approval_execution_claimed', seq: 4, parent: 'reserve',
-      metadata: { approval_request_id: 'request', tool: 'web_search', args_sha256: toolArgumentsHash(args), agent_id: 'auditor' },
+      metadata: { approval_request_id: 'request', tool: 'x_post', args_sha256: toolArgumentsHash(args), agent_id: 'auditor', operator_proof_sha256: operatorProof.proof_sha256 },
     }),
     row({
       id: 'executed', operation: 'tool_approval_executed', seq: 5, parent: 'claim',
-      metadata: { approval_request_id: 'request', tool: 'web_search', args_sha256: toolArgumentsHash(args), agent_id: 'auditor', result: { ok: true } },
+      metadata: { approval_request_id: 'request', tool: 'x_post', args_sha256: toolArgumentsHash(args), agent_id: 'auditor', operator_proof_sha256: operatorProof.proof_sha256, result: { ok: true } },
     }),
   ])[0];
   assert.equal(completed.status, 'executed');
@@ -77,5 +78,7 @@ test('tool approval source has no mutable map, TTL deletion, or bare boolean aut
   assert.match(registry, /signed_tool_approval_execution_evidence_required/);
   assert.doesNotMatch(registry, /const approved = options\.approved === true/);
   assert.match(routes, /\/approvals', requireCapability\('admin_override'\)/);
+  assert.doesNotMatch(routes, /\/approvals\/:id\/approve', requireCapability\('admin_override'\)/);
+  assert.match(routes, /verifyOperatorActionAuthorizationProof/);
   assert.match(routes, /reserveToolApprovalExecution/);
 });

@@ -7,11 +7,11 @@ test('CR7-R2 verifier proves relational and privilege progression without absorb
   const proof = proveCr7R2DatabaseLocalClosure();
   assert.equal(proof.valid, true);
   assert.equal(proof.frozen_r2_census_root_sha256, '648ce46c02ca493b4a2e6620c42656f646cd017fd5a91ba32dbf08d4185be1c4');
-  assert.equal(proof.current_census_root_sha256, '0b6b2828d79138dc74929c99057e0e94b62f4b96ea4f964e7952a7895bcd2ac3');
+  assert.equal(proof.current_census_root_sha256, '305c0048188c8f944080abd8454bbcfc1e82ea3a3b3902cbf1156e4259758859');
   assert.equal(proof.frozen_r2_owner_audit_root_sha256, 'a3715ebc1213c239863859f8a141264ec41ae1f4e9c47bb1292a6f705f5f57b3');
-  assert.equal(proof.current_owner_audit_root_sha256, '15b94dcb8492676bad02cd2c5f6d1af7cbb277de4503896aeb25493d9eaae9af');
+  assert.equal(proof.current_owner_audit_root_sha256, '214330b07d8425bba22f951ab6c707526012952dc2aa7adaba3749b797f806c4');
   assert.equal(proof.checks.historical_r0_effect_count, 160);
-  assert.equal(proof.checks.current_effect_count, 104);
+  assert.equal(proof.checks.current_effect_count, 103);
   assert.equal(proof.checks.broad_concept_edge_writer_removed, true);
   assert.equal(proof.checks.entity_edge_exact_projection, true);
   assert.equal(proof.checks.restricted_standalone_defaults, true);

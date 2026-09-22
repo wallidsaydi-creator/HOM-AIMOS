@@ -29,7 +29,7 @@
 // + commitCredentialLifecycle STORE when the save pipeline detects a credential
 // key. This module is the B.1 foundation — the lane is the B.2 closure.
 
-import { readCredential } from './credential-store.js';
+import { readCredential, credentialSlotId } from './credential-store.js';
 import { credentialLedger } from './credential-ledger.js';
 
 // Services loaded from keychain at boot (A1a extended to 35 total).
@@ -89,134 +89,239 @@ export const CACHED_CREDENTIAL_SERVICES = [
   'oauth_codex_refresh_token'
 ];
 
-const _cache = new Map(); // service -> { value, hash, slot } | null
-let _loaded = false;
-let _loadPromise = null;
+export const CREDENTIAL_CACHE_STATES = Object.freeze({
+  READY: 'READY',
+  ABSENT: 'ABSENT',
+  REVOKED: 'REVOKED',
+  UNAVAILABLE: 'UNAVAILABLE',
+});
 
-async function readVerifiedCredential(service) {
-  const entry = await readCredential(service);
-  if (!entry) return null;
-  const verified = await credentialLedger.readVerifiedSlotChain(entry.slot);
-  const effective = verified.effectiveStore;
-  if (!effective) throw new Error(`credential lifecycle is revoked or missing for ${service}`);
-  const body = typeof effective.body_json === 'string'
-    ? JSON.parse(effective.body_json)
-    : effective.body_json;
-  if (
-    effective.service_name !== service
-    || body?.service !== service
-    || body?.slot_id !== entry.slot
-    || body?.credential_hash !== entry.hash
-  ) {
-    throw new Error(`credential keychain/lifecycle binding mismatch for ${service}`);
-  }
-  return {
-    ...entry,
-    lifecycle: Object.freeze({
-      provenanceId: String(effective.provenance_id),
-      mutationHash: Buffer.from(effective.mutation_hash).toString('hex'),
-      signerAgentId: effective.agent_id,
-      signerValidFrom: new Date(effective.agent_valid_from).toISOString(),
-    }),
-  };
-}
-
-export function isCredentialCacheLoaded() {
-  return _loaded;
-}
-
-export async function loadCredentialCache() {
-  if (_loadPromise) return _loadPromise;
-  _loadPromise = (async () => {
-    const results = await Promise.all(
-      CACHED_CREDENTIAL_SERVICES.map(async (service) => {
-        try {
-          const entry = await readVerifiedCredential(service);
-          return [service, entry];
-        } catch (err) {
-          console.error(`[credential-cache] failed to read ${service} from keychain: ${err?.message || err}`);
-          return [service, null];
-        }
-      })
-    );
-    for (const [service, entry] of results) {
-      _cache.set(service, entry);
-    }
-    _loaded = true;
-    const present = Array.from(_cache.values()).filter(Boolean).length;
-    console.log(`[BOOT] credentialCache loaded — ${present}/${CACHED_CREDENTIAL_SERVICES.length} slots present`);
-  })();
-  return _loadPromise;
-}
-
-export async function reloadCredentialCache() {
-  _loaded = false;
-  _cache.clear();
-  _loadPromise = null;
-  return loadCredentialCache();
-}
-
-// Sync read — returns plaintext or null.
-// If cache not loaded yet, returns null + one-shot warning (should not happen
-// post-boot; indicates a consumer called before loadCredentialCache completed).
-export function getCachedCredential(service) {
-  if (!_loaded) {
-    console.warn(`[credential-cache] getCachedCredential('${service}') called before cache loaded — returning null`);
-    return null;
-  }
-  const entry = _cache.get(service);
-  return entry ? entry.value : null;
-}
-
-// Sync read — returns the sha256 hash of the plaintext, or null.
-// Used by Phase B.2 USE linkage to thread credential_hash to the signer.
-export function getCachedCredentialHash(service) {
-  if (!_loaded) return null;
-  const entry = _cache.get(service);
-  return entry ? entry.hash : null;
-}
-
-// Explicit materialization for an outbound credential operation. The returned
-// immutable checkout binds the plaintext to the exact verified effective STORE
-// or ROTATE row. Callers must reserve and finalize its use through the native
-// credential ledger immediately around the external boundary.
-export function checkoutCachedCredential(service) {
-  if (!_loaded) throw new Error('credential_cache_not_loaded');
-  const entry = _cache.get(service);
-  if (!entry) return null;
+function lifecycleEntry(effective) {
   return Object.freeze({
-    serviceName: service,
-    value: entry.value,
-    credentialHash: entry.hash,
-    slotId: entry.slot,
-    effectiveProvenanceId: entry.lifecycle.provenanceId,
-    effectiveMutationHash: entry.lifecycle.mutationHash,
+    provenanceId: String(effective.provenance_id),
+    mutationHash: Buffer.from(effective.mutation_hash).toString('hex'),
+    signerAgentId: effective.agent_id,
+    signerValidFrom: new Date(effective.agent_valid_from).toISOString(),
   });
 }
 
-// Sync presence check — returns boolean.
-// Used by status/configured-check routes that only need to know if a
-// credential is configured (no plaintext materialized).
-export function peekCachedCredential(service) {
-  if (!_loaded) return false;
-  const entry = _cache.get(service);
-  return entry != null;
+export function createCredentialCacheOwner({
+  services = CACHED_CREDENTIAL_SERVICES,
+  readCredentialFn = readCredential,
+  readVerifiedSlotChainFn = credentialLedger.readVerifiedSlotChain.bind(credentialLedger),
+  logFn = console,
+} = {}) {
+  const serviceSet = new Set(services);
+  let snapshot = new Map();
+  let loaded = false;
+  let generation = 0;
+  let initialLoad = null;
+  let reloadTail = Promise.resolve();
+  const revocationGenerations = new Map();
+
+  function publishRevocation(service) {
+    const revoked = Object.freeze({ state: CREDENTIAL_CACHE_STATES.REVOKED, entry: null });
+    if (loaded && snapshot.get(service)?.state !== CREDENTIAL_CACHE_STATES.REVOKED) {
+      const next = new Map(snapshot); next.set(service, revoked);
+      revocationGenerations.set(service, publish(next));
+    }
+    return revoked;
+  }
+
+  function publishCandidate(candidate, startedGeneration) {
+    for (const [service, revokedAt] of revocationGenerations) {
+      if (revokedAt > startedGeneration) candidate.set(service, snapshot.get(service));
+    }
+    return publish(candidate);
+  }
+
+  async function buildState(service, prior = null) {
+    const slot = credentialSlotId(service);
+    const authorityRead = Promise.resolve().then(() => readVerifiedSlotChainFn(slot)).then(value => {
+      if (value?.revoked === true) publishRevocation(service);
+      return value;
+    });
+    const [material, authority] = await Promise.allSettled([
+      Promise.resolve().then(() => readCredentialFn(service)), authorityRead,
+    ]);
+    // A verified revocation is authoritative even when Keychain is unavailable.
+    // Stop exposing that slot immediately, without waiting for other services.
+    if (authority.status === 'fulfilled' && authority.value?.revoked === true) {
+      return publishRevocation(service);
+    }
+    if (material.status === 'rejected' || authority.status === 'rejected') {
+      const error = material.reason || authority.reason;
+      return Object.freeze({ state: CREDENTIAL_CACHE_STATES.UNAVAILABLE,
+        retainedEntry: prior?.entry || prior?.retainedEntry || null,
+        errorClass: String(error?.name || 'credential_read_failure') });
+    }
+    const entry = material.value;
+    const verified = authority.value;
+    if (!entry) {
+      return Object.freeze(verified?.rowCount === 0
+        ? { state: CREDENTIAL_CACHE_STATES.ABSENT, entry: null }
+        : { state: CREDENTIAL_CACHE_STATES.UNAVAILABLE,
+          retainedEntry: prior?.entry || prior?.retainedEntry || null,
+          errorClass: 'credential_keychain_value_unavailable' });
+    }
+    const effective = verified?.effectiveStore;
+    const body = typeof effective?.body_json === 'string'
+      ? JSON.parse(effective.body_json) : effective?.body_json;
+    if (!effective
+        || effective.service_name !== service
+        || body?.service !== service
+        || body?.slot_id !== entry.slot
+        || body?.credential_hash !== entry.hash) {
+      return Object.freeze({ state: CREDENTIAL_CACHE_STATES.UNAVAILABLE,
+        retainedEntry: prior?.entry || prior?.retainedEntry || null,
+        errorClass: 'credential_authority_binding_invalid' });
+    }
+    return Object.freeze({ state: CREDENTIAL_CACHE_STATES.READY,
+      entry: Object.freeze({ ...entry, lifecycle: lifecycleEntry(effective) }) });
+  }
+
+  async function buildSnapshot(previous) {
+    const pairs = await Promise.all([...serviceSet].map(async (service) => (
+      [service, await buildState(service, previous.get(service))]
+    )));
+    return new Map(pairs);
+  }
+
+  function publish(candidate) {
+    snapshot = candidate;
+    loaded = true;
+    generation += 1;
+    return generation;
+  }
+
+  function unavailableServices(candidate) {
+    return [...candidate.entries()]
+      .filter(([, state]) => state.state === CREDENTIAL_CACHE_STATES.UNAVAILABLE)
+      .map(([service]) => service);
+  }
+
+  async function load() {
+    if (loaded) return Object.freeze({ generation, unavailable: Object.freeze([]) });
+    if (initialLoad) return initialLoad;
+    initialLoad = enqueueReload(async () => {
+      if (loaded) return Object.freeze({ generation, unavailable: Object.freeze([]) });
+      const candidate = await buildSnapshot(new Map());
+      const unavailable = unavailableServices(candidate);
+      if (unavailable.length) {
+        const error = new Error(`credential_cache_initial_load_unavailable:${unavailable.join(',')}`);
+        error.unavailableServices = Object.freeze(unavailable);
+        throw error;
+      }
+      const nextGeneration = publish(candidate);
+      const present = [...candidate.values()].filter((state) => state.state === CREDENTIAL_CACHE_STATES.READY).length;
+      logFn.log?.(`[BOOT] credentialCache loaded — ${present}/${serviceSet.size} slots present; generation=${nextGeneration}`);
+      return Object.freeze({ generation: nextGeneration, unavailable: Object.freeze([]) });
+    });
+    try { return await initialLoad; } catch (error) { initialLoad = null; throw error; }
+  }
+
+  function enqueueReload(work) {
+    const next = reloadTail.then(work, work);
+    reloadTail = next.catch(() => {});
+    return next;
+  }
+
+  async function reload() {
+    if (!loaded) return load();
+    return enqueueReload(async () => {
+      const startedGeneration = generation;
+      const candidate = await buildSnapshot(snapshot);
+      const nextGeneration = publishCandidate(candidate, startedGeneration);
+      const unavailable = unavailableServices(candidate);
+      if (unavailable.length) {
+        const error = new Error(`credential_cache_reload_unavailable:${unavailable.join(',')}`);
+        error.generation = nextGeneration;
+        error.unavailableServices = Object.freeze(unavailable);
+        throw error;
+      }
+      return Object.freeze({ generation: nextGeneration, unavailable: Object.freeze([]) });
+    });
+  }
+
+  async function refresh(service) {
+    if (!serviceSet.has(service)) throw new Error(`credential-cache: unregistered service ${service}`);
+    if (!loaded) await load();
+    // Revocation is an immediate safety transition, including when a complete
+    // reload is waiting on another service. READY publication still queues.
+    try {
+      if ((await readVerifiedSlotChainFn(credentialSlotId(service)))?.revoked === true) publishRevocation(service);
+    } catch { /* The queued native state read reports UNAVAILABLE. */ }
+    return enqueueReload(async () => {
+      const startedGeneration = generation;
+      const prior = snapshot.get(service) || null;
+      const state = await buildState(service, prior);
+      const candidate = new Map(snapshot);
+      candidate.set(service, state);
+      const nextGeneration = publishCandidate(candidate, startedGeneration);
+      const effective = candidate.get(service);
+      if (effective.state === CREDENTIAL_CACHE_STATES.UNAVAILABLE) {
+        const error = new Error(`credential_cache_refresh_unavailable:${service}`);
+        error.generation = nextGeneration;
+        throw error;
+      }
+      return Object.freeze({ generation: nextGeneration, state: effective.state,
+        entry: effective.state === CREDENTIAL_CACHE_STATES.READY ? effective.entry : null });
+    });
+  }
+
+  function state(service) {
+    if (!loaded) throw new Error('credential_cache_not_loaded');
+    return snapshot.get(service) || Object.freeze({ state: CREDENTIAL_CACHE_STATES.ABSENT, entry: null });
+  }
+
+  function checkout(service) {
+    const current = state(service);
+    if (current.state === CREDENTIAL_CACHE_STATES.UNAVAILABLE) {
+      throw new Error(`credential_cache_authority_unavailable:${service}`);
+    }
+    if (current.state !== CREDENTIAL_CACHE_STATES.READY) return null;
+    const entry = current.entry;
+    return Object.freeze({ serviceName: service, value: entry.value, credentialHash: entry.hash,
+      slotId: entry.slot, effectiveProvenanceId: entry.lifecycle.provenanceId,
+      effectiveMutationHash: entry.lifecycle.mutationHash });
+  }
+
+  function inspect() {
+    const values = {};
+    for (const [service, current] of snapshot.entries()) {
+      values[service] = Object.freeze({ state: current.state,
+        present: current.state === CREDENTIAL_CACHE_STATES.READY,
+        ...(current.state === CREDENTIAL_CACHE_STATES.READY
+          ? { hash: `${current.entry.hash.slice(0, 12)}...` } : {}) });
+    }
+    return Object.freeze({ loaded, generation, services: Object.freeze(values) });
+  }
+
+  return Object.freeze({ load, reload, refresh, checkout, state, inspect,
+    isLoaded: () => loaded,
+    get: (service) => {
+      if (!loaded) return null;
+      const current = snapshot.get(service);
+      return current?.state === CREDENTIAL_CACHE_STATES.READY ? current.entry.value : null;
+    },
+    getHash: (service) => {
+      if (!loaded) return null;
+      const current = snapshot.get(service);
+      return current?.state === CREDENTIAL_CACHE_STATES.READY ? current.entry.hash : null;
+    },
+    peek: (service) => loaded && snapshot.get(service)?.state === CREDENTIAL_CACHE_STATES.READY,
+  });
 }
 
-export async function refreshCachedCredential(service) {
-  if (!CACHED_CREDENTIAL_SERVICES.includes(service)) {
-    throw new Error(`credential-cache: unregistered service ${service}`);
-  }
-  const entry = await readVerifiedCredential(service);
-  _cache.set(service, entry);
-  return entry;
-}
+const credentialCache = createCredentialCacheOwner();
 
-// For diagnostics + tests — returns a snapshot of which slots are present.
-export function _peekCredentialCache() {
-  const snapshot = {};
-  for (const [service, entry] of _cache.entries()) {
-    snapshot[service] = entry ? { present: true, hash: entry.hash.slice(0, 12) + '...' } : { present: false };
-  }
-  return snapshot;
-}
+export function isCredentialCacheLoaded() { return credentialCache.isLoaded(); }
+export async function loadCredentialCache() { return credentialCache.load(); }
+export async function reloadCredentialCache() { return credentialCache.reload(); }
+export function getCachedCredential(service) { return credentialCache.get(service); }
+export function getCachedCredentialHash(service) { return credentialCache.getHash(service); }
+export function checkoutCachedCredential(service) { return credentialCache.checkout(service); }
+export function peekCachedCredential(service) { return credentialCache.peek(service); }
+export async function refreshCachedCredential(service) { return credentialCache.refresh(service); }
+export function getCredentialCacheState(service) { return credentialCache.state(service).state; }
+export function _peekCredentialCache() { return credentialCache.inspect(); }

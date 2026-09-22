@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
+import { createHash, createPublicKey } from 'node:crypto';
 
 import {
   canonicalJson,
@@ -117,6 +117,8 @@ test('event proof rejects content, order, predecessor, signature, and signer tam
   assert.equal(verifyEventProof({ ...row, prev_mutation_hash: Buffer.alloc(32) }, signer.pubkey).valid, false);
   assert.equal(verifyEventProof({ ...row, sig: Buffer.alloc(64) }, signer.pubkey).valid, false);
   assert.equal(verifyEventProof(row, wrongSigner.pubkey).valid, false);
+  assert.equal(verifyEventProof(row, wrongSigner.pubkey,
+    createPublicKey({ key: Buffer.from(signer.pubkey, 'base64url'), format: 'der', type: 'spki' })).valid, false);
 });
 
 test('complete event chain verifies identity, links, and an exported head checkpoint', () => {
@@ -165,5 +167,35 @@ test('complete event chain verifies identity, links, and an exported head checkp
   assert.throws(
     () => verifyEventLedgerChain([first, { ...second, prev_mutation_hash: Buffer.alloc(32) }]),
     /chain_link_invalid/,
+  );
+  assert.throws(
+    () => verifyEventLedgerChain([first, { ...second, ts_signed: 2_000_000_001 }]),
+    /certificate_invalid:cert_expired/,
+  );
+  assert.throws(
+    () => verifyEventLedgerChain([first, { ...second,
+      ts_signed: Math.floor(new Date(first.signer_valid_from).getTime() / 1000) - 1 }]),
+    /certificate_invalid:cert_not_yet_valid/,
+  );
+  assert.throws(
+    () => verifyEventLedgerChain([first, { ...second, revocation_ts_signed: signedTs }]),
+    /signer_revoked_at_signature_time/,
+  );
+  assert.throws(
+    () => verifyEventLedgerChain([first, { ...second, sig: Buffer.alloc(64) }]),
+    /proof_invalid:sig_invalid/,
+  );
+  const forgedSigner = generateKeypair();
+  const forgedCert = issueCert(forgedSigner.privkey, {
+    v: 1, agent_id: 'housekeeper', pubkey: signer.pubkey,
+    device_fp: 'event-proof-device',
+    valid_from: Math.floor(new Date(first.signer_valid_from).getTime() / 1000),
+    valid_until: 2_000_000_000, issuer: 'housekeeper',
+    issued_at: Math.floor(new Date(first.signer_valid_from).getTime() / 1000),
+  });
+  assert.throws(
+    () => verifyEventLedgerChain([first, { ...second, cert: forgedCert,
+      cert_fingerprint: sha256(Buffer.from(forgedCert, 'utf8')).toString('hex') }]),
+    /certificate_invalid:cert_sig_invalid/,
   );
 });

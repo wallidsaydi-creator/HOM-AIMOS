@@ -14,6 +14,7 @@ import {
   canonicalJson,
   verifyStoredPayloadSigWithContext,
   verifyStoredPayloadSigWithEnvelopeClaims,
+  verifyStoredPayloadSigWithRequestTarget,
 } from '../security/agent-identity.js';
 import { contentHash } from '../security/identity-chain.js';
 
@@ -76,13 +77,15 @@ export function defaultPermissions() {
   return out;
 }
 
-export async function getPermissions(agentId, companyId) {
+export async function getPermissions(agentId, companyId, { subjectValidFromIso = null } = {}) {
   const company = companyId || AIMOS_COMPANY_ID;
   const res = await withTransaction((client) => client.query(
     `WITH active_subject AS (
        SELECT valid_from
          FROM agent_identity
         WHERE agent_id = $2
+          AND ($3::timestamptz IS NULL OR valid_from = $3::timestamptz)
+          AND valid_from <= now() AND valid_until > now()
           AND NOT EXISTS (
             SELECT 1 FROM aimos_agent_revocation_events revocation
              WHERE revocation.agent_id = agent_identity.agent_id
@@ -99,7 +102,7 @@ export async function getPermissions(agentId, companyId) {
         AND actor.valid_from = event.actor_valid_from
       WHERE event.company_id = $1
         AND event.subject_agent_id = $2`,
-    [company, agentId]
+    [company, agentId, subjectValidFromIso]
   ), {
     restricted: true,
     client_id: company,
@@ -201,7 +204,7 @@ export function verifyAuthorizationEventChain(rows = [], { companyId, agentId } 
         || !DEFAULT_CAPS.includes(capability)
         || String(body?.agent_id || '') !== agentId
         || bodyPermissions[capability] !== row.allowed
-        || ![3, 4].includes(Number(row.request_sig_form))
+        || ![3, 4, 5].includes(Number(row.request_sig_form))
         || canonicalJson(bodyPermissions) !== canonicalJson(body?.permissions || {})
         || (expectedPrev === null ? storedPrev !== null : !sameBuffer(expectedPrev, storedPrev))
       ) {
@@ -218,8 +221,9 @@ export function verifyAuthorizationEventChain(rows = [], { companyId, agentId } 
       if (!sameBuffer(computedContentHash, row.content_hash) || !sameBuffer(computedMutationHash, row.mutation_hash)) {
         throw new Error('authorization_chain_hash_mismatch');
       }
-      const signature = Number(row.request_sig_form) === 4
-        ? verifyStoredPayloadSigWithEnvelopeClaims(
+      const verifyClaims = Number(row.request_sig_form) === 5 ? verifyStoredPayloadSigWithRequestTarget : verifyStoredPayloadSigWithEnvelopeClaims;
+      const signature = [4, 5].includes(Number(row.request_sig_form))
+        ? verifyClaims(
             row.actor_pubkey,
             body,
             row.signed_method,
@@ -276,11 +280,12 @@ export async function setPermissions(agentId, permissions, authority, companyId)
     || typeof authority.nonce !== 'string'
     || !Buffer.isBuffer(authority.sigBytes)
     || authority.sigBytes.length !== 64
-    || ![3, 4].includes(authority.requestSigForm)
+    || ![3, 4, 5].includes(authority.requestSigForm)
     || String(authority.signedMethod || '').toUpperCase() !== 'POST'
-    || authority.signedPath !== '/permissions/set'
+    || String(authority.signedPath || '').split('?')[0] !== '/permissions/set'
     || (authority.requestSigForm === 3 && authority.signedClaims !== null)
     || (authority.requestSigForm === 4 && !authority.signedClaims?.prev_chain_hash)
+    || (authority.requestSigForm === 5 && !authority.signedClaims)
     || canonicalJson(authority.body?.permissions || {}) !== canonicalJson(permissions)
     || String(authority.body?.agent_id || '') !== String(agentId)
   ) {

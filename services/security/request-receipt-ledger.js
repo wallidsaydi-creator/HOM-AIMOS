@@ -14,6 +14,7 @@ import {
   verifyCertChain,
   verifyStoredPayloadSigWithContext,
   verifyStoredPayloadSigWithEnvelopeClaims,
+  verifyStoredPayloadSigWithRequestTarget,
 } from './agent-identity.js';
 
 const REQUEST_RECEIPT_DOMAIN = Buffer.from('aimos-request-receipt-v1\0', 'utf8');
@@ -144,8 +145,10 @@ export function verifyRequestReceiptProof(row, { body, pubkey } = {}) {
     ) {
       return { valid: false, reason: 'request_receipt_hash_mismatch' };
     }
-    const signature = Number(row.request_sig_form) === 4
-      ? verifyStoredPayloadSigWithEnvelopeClaims(
+    if (![3, 4, 5].includes(Number(row.request_sig_form))) return { valid: false, reason: 'request_receipt_form_invalid' };
+    const verifyClaims = Number(row.request_sig_form) === 5 ? verifyStoredPayloadSigWithRequestTarget : verifyStoredPayloadSigWithEnvelopeClaims;
+    const signature = [4, 5].includes(Number(row.request_sig_form))
+      ? verifyClaims(
           pubkey,
           body || {},
           row.signed_method,
@@ -457,9 +460,10 @@ export async function reserveVerifiedRequest({
     || !actorValidFromIso
     || !certString
     || !pubkey
-    || ![3, 4].includes(Number(requestSigForm))
+    || ![3, 4, 5].includes(Number(requestSigForm))
     || !signedMethod
     || !signedPath
+    || (Number(requestSigForm) === 5 && signedClaims === null)
     || !nonce
     || !Number.isInteger(signedTs)
     || !Buffer.isBuffer(sigBytes)

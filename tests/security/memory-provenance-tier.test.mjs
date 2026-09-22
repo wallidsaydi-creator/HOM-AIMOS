@@ -14,7 +14,11 @@ function createCapturingClient() {
       queries.push({ sql, params });
       if (sql.includes('information_schema.columns')) return { rows: [{ '?column?': 1 }] };
       if (sql.includes('pg_advisory_xact_lock')) return { rows: [{}] };
-      if (sql.includes('SELECT mutation_hash')) return { rows: [] };
+      if (sql.includes('SELECT provenance_id,mutation_hash') && sql.includes(') topology_heads')) {
+        assert.match(sql, /successor\.prev_mutation_hash = candidate\.mutation_hash/);
+        assert.match(sql, /LIMIT 2/);
+        return { rows: [] };
+      }
       if (sql.includes('SELECT 1 FROM aimos_memory_provenance')) return { rows: [] };
       if (sql.includes('INSERT INTO aimos_memory_provenance')) {
         inserts.push({ sql, params });

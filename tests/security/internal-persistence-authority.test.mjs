@@ -57,7 +57,7 @@ test('subject identities remain distinct from the autonomous signer', async () =
 
   assert.equal((architecture.match(/agent_id: 'architecture-registry'/g) || []).length, 2);
   assert.match(capability, /agent_id: 'capability-probe'[\s\S]*key: `capability_profile:\$\{agentId\}`/);
-  assert.match(runner, /agent_id: toAgentId/);
+  assert.match(runner, /agent_id: targetAgentId/);
   assert.match(runner, /agent_id: runtimeAgent\.id/);
   for (const call of persistCallWindows(xai)) {
     assert.match(call, /agent_id: runtimeAgent\.id/);

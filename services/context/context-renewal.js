@@ -304,7 +304,7 @@ export async function loadCheckpoint(runId, companyId) {
 
   try {
     const result = await query(
-      `SELECT value, updated_at FROM aimos_memories
+      `SELECT id, value, updated_at FROM aimos_memories
        WHERE company_id = $1 AND key = $2
        ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
        LIMIT 1`,
@@ -317,9 +317,10 @@ export async function loadCheckpoint(runId, companyId) {
 
     const raw = result.rows[0].value;
     try {
-      return typeof raw === 'string' ? JSON.parse(raw) : raw;
+      const value = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      return { ...value, source_memory_id: result.rows[0].id };
     } catch {
-      return { raw_value: raw, loaded_at: result.rows[0].updated_at };
+      return { raw_value: raw, loaded_at: result.rows[0].updated_at, source_memory_id: result.rows[0].id };
     }
   } catch (err) {
     console.error('[context-renewal] loadCheckpoint DB error:', err.message);

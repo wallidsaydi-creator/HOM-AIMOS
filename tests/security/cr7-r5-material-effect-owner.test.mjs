@@ -87,8 +87,8 @@ test('reconstruction rejects terminal substitution and forks', async () => {
 test('CR7-R5 audit proves the corrected 68-site partition with zero current open effects', () => {
   const proof = proveCr7R5MaterialEffectAudit();
   assert.equal(proof.frozen_corrected_a0_effect_count, 68);
-  assert.equal(proof.current_effect_count, 63);
-  assert.equal(proof.retired_effect_count, 5);
+  assert.equal(proof.current_effect_count, 62);
+  assert.equal(proof.retired_effect_count, 6);
   assert.equal(proof.current_open_effect_count, 0);
   assert.equal(proof.reconstruction.time_complexity, 'O(n)');
   assert.equal(proof.reconstruction.terminal_bijection_enforced, true);

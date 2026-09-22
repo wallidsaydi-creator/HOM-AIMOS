@@ -20,6 +20,9 @@
 // → Calls: services/observe/event-ledger.js (extraction events)
 // Pipeline: AGENT_RUN_PIPELINE
 // Position: structured fact extraction
+// Status: DORMANT — retained as a deterministic mapping library; the live
+// agent path uses provider-native registered-tool dispatch and does not run a
+// second unconsumed model extraction pass.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';

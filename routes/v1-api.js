@@ -31,6 +31,7 @@ import { query } from '../db/connection.js';
 import { AIMOS_COMPANY_ID } from '../services/core/runtime-config.js';
 import { executeCanonicalRecall } from '../services/retrieval/native-recall-pipeline.js';
 import { verifiedRequestAuthorityFromRequest } from '../services/security/auth-gate.js';
+import { resolveModelForRequest } from '../services/orchestration/model-preferences.js';
 
 const router = express.Router();
 
@@ -104,7 +105,10 @@ router.post('/ingest', async (req, res, next) => {
     source,
     session_id,
     metadata,
-    clearance_level
+    clearance_level,
+    source_memory_ids,
+    provider,
+    model
   } = req.body || {};
 
   // Validate required field
@@ -121,6 +125,9 @@ router.post('/ingest', async (req, res, next) => {
       sessionId:    session_id || null,
       metadata:     metadata   || {},
       clearanceLevel: clearance_level ?? 1,
+      sourceMemoryIds: source_memory_ids,
+      provider,
+      model,
       executionContext: req.executionContext,
       saveToAimos: true,
     });
@@ -151,6 +158,9 @@ router.post('/ingest', async (req, res, next) => {
     });
   } catch (err) {
     console.error('[v1/ingest] Pipeline error:', err.message);
+    if (err.message === 'origin_declared_input_set_invalid') {
+      return apiError(res, 400, 'origin_declared_input_set_invalid', 'source_memory_ids must be a bounded set of unique memory UUIDs');
+    }
     err.statusCode = 500;
     return next(err);
   }
@@ -198,10 +208,12 @@ router.post('/recall', async (req, res, next) => {
     if (nativeRecall.status !== 200) {
       return res.status(nativeRecall.status).json(nativeRecall.body);
     }
+    const selectedModel = resolveModelForRequest({ taskType: 'chat', prompt: String(query).trim() });
     const result = await asmrAnswerFromEvidence(
       String(query).trim(),
       nativeRecall.body.memories || [],
-      { variants, mode: ensembleMode },
+      { variants, mode: ensembleMode, provider: selectedModel.provider,
+        model: selectedModel.model, useContext: req.executionContext },
     );
     const answerReceipt = await finalizeAsmrAnswer({
       query: String(query).trim(),
@@ -244,7 +256,9 @@ router.post('/recall', async (req, res, next) => {
     });
   } catch (err) {
     console.error('[v1/recall] Pipeline error:', err.message);
-    err.statusCode = 500;
+    err.statusCode = err.message === 'asmr_model_provider_unavailable'
+      || err.message.startsWith('model_provider_unavailable:')
+      || err.message.startsWith('[resolveModelForRequest]') ? 503 : 500;
     return next(err);
   }
 });

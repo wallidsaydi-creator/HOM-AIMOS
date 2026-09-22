@@ -1,3 +1,4 @@
+import { performance } from 'node:perf_hooks';
 /**
  * agent-tools.js
  * Source: OpenAI Function Calling, Anthropic Tool Use, ReAct pattern
@@ -17,11 +18,13 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { executeTool } from './tool-registry.js';
-import { runProvider, resolveProviderForModel } from '../core/providers.js';
-import { fetchWithTimeout } from './http.js';
+import { getServingAbortSignal } from '../runtime/serving-control.js';
+import { runProvider, resolveProviderForModel, PROVIDER_REQUEST_TIMEOUT_MS, CODEX_REQUEST_TIMEOUT_MS } from '../core/providers.js';
+import { fetchWithTimeout, markHttpIndeterminate } from './http.js';
 import { checkoutCachedCredential } from '../security/credential-cache.js';
 import { credentialLedger, credentialUseEvidenceHash } from '../security/credential-ledger.js';
 import { systemConfigStore } from '../security/system-config-store.js';
+import { createToolInputState, readToolInputState, retainToolContext, completeToolContext, failToolContext, recordToolContextInput } from './tool-action-ledger.js';
 
 const MAX_TOOL_LOOPS = 8;
 const MODEL_PROVIDER_REQUEST_TIMEOUT_MS = 30_000;
@@ -308,6 +311,8 @@ function renderPromptFromMessages(messages = []) {
 // ─── GEMINI STREAMING ─────────────────────────────────────────────────────────
 
 async function streamGeminiPrompt(model, messages, onToken, toolExecutionOptions = {}) {
+  const operationDeadline = Math.min(toolExecutionOptions.deadlineAt ?? Infinity,
+    toolExecutionOptions.credentialUseContext?.deadlineAt ?? Infinity, performance.now() + MODEL_PROVIDER_REQUEST_TIMEOUT_MS);
   const credential = checkoutCachedCredential('gemini_api_key')
     || checkoutCachedCredential('google_api_key');
   if (!credential) throw new Error('Gemini credential missing');
@@ -336,8 +341,11 @@ async function streamGeminiPrompt(model, messages, onToken, toolExecutionOptions
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody)
-      }
+        body: JSON.stringify(requestBody),
+        signal: toolExecutionOptions.signal && useContext.signal
+          ? AbortSignal.any([toolExecutionOptions.signal, useContext.signal]) : toolExecutionOptions.signal || useContext.signal,
+        deadlineAt: operationDeadline,
+    }
     , MODEL_PROVIDER_REQUEST_TIMEOUT_MS);
   } catch (error) {
     await credentialLedger.finalizeCredentialUse({
@@ -349,9 +357,11 @@ async function streamGeminiPrompt(model, messages, onToken, toolExecutionOptions
     });
     throw error;
   }
+  let terminalAttempted = false;
   try {
     if (!res.ok) {
       const errorText = await res.text();
+      terminalAttempted = true;
       await credentialLedger.finalizeCredentialUse({
         reservation,
         outcome: 'failed',
@@ -370,9 +380,14 @@ async function streamGeminiPrompt(model, messages, onToken, toolExecutionOptions
     let buffer = '';
     let full = '';
 
+    let streamComplete = false;
+    try {
     while (true) {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done) {
+        if (buffer.trim() || !streamComplete) throw new Error('provider_stream_incomplete');
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
@@ -386,10 +401,10 @@ async function streamGeminiPrompt(model, messages, onToken, toolExecutionOptions
         let parsed;
         try {
           parsed = JSON.parse(payload);
-        } catch {
-          continue;
-        }
+        } catch (error) { throw error; }
 
+        if (parsed?.error) throw new Error('gemini_stream_error');
+        if (parsed?.candidates?.[0]?.finishReason || parsed?.promptFeedback?.blockReason) streamComplete = true;
         const text = parsed?.candidates?.[0]?.content?.parts
           ?.map((part) => (typeof part?.text === 'string' ? part.text : ''))
           .join('') || '';
@@ -401,7 +416,13 @@ async function streamGeminiPrompt(model, messages, onToken, toolExecutionOptions
         if (typeof onToken === 'function') onToken(delta);
       }
     }
+    } finally {
+      // Cancellation may already have errored the stream; always release its lock.
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
 
+    terminalAttempted = true;
     await credentialLedger.finalizeCredentialUse({
       reservation,
       outcome: 'completed',
@@ -410,8 +431,7 @@ async function streamGeminiPrompt(model, messages, onToken, toolExecutionOptions
     });
     return full;
   } catch (error) {
-    if (!res.ok) throw error;
-    await credentialLedger.finalizeCredentialUse({
+    if (!terminalAttempted) await credentialLedger.finalizeCredentialUse({
       reservation,
       outcome: 'indeterminate',
       outcomeHash: credentialUseEvidenceHash({ error_class: error?.name || 'stream_processing_error' }),
@@ -419,6 +439,8 @@ async function streamGeminiPrompt(model, messages, onToken, toolExecutionOptions
       errorClass: error?.name || 'stream_processing_error',
     });
     throw error;
+  } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
   }
 }
 
@@ -429,6 +451,8 @@ async function streamGeminiPrompt(model, messages, onToken, toolExecutionOptions
 // ─── GEMINI WITH TOOLS ────────────────────────────────────────────────────────
 
 async function runGeminiWithTools(agent, messages, toolDefs, toolExecutionOptions = {}, onToken = null) {
+  const operationDeadline = Math.min(toolExecutionOptions.deadlineAt ?? Infinity,
+    toolExecutionOptions.credentialUseContext?.deadlineAt ?? Infinity, performance.now() + MODEL_PROVIDER_REQUEST_TIMEOUT_MS);
   const credential = checkoutCachedCredential('gemini_api_key')
     || checkoutCachedCredential('google_api_key');
   if (!credential) throw new Error('Gemini credential missing');
@@ -471,7 +495,11 @@ async function runGeminiWithTools(agent, messages, toolDefs, toolExecutionOption
     try {
       res = await fetchWithTimeout(
         `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${credential.value}`,
-        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+        { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) ,
+      signal: toolExecutionOptions.signal && useContext.signal
+        ? AbortSignal.any([toolExecutionOptions.signal, useContext.signal]) : toolExecutionOptions.signal || useContext.signal,
+      deadlineAt: operationDeadline,
+    }
       , MODEL_PROVIDER_REQUEST_TIMEOUT_MS);
     } catch (error) {
       await credentialLedger.finalizeCredentialUse({
@@ -484,8 +512,11 @@ async function runGeminiWithTools(agent, messages, toolDefs, toolExecutionOption
       throw error;
     }
     let data;
+    let terminalAttempted = false;
     try {
       const responseText = await res.text();
+      if (res.ok) data = JSON.parse(responseText);
+      terminalAttempted = true;
       await credentialLedger.finalizeCredentialUse({
         reservation,
         outcome: res.ok ? 'completed' : 'failed',
@@ -493,11 +524,16 @@ async function runGeminiWithTools(agent, messages, toolDefs, toolExecutionOption
         outcomeClass: `http_${res.status}`,
       });
       if (!res.ok) throw new Error(`Gemini error (${res.status}): ${responseText}`);
-      data = JSON.parse(responseText);
     } catch (error) {
-      if (!res.ok) throw error;
-      throw new Error(`Gemini response invalid: ${error?.message || error}`);
-    }
+      if (!terminalAttempted) await credentialLedger.finalizeCredentialUse({
+        reservation, outcome: 'indeterminate',
+        outcomeHash: credentialUseEvidenceHash({ status: res.status, error_class: error?.name || 'body_error' }),
+        outcomeClass: 'response_body_incomplete_or_invalid', errorClass: error?.name || 'body_error',
+      });
+      throw error;
+    } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
+  }
     const parts = data.candidates?.[0]?.content?.parts || [];
 
     const fnCalls = parts.filter(p => p.functionCall);
@@ -512,13 +548,16 @@ async function runGeminiWithTools(agent, messages, toolDefs, toolExecutionOption
     const toolResponseParts = await Promise.all(fnCalls.map(async (part) => {
       let result;
       try {
+        toolExecutionOptions.signal?.throwIfAborted();
+        if (performance.now() >= operationDeadline) throw new DOMException('Model operation deadline exceeded', 'TimeoutError');
         result = await executeTool(part.functionCall.name, part.functionCall.args || {}, agent.id, toolExecutionOptions);
         if (isToolApprovalRequired(result)) {
           throw createToolApprovalError(part.functionCall.name, result);
         }
       } catch (err) {
-        if (err?.code === 'TOOL_APPROVAL_REQUIRED') throw err;
-        result = { error: err.message };
+        // Expected tool denials/failures are already classified return values.
+        // A thrown executor error has no consumable result evidence.
+        throw err;
       }
       return {
         functionResponse: {
@@ -552,23 +591,66 @@ export async function runByModel(agent, systemPrompt, userPrompt, toolDefs, mess
   const providerKey = providerResolution.provider || '';
   const resolvedModel = providerResolution.model || requestedModel;
   const runtimeAgent = { ...agent, model: resolvedModel };
-  const normalizeResult = (result) => {
-    if (result && typeof result === 'object' && ('response' in result || 'model' in result)) {
-      return {
+  const signals = [getServingAbortSignal(), toolExecutionOptions.signal, toolExecutionOptions.credentialUseContext?.signal].filter(Boolean);
+  const deadlineAt = Math.min(toolExecutionOptions.deadlineAt ?? Infinity,
+    toolExecutionOptions.credentialUseContext?.deadlineAt ?? Infinity,
+    performance.now() + (providerKey === 'codex' ? CODEX_REQUEST_TIMEOUT_MS
+      : providerKey === 'gemini' ? MODEL_PROVIDER_REQUEST_TIMEOUT_MS : PROVIDER_REQUEST_TIMEOUT_MS));
+  const remaining = Math.ceil(deadlineAt - performance.now());
+  if (remaining <= 0) throw new DOMException('Model operation deadline exceeded', 'TimeoutError');
+  toolExecutionOptions = {
+    ...toolExecutionOptions,
+    signal: AbortSignal.any([...signals, AbortSignal.timeout(remaining)]),
+    deadlineAt,
+    selectedModel: providerKey ? `${providerKey}:${resolvedModel}` : resolvedModel,
+  };
+  toolExecutionOptions.signal.throwIfAborted();
+  let contextReceipt;
+  const normalizeResult = async (result) => {
+    const normalized = result && typeof result === 'object' && ('response' in result || 'model' in result)
+      ? {
         response: result.response ?? '',
         model: result.model || resolvedModel
-      };
-    }
-    return {
+      } : {
       response: result,
       model: resolvedModel
     };
+    await completeToolContext(toolExecutionOptions.nativeToolInputs, {
+      receipt: contextReceipt, agentId: agent.id, result: normalized,
+      executionContext: toolExecutionOptions.executionContext || toolExecutionOptions.credentialUseContext,
+    });
+    return normalized;
+  };
+  const executeContextCandidate = async (operation) => {
+    try {
+      return await normalizeResult(await operation());
+    } catch (error) {
+      error = markHttpIndeterminate(error);
+      if (contextReceipt) {
+        try {
+          await failToolContext(toolExecutionOptions.nativeToolInputs, {
+            receipt: contextReceipt,
+            agentId: agent.id,
+            error,
+            executionContext: toolExecutionOptions.executionContext || toolExecutionOptions.credentialUseContext,
+          });
+        } catch (terminalError) {
+          error.modelContextTerminalError = terminalError?.message || String(terminalError);
+        }
+      }
+      throw error;
+    }
   };
 
   if (providerKey === 'gemini') {
-    return normalizeResult(
-      await runGeminiWithTools(runtimeAgent, messages, toolDefs, toolExecutionOptions, onToken)
-    );
+    contextReceipt = await retainToolContext(toolExecutionOptions.nativeToolInputs, {
+      agentId: agent.id, runId: toolExecutionOptions.runId, model: toolExecutionOptions.selectedModel,
+      messages, systemPrompt, userPrompt, toolSchemas: toolDefs.map(t => t.schema),
+      executionContext: toolExecutionOptions.executionContext || toolExecutionOptions.credentialUseContext,
+    });
+    return executeContextCandidate(() => (
+      runGeminiWithTools(runtimeAgent, messages, toolDefs, toolExecutionOptions, onToken)
+    ));
   }
   if (providerKey === 'perplexity') {
     const allToolDefs = Array.isArray(toolDefs) ? toolDefs : [];
@@ -592,8 +674,13 @@ export async function runByModel(agent, systemPrompt, userPrompt, toolDefs, mess
       toolList ? `Available tools:\n${toolList}` : ''
     ].join('\n\n');
 
-    return normalizeResult(
-      await runProvider({
+    contextReceipt = await retainToolContext(toolExecutionOptions.nativeToolInputs, {
+      agentId: agent.id, runId: toolExecutionOptions.runId, model: toolExecutionOptions.selectedModel,
+      messages, systemPrompt: sonarSystemPrompt, userPrompt, toolSchemas: activeToolDefs.map(t => t.schema),
+      executionContext: toolExecutionOptions.executionContext || toolExecutionOptions.credentialUseContext,
+    });
+    return executeContextCandidate(() => (
+      runProvider({
         provider: 'perplexity',
         model: resolvedModel,
         messages,
@@ -602,6 +689,8 @@ export async function runByModel(agent, systemPrompt, userPrompt, toolDefs, mess
         toolDefs: activeToolDefs,
         onToken,
         useContext: toolExecutionOptions.credentialUseContext || {},
+        signal: toolExecutionOptions.signal,
+        deadlineAt: toolExecutionOptions.deadlineAt,
         toolExecutionOptions: {
           ...toolExecutionOptions,
           returnAfterSingleToolCall: activeToolDefs.length > 0,
@@ -609,6 +698,7 @@ export async function runByModel(agent, systemPrompt, userPrompt, toolDefs, mess
             ? String(activeToolDefs[0]?.schema?.function?.name || '')
             : '',
           executeToolFn: async (name, args) => {
+            toolExecutionOptions.signal.throwIfAborted();
             const result = await executeTool(name, args, runtimeAgent.id, toolExecutionOptions);
             if (isToolApprovalRequired(result)) {
               throw createToolApprovalError(name, result);
@@ -617,10 +707,15 @@ export async function runByModel(agent, systemPrompt, userPrompt, toolDefs, mess
           }
         }
       })
-    );
+    ));
   }
-  return normalizeResult(
-    await runProvider({
+  contextReceipt = await retainToolContext(toolExecutionOptions.nativeToolInputs, {
+    agentId: agent.id, runId: toolExecutionOptions.runId, model: toolExecutionOptions.selectedModel,
+    messages, systemPrompt, userPrompt, toolSchemas: toolDefs.map(t => t.schema),
+    executionContext: toolExecutionOptions.executionContext || toolExecutionOptions.credentialUseContext,
+  });
+  return executeContextCandidate(() => (
+    runProvider({
       provider: providerKey,
       model: resolvedModel,
       messages,
@@ -629,9 +724,19 @@ export async function runByModel(agent, systemPrompt, userPrompt, toolDefs, mess
       toolDefs,
       onToken,
       useContext: toolExecutionOptions.credentialUseContext || {},
+      signal: toolExecutionOptions.signal,
+      deadlineAt: toolExecutionOptions.deadlineAt,
       toolExecutionOptions: {
         ...toolExecutionOptions,
+        recordToolExchange: async ({ round, callId, name, args, output }) => {
+          recordToolContextInput(toolExecutionOptions.nativeToolInputs, {
+            kind: 'derived', owner: 'services/core/providers.js#runCodex',
+            ref: `${toolExecutionOptions.runId}:codex-tool:${round}:${callId}`,
+            value: { name, args, output },
+          });
+        },
         executeToolFn: async (name, args) => {
+          toolExecutionOptions.signal.throwIfAborted();
           const result = await executeTool(name, args, runtimeAgent.id, toolExecutionOptions);
           if (isToolApprovalRequired(result)) {
             throw createToolApprovalError(name, result);
@@ -640,7 +745,7 @@ export async function runByModel(agent, systemPrompt, userPrompt, toolDefs, mess
         }
       }
     })
-  );
+  ));
 }
 
 export function buildConversationMessagesForFallback(history = []) {
@@ -655,6 +760,11 @@ export function buildConversationMessagesForFallback(history = []) {
 }
 
 export async function runAgentWithFallback(agent, systemPrompt, userPrompt, toolDefs, options = {}) {
+  const toolExecutionOptions = {
+    ...options.toolExecutionOptions,
+    nativeToolInputs: options.toolExecutionOptions?.nativeToolInputs
+      || createToolInputState(options.toolExecutionOptions?.sourceMemoryIds || []),
+  };
   const conversationMessages = Array.isArray(options.conversationMessages)
     ? options.conversationMessages
     : buildConversationMessagesForFallback(options.conversationHistory);
@@ -699,7 +809,17 @@ export async function runAgentWithFallback(agent, systemPrompt, userPrompt, tool
 
   const failures = [];
 
+  const firstProvider = resolveProviderForModel(executionCandidates[0], '').provider;
+  const signals = [getServingAbortSignal(), options.signal, toolExecutionOptions.signal, toolExecutionOptions.credentialUseContext?.signal].filter(Boolean);
+  toolExecutionOptions.deadlineAt = Math.min(options.deadlineAt ?? Infinity,
+    toolExecutionOptions.deadlineAt ?? Infinity, toolExecutionOptions.credentialUseContext?.deadlineAt ?? Infinity,
+    performance.now() + (firstProvider === 'codex' ? CODEX_REQUEST_TIMEOUT_MS
+      : firstProvider === 'gemini' ? MODEL_PROVIDER_REQUEST_TIMEOUT_MS : PROVIDER_REQUEST_TIMEOUT_MS));
+  const remaining = Math.ceil(toolExecutionOptions.deadlineAt - performance.now());
+  if (remaining <= 0) throw new DOMException('Model operation deadline exceeded', 'TimeoutError');
+  toolExecutionOptions.signal = AbortSignal.any([...signals, AbortSignal.timeout(remaining)]);
   for (const modelId of executionCandidates) {
+    toolExecutionOptions.signal.throwIfAborted();
     try {
       const result = await runByModel(
         agent,
@@ -708,12 +828,14 @@ export async function runAgentWithFallback(agent, systemPrompt, userPrompt, tool
         toolDefs,
         messages,
         modelId,
-        options.toolExecutionOptions || {},
+        toolExecutionOptions,
         options.onToken || null
       );
-      return result;
+      return { ...result, origin_inputs: readToolInputState(toolExecutionOptions.nativeToolInputs) };
     } catch (error) {
-      if (error?.code === 'TOOL_APPROVAL_REQUIRED') throw error;
+      if (['TOOL_APPROVAL_REQUIRED','NATIVE_TOOL_RESULT_EVIDENCE_INCOMPLETE'].includes(error?.code)) throw error;
+      if (toolExecutionOptions.signal.aborted || /Timeout|Abort/.test(error?.name || '')
+          || error?.httpOutcome === 'INDETERMINATE') throw error;
       const reason = summarizeModelError(error);
       failures.push({ model: modelId, reason });
       recordModelFailure(modelId);

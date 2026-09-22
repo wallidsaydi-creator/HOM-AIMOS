@@ -13,6 +13,11 @@
 > - Added §0 Authentication describing the envelope contract and agent enrollment flow.
 > - Replaced `Authorization: Bearer TOKEN` placeholders in §9 and §12 with envelope-header placeholders.
 >
+> **CURRENT QMD AUTHORITY:** QMD is an internal candidate gear of canonical
+> signed `/aimos/recall`. It has no endpoint, MCP tool, parser service,
+> disclosure authority, or independent result surface. Historical QMD syntax
+> notes below describe the erased standalone lane and are not instructions.
+>
 > **CHANGELOG v1.0 → v1.1:**
 > - `/status` returns `total_memories` not `memory_count`; adds `speed_flags`, `cache_stats`, `server_started_at`
 > - `/layer-status` returns named subsystems not `layers` array
@@ -116,8 +121,6 @@ additional outer fusion authority.
 | `POST` | `/ceo/directive` | Issue a strategic directive |
 | `GET` | `/ceo/inbox` | Pending directives |
 | `POST` | `/ceo/report` | Submit execution report |
-| `POST` | `/qmd` | Structured query (QMD protocol) |
-| `GET` | `/qmd/explain` | QMD explanation |
 | `GET` | `/time-travel` | Query memories at a point in time |
 | `GET` | `/medallion-stats` | Bronze/silver/gold distribution |
 | `POST` | `/embed` | Generate embedding for text |
@@ -198,24 +201,32 @@ Content-Type: application/json
 }
 ```
 
-### Save Pipeline (15 fixed stages)
+### Save Pipeline (10 stages)
 
 ```
-AUTH → RECEIPT → CANARY → SE → ALADDIN → VALIDATOR → QUALITY
-→ SECRET_BOUNDARY → EMBEDDING → PERSISTENCE → PROVENANCE → LINEAGE
-→ GRAPH → EPISTEMIC → TERMINAL
+Request
+  │
+  ├─ 1. Envelope Authority ─ verifies signed identity, company, request receipt, and grants
+  ├─ 2. Sudo Guard ─────── clearance 12+ memories need sudo to overwrite
+  ├─ 3. Write Validator ── structural validation (exempt: event_log, dream_summary, etc.)
+  ├─ 4. RPE Gate ────────── Reward Prediction Error — routes processing depth
+  ├─ 5. Sensible Screen ── monitors RPE gate quality over time
+  ├─ 6. Transform Cache ── checks if this schema transform was seen before
+  ├─ 7. Mnemonic Encoder ─ tags encoding style (visual_hook, narrative, etc.)
+  ├─ 8. persistMemory() ── canonical write:
+  │     ├─ Quality Gate (3 walls — see below)
+  │     ├─ Secret Redaction (API keys, tokens auto-stripped)
+  │     ├─ Quarantine Check (prompt injection detection)
+  │     ├─ Embedding (768d all-mpnet-base-v2 ONNX)
+  │     ├─ Cross-Reference (A-MEM Zettelkasten linking)
+  │     ├─ Entity Extraction (HippoRAG: names, dates, amounts)
+  │     ├─ Aladdin Compliance check
+  │     ├─ Data Classification (public/internal/confidential/restricted)
+  │     ├─ Medallion Layer assignment (bronze/silver/gold)
+  │     └─ DB INSERT + trigger evaluation
+  ├─ 9. Cache Invalidate ─ semantic cache cleared on new memory
+  └─ 10. Response
 ```
-
-`services/write/canonical-save-owner.js` owns this order, the restricted
-transaction and the signed terminal. RPE, sensible-screening,
-transformation-cache and mnemonic encoding are bound diagnostics, not
-authorization gates.
-
-Signed requests and tool actions keep their exact authority. Autonomous work
-uses the typed Housekeeper SAVE entrypoint, which commits the exact action
-projection before the same pipeline runs. Request bodies cannot select
-Housekeeper authority, and session finalization cannot replace its initiating
-request with Housekeeper authority.
 
 ### Quality Gate — Three Walls
 
@@ -358,13 +369,7 @@ Content-Type: application/json
 }
 ```
 
-**One canonical owner, two ordering modes:**
-
-REST, MCP, V1, and native-tool recall all enter `executeCanonicalRecall`.
-Signed-command resolution, active actor/grant locking, candidate reads, and
-provenance admission share one restricted repeatable-read snapshot. Every
-bounded proposal lane must admit its complete set or fail; only admitted rows
-may enter shared ranking, graph, context, or cache state.
+**Two Recall Modes:**
 
 | Mode | Trigger | Result Order |
 |------|---------|-------------|
@@ -412,7 +417,7 @@ Query arrives
   ├─ 10. hyde_expansion ───────── If still low quality (top <= 0.5, avg < 0.3):
   │                                HyDE (Hypothetical Document Embedding) expands query
   │                                multi-stage retrieval with expanded embedding
-  ├─ 11. graph_family_g2 ───────── Bounded G2 evidence joins central RRF; MAGMA remains dormant research
+  ├─ 11. magma_native_gear ────── Bounded lineage evidence joins the central native RRF
   │                                baseline candidates remain candidate-monotone
   ├─ 12. early_exit_decision ──── If enabled by signed/request-scoped policy:
   │                                exit if (top_1 > 0.82 AND gap > 0.15)
@@ -440,9 +445,8 @@ Query arrives
 ### Post-Recall Side Effects
 
 - **Signed recall evidence:** request admission, recall event, provenance, and returned Merkle evidence are ledgered.
-- **Read-only online adaptation:** similarity statistics and pheromone projections are not mutated by recall; future durable adaptation requires a separately signed action owner.
-- **Access observations:** response-local frequency metadata cannot decay, delete, deactivate, or suppress canonical memory.
-- **Cache fill:** only post-admission state references and commitments may enter the ephemeral semantic cache; each hit is reverified in a fresh request snapshot.
+- **Access observations:** frequency metadata may be appended or projected, but it cannot decay, delete, deactivate, or suppress canonical memory.
+- **Cache fill:** result stored in semantic cache for future similar queries
 - **Event log:** recall event recorded for audit
 
 ---
@@ -540,7 +544,7 @@ The former route-level Knowledge Gate is retired. Paper-backed mathematical serv
 
 ## 9. Paper Provenance & Service Annotations
 
-The manifest currently binds 295 service files. Mathematical, graph, temporal, retrieval, and cognitive services trace their techniques to the cited local papers; infrastructure services instead declare their native ownership and connection contract.
+The manifest currently binds 300 service files. Mathematical, graph, temporal, retrieval, and cognitive services trace their techniques to the cited local papers; infrastructure services instead declare their native ownership and connection contract.
 
 ### How Paper Provenance Works
 
@@ -604,7 +608,7 @@ Every service has two annotation blocks:
 | `retrieval/` | 68 | HippoRAG, Adaptive RAG, QuIM-RAG, OrgForge RRF, GroupRAG |
 | `learning/` | 23 | STDP (SynForceNet), SPICED, SM-2, Prospect Theory, R-MDP |
 | `orchestration/` | 43 | DISARM, HVR-Met, DIG, ContextCov, Constitutional Monitoring |
-| `security/` | 49 | OWASP, Mitnick, Cialdini, Defensive Refusal Bias, Agentic P2P |
+| `security/` | 48 | OWASP, Mitnick, Cialdini, Defensive Refusal Bias, Agentic P2P |
 | `dream/` | 5 | SPICED (NeurIPS 2025), ThaCo, Sleep Homeostatic, MemGPT |
 | `write/` | 13 | Aladdin Law, Sutton&Barto RPE, Channel Separation |
 | `observe/` | 22 | OpenTelemetry, Senge, Moltbook, SVDD Anomaly |
@@ -638,16 +642,16 @@ Every service file contains a standardized header:
 // ─────────────────────────────────────────────────────────────────────────────
 ```
 
-**Pipeline Manifest:** `services/pipeline-manifest.js` — 116 declared service connections across 6 pipelines, validated at boot.
+**Pipeline Manifest:** `services/pipeline-manifest.js` — 156 declared service connections across 6 pipelines, validated at boot.
 
 **The 6 Pipelines:**
 
 | Pipeline | Entry | Declared service modules |
 |----------|-------|-------------------------:|
-| Save | `services/write/canonical-save-owner.js` | 15 |
-| Recall | `services/retrieval/native-recall-pipeline.js` | 34 |
+| Save | `routes/aimos.js` | 13 |
+| Recall | `services/retrieval/native-recall-pipeline.js` | 78 |
 | Agent Run | `services/orchestration/agent-runner.js` | 34 |
-| Dream | `jobs/nightly-dream.js` | 22 |
+| Dream | `jobs/nightly-dream.js` | 20 |
 | Heartbeat | `jobs/heartbeat.js` | 1 |
 | Governance | `services/orchestration/governance-resolver.js` | 10 |
 
@@ -717,11 +721,12 @@ Use save body `{"key":"rule:important","value":"Updated rule content replacing t
 Use `aimos-sign-headers.js` with `--method GET`, `--path /aimos/time-travel`, an empty body, and the full query URL passed to `--exec`.
 Returns the memory value as it was at that timestamp. Returns 404 if no memory existed for that key at that time. Use exact keys, not prefixes.
 
-### QMD structured query (correct syntax)
-Use the one-shot helper with path `/aimos/qmd` and body `{"query":"FIND type:procedural_seed WHERE contains(\"STDP\") LIMIT 5","clearance_level":10}`.
-
-### QMD count by agent
-Use body `{"query":"COUNT type:session_debrief GROUP BY agent_id","clearance_level":10}` with a fresh `/aimos/qmd` envelope.
+### QMD within canonical recall
+Do not call a QMD endpoint. QMD has no independent transport or result
+authority. Submit the natural-language query through signed `/aimos/recall`;
+the native recall owner may activate its internal QMD candidate gear before
+the shared occurrence, origin, fusion, epistemic, Canary/Aladdin, disclosure,
+and receipt owners.
 
 ---
 
@@ -792,9 +797,9 @@ The guide is split into 4 files served by `GET /aimos/guide?tier=N`. The API **i
 | Expecting instant recall of just-saved memory | Embedding is generated at save time, but semantic cache may serve stale results for 300s if enabled. |
 | Overwriting clearance 12+ memory | Sudo guard blocks. Need clearance 12+ yourself. |
 
-## 17. MCP Tool Surface (9 Tools)
+## 17. MCP Tool Surface (7 Tools)
 
-Aimos exposes 9 tools via MCP protocol v2.0.0 over HTTP. This is the primary programmatic interface for external agents.
+Aimos exposes 7 tools via MCP protocol v2.0.0 over HTTP. This is the primary programmatic interface for external agents.
 
 | Tool | Category | Required Input | Notes |
 |------|---------|----------------|-------|
@@ -803,32 +808,13 @@ Aimos exposes 9 tools via MCP protocol v2.0.0 over HTTP. This is the primary pro
 | `aimos_recall` | memory | `query` or `key` | `mode` enum: adaptive / linear |
 | `aimos_open_memory` | memory | `memory_id` or `key` | Exact fetch, not semantic |
 | `aimos_events_today` | observability | `hours` (1–168, default 24) | Returns recent event_log |
-| `aimos_qmd` | structured_query | `query` (QMD syntax) | **Does NOT accept natural language**. Requires structured QMD tokens. See section 18. |
-| `aimos_qmd_explain` | structured_query | `query` | Parses without executing |
 | `aimos_time_travel` | history | `key`, `as_of` (ISO timestamp) | Returns snapshot of memory at a point in time. Returns 404 only if no memory exists for that key at that time. |
 | `aimos_save` | memory_write | `key`, `value` | Goes through full save pipeline |
 
-**QMD grammar (observed error: `Expected token type KEYWORD but got IDENT`):**
-- QMD uses a formal grammar with token types (KEYWORD, FIELD_VAL, STRING, NUMBER, DURATION, OPERATOR, IDENT, UUID, GLOB).
-- Natural language like `"architecture"` fails — the parser expects a structured statement starting with a verb.
-- **All filters use `field:value` notation.** Bare identifiers like `procedural_seed` are NOT valid after verbs — use `type:procedural_seed`.
-- Valid verbs: `FIND`, `TRAVERSE`, `MATCH`, `GRAPH`, `PATH`, `COUNT`
-- Correct patterns:
-
-| Verb | Example |
-|------|---------|
-| FIND | `FIND type:procedural_seed WHERE contains("STDP") LIMIT 5` |
-| FIND | `FIND key:"session_debrief*" LIMIT 10` |
-| MATCH | `MATCH agent:<enrolled-agent-id> WHERE type:session_debrief AND created > 7d LIMIT 5` |
-| COUNT | `COUNT type:event_log WHERE created > 24h GROUP BY agent_id` |
-| GRAPH | `GRAPH AROUND id:<uuid> HOPS 2 RETURN adjacency` |
-| TRAVERSE | `TRAVERSE FROM key:"F1*" FOLLOW cross_refs,entity_edges HOPS 3` |
-| PATH | `PATH FROM type:book_extract TO type:framework MAX_DEPTH 4` |
-
-- **Common mistake:** `FIND procedural_seed WHERE keywords CONTAINS 'STDP' LIMIT 5` → SYNTAX ERROR. Use `FIND type:procedural_seed WHERE contains("STDP") LIMIT 5`.
-- WHERE conditions: `contains("text")`, `field:value` (glob `*` supported), `created > 7d` / `created < 24h`
-- Duration format: `7d`, `24h`, `30m`
-- Max query length: 2048 characters
+**Historical QMD note:** the former standalone structured-query grammar and
+its two MCP tools were removed because they bypassed canonical recall
+disclosure and receipt authority. Historical releases and audit records retain
+the syntax for traceability; the current runtime contains no parser or route.
 
 ## 18. Cost Matrix (6 Actions)
 
@@ -915,8 +901,6 @@ Each enrolled actor may have signed `skill_name` and `trigger_pattern` records. 
 | Endpoint | Error | Workaround |
 |----------|-------|------------|
 | `GET /time-travel` | 404 if no memory exists for key at that time | Use exact key (not prefix). Returns 400 if `key` or `as_of` missing. Works correctly when key and timestamp match a real memory. |
-| `GET /qmd/explain` | 400 (`q` param required, not `query`) | Use `?q=<qmd-query>` not `?query=` |
-| `POST /qmd` | 400 (QMD syntax reject) | Use structured QMD grammar with `field:value` notation. Natural language and bare identifiers fail. See section 17. |
 | `/graph/:entityId` | UNCONFIRMED | Needs valid entity ID; not tested in this probe |
 
 ---

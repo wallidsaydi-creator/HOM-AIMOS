@@ -12,11 +12,11 @@ const SCOPED_CALLS = new Map([
   ['services/dream/delta-writer.js', ["'delta-writer'"]],
   ['services/dream/dream-feedback.js', ["'dream-feedback'"]],
   ['services/learning/agent-learning.js', ['agentId', 'agentId', 'agentId', 'group.agentId']],
-  ['services/learning/batch-reflector.js', ["'batch-reflector'", "'batch-reflector'", "'batch-reflector'"]],
+  ['services/learning/batch-reflector.js', ["'batch-reflector'", 'subjectAgentId', "'batch-reflector'"]],
   ['services/learning/epistemic-vigilance.js', ["'epistemic'", "'epistemic'", "'epistemic'"]],
   ['services/learning/failure-replay.js', ["'failure-replay'"]],
   ['services/learning/reflection-finetuner.js', ['agentId']],
-  ['services/learning/skill-consolidation.js', ["'skill-consolidation'", "'skill-consolidation'"]],
+  ['services/learning/skill-consolidation.js', ["'skill-consolidation'", 'row.agent_id']],
 ]);
 
 function persistCalls(source) {
@@ -58,4 +58,22 @@ test('scoped autonomous persistence calls use the typed Housekeeper SAVE owner',
   }
 
   assert.equal(total, 21);
+});
+
+test('live post-run audit and quality producers retain the runtime-owned input state', async () => {
+  const runner = await readFile(new URL('services/orchestration/agent-runner.js', ROOT), 'utf8');
+  const scheming = await readFile(new URL('services/core/scheming-monitor.js', ROOT), 'utf8');
+  const reflector = await readFile(new URL('services/learning/batch-reflector.js', ROOT), 'utf8');
+
+  assert.match(runner, /auditTrajectory\(runtimeAgent\.id, trajectoryEvents, \{[\s\S]*?nativeToolInputs,[\s\S]*?provider: modelPreference\.provider,[\s\S]*?model: modelPreference\.model/);
+  assert.match(runner, /runQualityLoop\([^\n]+\{ nativeToolInputs, subjectAgentId: runtimeAgent\.id \}\)/);
+  const route = await readFile(new URL('routes/agent-execution.js', ROOT), 'utf8');
+  assert.match(route, /sameResolvedModel\(modelResolved, executionResolution\.primaryModel\)/);
+  assert.doesNotMatch(route, /modelResolved !== executionResolution\.primaryModel/);
+  assert.match(scheming, /\}, \{ nativeToolInputs: options\.nativeToolInputs \|\| null \}\);/);
+  assert.match(scheming, /return runProvider\(\{/);
+  assert.match(scheming, /scheming_monitor_model_selection_required/);
+  assert.doesNotMatch(scheming, /OLLAMA_BASE_URL|OLLAMA_MODEL|llama3\.2/);
+  assert.match(reflector, /runQualityLoop\(hypothesis,[^\n]+options = \{\}\)/);
+  assert.match(reflector, /\}, \{ nativeToolInputs: options\.nativeToolInputs \|\| null \}\);/);
 });

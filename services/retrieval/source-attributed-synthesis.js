@@ -76,13 +76,15 @@ function firstMeaningfulSentence(memory = {}) {
   return String(memory.value || '').replace(/\s+/g, ' ').trim().slice(0, 280);
 }
 
+import { memoryCreditValue } from '../security/protocol/memory-credit.js';
+
 function scoreEvidenceSentence(sentence, queryTokens, memory = {}) {
   const sentenceTokens = new Set(tokenize(sentence));
   const hits = queryTokens.filter((token) => sentenceTokens.has(token)).length;
   const lexical = queryTokens.length ? hits / queryTokens.length : 0;
   const recallConfidence = Number(memory.recall_confidence ?? memory.similarity ?? memory.rerank_score ?? 0.5);
-  const authority = Number(memory.trust_score ?? memory.credit_score ?? 0.5);
-  return lexical * 0.55 + Math.max(0, Math.min(1, recallConfidence)) * 0.3 + Math.max(0, Math.min(1, authority)) * 0.15;
+  const rankingSupport = Number(memory.trust_score ?? memoryCreditValue(memory) ?? 0);
+  return lexical * 0.55 + Math.max(0, Math.min(1, recallConfidence)) * 0.3 + Math.max(0, Math.min(1, rankingSupport)) * 0.15;
 }
 
 function buildEvidenceSource(memory = {}, index = 0, excerpt = '') {

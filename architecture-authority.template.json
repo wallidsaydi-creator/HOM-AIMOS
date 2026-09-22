@@ -16,8 +16,8 @@
   "genesis_corpus": {
     "manifest": "./Guide/GENESIS-MANIFEST.json",
     "schema": "hom.aimos.genesis-manifest/v1",
-    "version": 26,
-    "corpus_root": "2004c925c6cb45c36d7e7328d92fcbab516e732b47ee35f2e3a4b6c058813aaa",
+    "version": 20,
+    "corpus_root": "a471afec36ba87e30f6fa28a02ab31fa5981fdc6aca68836237c45489ad32970",
     "hash_algorithm": "sha256",
     "binding": "Every Guide genesis save signs this schema, version, corpus root, and its own file hash into provenance."
   },
@@ -110,7 +110,7 @@
     "counting_policy": "top-level services/<group>/*.js excluding index.js barrels and hidden directories",
     "counted_service_groups": 17,
     "counted_service_files": 295,
-    "census_sha256": "e71c332413b495b57e2349fe3f76dc98bacc66cc2b0dcc8b3c32ad05a7bff720"
+    "census_sha256": "a001876ec9e5f503247b55479ec9ad7d4a8bab65f01582fd3060321bdb3ded4c"
   },
   "mechanical_rules": {
     "native_only": true,

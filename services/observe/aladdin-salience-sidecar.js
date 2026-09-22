@@ -19,6 +19,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { memoryCreditValue } from '../security/protocol/memory-credit.js';
 
 const DEFAULTS = Object.freeze({
   exponent_d: 0.5,
@@ -105,8 +106,7 @@ function accessAgesDays(memory = {}, nowMs = Date.now(), minAgeDays = DEFAULTS.m
 }
 
 function importancePrior(memory = {}, summarizedAccessCount = 0, options = DEFAULTS) {
-  const creditRaw = finiteNumber(memory.credit_score, null);
-  const credit = creditRaw == null ? 0 : clamp(creditRaw > 1 ? creditRaw / 2 : creditRaw, 0, 1);
+  const credit = memoryCreditValue(memory) ?? 0;
   const rpe = clamp(memory.rpe_score ?? memory.rpe ?? 0, 0, 1);
   const surprise = clamp(memory.surprise_score ?? memory.surprise ?? 0, 0, 1);
   const confidenceAuthority = clamp(memory.confidence?.components?.authority ?? 0, 0, 1);

@@ -1,0 +1,1932 @@
+{
+  "schema": "hom.aimos.origin-binding-source-manifest/v1",
+  "source_file_count": 481,
+  "source_files": [
+    {
+      "path": "ARCHITECTURE-MAP.md",
+      "sha256": "04e0e260d750ab645404d361da3aef82a50bdf7ad9e37bac6b4d41815d4befdd"
+    },
+    {
+      "path": "architecture-authority.json",
+      "sha256": "bed748647f733f78dbf34b07c4ce24c0b83a8b29172d9107dfe39d768297a733"
+    },
+    {
+      "path": "db/connection.js",
+      "sha256": "3989d1325971dd2886c556a345c3fdfc4e55693fd8cc66b2757f26952fd504c4"
+    },
+    {
+      "path": "hom-architecture-manifest.json",
+      "sha256": "29f5b7504ee9105f6f439bbeca88591a130d3c483b45900eeaca9457d25fc0d7"
+    },
+    {
+      "path": "jobs/backfill-skill-embeddings.js",
+      "sha256": "4746a6ccc1fc2247cc5a2b4873dbc0a1a39a6411a0c59e0ff08075d96dc6caea"
+    },
+    {
+      "path": "jobs/boot-integrity.js",
+      "sha256": "8d265ab4a4e626269267c4e48ba33d36abc3152b8f5f045d4c92aca78362eb60"
+    },
+    {
+      "path": "jobs/dream-e2e.js",
+      "sha256": "3de061fde9f241348bbca3b3184f6a3c25245891dd00120d9d312656d3ec89b3"
+    },
+    {
+      "path": "jobs/golem-scanner.js",
+      "sha256": "2cbc572b8cc703b4762c74998dffa5648815858df929985d8a70e4de4d13bf8b"
+    },
+    {
+      "path": "jobs/heartbeat.js",
+      "sha256": "ebbf63fb90796deba72283c948e8674e82d7d69bd21b7ccd9e254b2656e8c719"
+    },
+    {
+      "path": "jobs/nightly-dream.js",
+      "sha256": "43aee0cf8aa1e27ce6f3b20ad6cf3ad62a90cb32d89eb96f5955a655303f75cb"
+    },
+    {
+      "path": "jobs/quim-builder.js",
+      "sha256": "3f2e7575e8417cad89016213308dc4d04a6bcfacfebfcf6e18ab32dd273ab60a"
+    },
+    {
+      "path": "middleware/client-context.js",
+      "sha256": "bdc24cbe9db60a4219a7b81df374d6994fad55166a29965371030c26da0ca457"
+    },
+    {
+      "path": "migrations/001-base-schema.sql",
+      "sha256": "88cb1bfdd9c185a873011bccd6cbd669630452d8d341919476923ab6ad19ed4e"
+    },
+    {
+      "path": "migrations/002-client-isolation-rls.sql",
+      "sha256": "1dfe7f721c357d8d72cea61b6e1758a052a83d0d6c434b98e5e89ef5227b1f20"
+    },
+    {
+      "path": "migrations/003-hyperbrain-meta-improvement.sql",
+      "sha256": "ed97a370340602e9336b6d7bab8a6c7f61a5eb58cbc7d9018cd7f986c488e448"
+    },
+    {
+      "path": "migrations/004-medallion-layer.sql",
+      "sha256": "1f9ca36d8d312527703857d483ee2992e2e5412285a41e3fcce471a4e2c79aa1"
+    },
+    {
+      "path": "migrations/005-turbo-quant-schema.sql",
+      "sha256": "675f914312f5ac0968abdc7e67752dc653681a43547616668be652a7789b6de3"
+    },
+    {
+      "path": "migrations/006-identity-tables.sql",
+      "sha256": "9170cded0f8c9d5342f1b0ffde976651eb254a2252fe3e1b693610691b1c6e7f"
+    },
+    {
+      "path": "migrations/007-concept-edges.sql",
+      "sha256": "a04530bbd6168242a4ac52b413987913efb1ba3c6542e41f74b1e85ea564c84d"
+    },
+    {
+      "path": "migrations/007-save-envelope-table.sql",
+      "sha256": "84058300e8f1d8da96d099e56d22cf9748c3f2d2007fae718764b77e31ac57f7"
+    },
+    {
+      "path": "migrations/008-install-confirmations-table.sql",
+      "sha256": "6944bc62f21298dc6ab00b73718e5544cfc21016a77402ac5009fa7dede9c50d"
+    },
+    {
+      "path": "migrations/008-quim-index.sql",
+      "sha256": "0591af44e03e9ce6013b7416e4549a832d798b807763bd12db406081c98541eb"
+    },
+    {
+      "path": "migrations/009-medallion-scoring-backfill.sql",
+      "sha256": "5a9da212844d4aa59bbe3a8bfe320f160af0886496c633495dea8dd5923be2d6"
+    },
+    {
+      "path": "migrations/009-skill-bank.sql",
+      "sha256": "bf18e51c6cf7cfd1db0d28d21832a1311f01ce1600cdf6f4f7c14b02e675353a"
+    },
+    {
+      "path": "migrations/009-system-envelopes.sql",
+      "sha256": "7c53420ef4ca677f7659fcd621ffd61747f8dc600e3b46b09d126700179ea2f0"
+    },
+    {
+      "path": "migrations/010-similarity-statistics.sql",
+      "sha256": "8304cf605b70fc6f050b595e5ecb478eee407d0545f759dac8162dd4637f295b"
+    },
+    {
+      "path": "migrations/011-hnsw-embedding-index.sql",
+      "sha256": "88a78598f6bea86b447fc072c78aef002a2f45ba05310e962bc9af1b56aed09d"
+    },
+    {
+      "path": "migrations/012-session-energy-provider-attribution.sql",
+      "sha256": "327b8b57be0de932cd1d70d2605cfb5fe3416cb8475949f95bb964353bca9815"
+    },
+    {
+      "path": "migrations/013-dormancy-aimos-events-index.sql",
+      "sha256": "148401b27033d19d9a4252d91252923b100203fa93f6d4af9d573e77d979c3e8"
+    },
+    {
+      "path": "migrations/014-dormancy-cross-refs-source-index.sql",
+      "sha256": "076129c0730b79cca6c0fb3c3bc5adafdbdcb0ff75dbdce60892cc63f220f306"
+    },
+    {
+      "path": "migrations/015-dormancy-cross-refs-target-index.sql",
+      "sha256": "0aaf34472bddb772b26654437e653a632ba89c60543e7566882bc49eb289e1c8"
+    },
+    {
+      "path": "migrations/016-aimos-save-envelope-nonce-unique.sql",
+      "sha256": "e50977e14bb98b4edc114292dcf975404c9576345751c50357b66443f70b2f09"
+    },
+    {
+      "path": "migrations/017-system-envelopes-write-acl.sql",
+      "sha256": "e67806ac4fa5b01f7cbb7e641b23fa9a9785090d857031e959a406f8831b29d2"
+    },
+    {
+      "path": "migrations/017b-system-envelopes-revoke-aimos-app.sql",
+      "sha256": "35231ea4400b855e2631d323ea9ef2ff1c0b5930ba12fc2e8d2942ac483de4a4"
+    },
+    {
+      "path": "migrations/017c-system-envelopes-flag-signer-select.sql",
+      "sha256": "0a7d743638826629711a56e5739c3b874d50b7551cba695e3d910885b167f7ca"
+    },
+    {
+      "path": "migrations/018-memory-provenance.sql",
+      "sha256": "31ef3a0f872b87a2af49e463efc90c8039079ea0f44bd7eb0b9a5a3a21a4ba92"
+    },
+    {
+      "path": "migrations/019-memory-lineage.sql",
+      "sha256": "0620a7661776d4691e29c83b4e80004b5e405dbdd12351bf60a69e0a61ebdb70"
+    },
+    {
+      "path": "migrations/020-provenance-lineage-backfill.sql",
+      "sha256": "edafa712118692121dee33962a8380548486fe715a5eb2b25e932532f7c6c037"
+    },
+    {
+      "path": "migrations/021-provenance-chain-integrity.sql",
+      "sha256": "808217c5a3644a2c766bb39630a7d6834a7dbce093147193af8ad520bec43a45"
+    },
+    {
+      "path": "migrations/022-provenance-event-type-and-body.sql",
+      "sha256": "6ffb484d29ef032896ece3cec03bcf37b9a264e492035c3e8b0106f1c283bbee"
+    },
+    {
+      "path": "migrations/023-create-memory-valence-ledger.sql",
+      "sha256": "8b7e811736682a8f50b6f034c1ec171071824a0497194dd990ff58c11629ffa9"
+    },
+    {
+      "path": "migrations/024-governor-provenance-companion.sql",
+      "sha256": "6e0522d21d8aec6780253a46c22631e0d879d98cdd1e0b6f4036012663c61a9a"
+    },
+    {
+      "path": "migrations/025-create-governor-config-ledger.sql",
+      "sha256": "e1481a9c35ad2e97148adf90e901615b9685823a9be25c76f0cde12df5f78086"
+    },
+    {
+      "path": "migrations/026-create-corpus-mutation-ledger.sql",
+      "sha256": "b3c5c12897cf00b8176b168a2e79c36a0ccbd47e0ab5ac196ac82cdb6b5f5e5a"
+    },
+    {
+      "path": "migrations/027-provenance-sig-form-version.sql",
+      "sha256": "1514d8b265aebd4045e040d1bf5eb718c8878c272e41d709d0123e80fbecb727"
+    },
+    {
+      "path": "migrations/028-system-config-ledger.sql",
+      "sha256": "af42320895d95980d7451aaa4ad90f012bfa49fb32934fa6ceb79d48bf301295"
+    },
+    {
+      "path": "migrations/029-rename-runtime-role.sql",
+      "sha256": "774d12cd80f44e7dd9425f7ac1d879e165514be70a7d1f3e5fd192d4d4c252fc"
+    },
+    {
+      "path": "migrations/030-aimos-memories-content-hash.sql",
+      "sha256": "19277dc4d348bf4dcad0a6d4d9248e5b35eb97e014230f17aea8cf1cc2206fd2"
+    },
+    {
+      "path": "migrations/031-provenance-live-content-hash-snapshot.sql",
+      "sha256": "0f105d0b4a60bc8f0b9606d31fad160f59e1ecec683f72d15f9ed78fd8a30aaf"
+    },
+    {
+      "path": "migrations/032-secure-aimos-save-content-hash.sql",
+      "sha256": "3c6b875348112045c72853eb1b2bfffcde1eab0f7dd7bbe790dfddb5fb303089"
+    },
+    {
+      "path": "migrations/033-agent-identity-is-system-role.sql",
+      "sha256": "0b224cca80a1663e40214a3872c7852ea012e766c2c3abb153fed878a57d267d"
+    },
+    {
+      "path": "migrations/034-rename-aimos-2-governor-to-housekeeper.sql",
+      "sha256": "ccb89b68af7abb2701542723016829a6c9ead99c1d6302e1eb0f24b428cce3e0"
+    },
+    {
+      "path": "migrations/035-credential-lifecycle-ledger.sql",
+      "sha256": "22fd5366be68376a9ef9c0891bb16aa04191be6d8d8f0f8e6d5d0bde1022a5af"
+    },
+    {
+      "path": "migrations/036-credential-lifecycle-add-use-event.sql",
+      "sha256": "a634bb98d65ace7b1ee2f70803e0b86a45a2a823efa606311d2c2a44da6cb75e"
+    },
+    {
+      "path": "migrations/037-credential-lifecycle-drop-use-event.sql",
+      "sha256": "f5b025401d2d7857e2bed286adf57f94a5d6cd2f558bab605c65d9b23e67ece9"
+    },
+    {
+      "path": "migrations/038-quantum-schema.sql",
+      "sha256": "674acfd5ffbc59050e0ee22d579357850def032015b2e876d67bbef94b8bea81"
+    },
+    {
+      "path": "migrations/039-add-parent-event-id.sql",
+      "sha256": "561a99c38ee32de865d6b311f110a862bc4d880b70df3c4502ef75092db8f419"
+    },
+    {
+      "path": "migrations/040-provenance-agent-fk.sql",
+      "sha256": "a1dfd92ab6f5e2bfb9a1e256604a1520bb2b62d7fb25ea6c586b14b43c350dc5"
+    },
+    {
+      "path": "migrations/041-revoke-delete-from-agent-runtime.sql",
+      "sha256": "4b02c992de18450b640bba01224e538ec1fa81febc780e450aa41401f59966ad"
+    },
+    {
+      "path": "migrations/042-append-only-memory-versions.sql",
+      "sha256": "affedf77fc4a72b9bbfbee4c3cfd85c54acadd93626282d287d323833c0175c4"
+    },
+    {
+      "path": "migrations/043-valence-hash-chain.sql",
+      "sha256": "ce8aeba97b90b4e2a3260d1ced052f263d06024bb229470de5e86d114cff47d5"
+    },
+    {
+      "path": "migrations/044-archive-legacy-decay-schema.sql",
+      "sha256": "7418c054de74987950ffec8cdab79c4b1294772d563cf6cf1f570694cd4d836f"
+    },
+    {
+      "path": "migrations/045-native-memory-commit-boundary.sql",
+      "sha256": "9678418f94f3ba0ce24764378e4e31f55ef8a048c5604fa2be07b59976fb4c99"
+    },
+    {
+      "path": "migrations/046-credential-epoch-and-append-only-acl.sql",
+      "sha256": "085e5d2bc580e61605a9ccdc3ab3b0cfabe75dfde7b23c99ce7be9da7e1dd717"
+    },
+    {
+      "path": "migrations/047-append-only-authorization-events.sql",
+      "sha256": "24ef4884365b93a84f7198564718f8222c1c8e1fdda4964db0336b68673af0f3"
+    },
+    {
+      "path": "migrations/048-master-keychain-locator.sql",
+      "sha256": "2f2076df7a733911e5062dd141676fe148f2ccd0340b13602470eb529ff47dee"
+    },
+    {
+      "path": "migrations/049-request-signature-context.sql",
+      "sha256": "f9205f5eb6c8234ade6a62f683dad0a2ac1c22b64e230613e18de654be204694"
+    },
+    {
+      "path": "migrations/050-agent-revocation-events.sql",
+      "sha256": "109926858dd0e88619b9e69db2084b1383532d2d646b8147ce4326c713f17433"
+    },
+    {
+      "path": "migrations/051-cryptographic-event-ledger.sql",
+      "sha256": "789c1f6a4c08fccb439691cf7d2ebb2da01b967127229170e8b23c89b70c18c0"
+    },
+    {
+      "path": "migrations/052-master-signed-recall-authorization.sql",
+      "sha256": "d61e92a2ee15019dd99f24d4d6f7b7e69c4f5a09f3b52263e1f37cbf3f0fb34d"
+    },
+    {
+      "path": "migrations/053-supersession-topology-integrity.sql",
+      "sha256": "2a3f1617c6a2276191fb0e197e1fac0167069736faa2357ca7c26a16776c0b70"
+    },
+    {
+      "path": "migrations/054-keychain-only-integration-tokens.sql",
+      "sha256": "fddf21cb227999cd53a3797de0a27b961b4e2a4e873e95b563cc1e9ab5fd5606"
+    },
+    {
+      "path": "migrations/055-retire-unsigned-integration-settings.sql",
+      "sha256": "89cacb8d0b2a3020510f013a7e324aff7c08090017e0dacc1b825995f51ebea3"
+    },
+    {
+      "path": "migrations/056-signed-pheromone-projection.sql",
+      "sha256": "037116526ba2ef191c622e5dd32775375a6d6843e7ec2c1b37ae695ea47c547c"
+    },
+    {
+      "path": "migrations/057-retire-legacy-agent-tokens.sql",
+      "sha256": "1d6da2f60f0e51b5c5445e3aa29d844099580dea8d9fd5425e6cee72f1af6612"
+    },
+    {
+      "path": "migrations/058-governor-config-runtime-acl.sql",
+      "sha256": "502952a00db3ea2ad2a961292d5b956f795705de88ee6d39a91535b54ad1bb11"
+    },
+    {
+      "path": "migrations/059-aladdin-retention-constraints.sql",
+      "sha256": "061e1372b14122b52c48dee4abb83536b67a2f44089a2e2b1ca8cea0db02a1c7"
+    },
+    {
+      "path": "migrations/060-retire-capability-decay-model.sql",
+      "sha256": "b25bfaa632c26acfd327401f7a79406bc7efc3c253916fc7618cc0bef934f966"
+    },
+    {
+      "path": "migrations/061-durable-request-receipts.sql",
+      "sha256": "11dd511ea6daa86c274e51c8300852f60921d7b74514af0b4f230633bf1e6ace"
+    },
+    {
+      "path": "migrations/062-valence-ledger-atomic-proof.sql",
+      "sha256": "ee5ca0151559a4fe01e636d406c4f357ee89dbc0c00de6691fd57e1a6065a09b"
+    },
+    {
+      "path": "migrations/063-retire-unsigned-recall-calibration.sql",
+      "sha256": "1b8be8fdb30eeb6ba64b1d802307642aaa15256f11ef4d3e5ee53f8f71e8487b"
+    },
+    {
+      "path": "migrations/064-credential-runtime-authority.sql",
+      "sha256": "470d1f2b4f9dace78e8a065d7ad5cae45afc95a98b15807084073802cf7e2dbb"
+    },
+    {
+      "path": "migrations/065-signed-scheduler-authority.sql",
+      "sha256": "47e672618c3023620a5e950fe0831c977dfa103f1e4e941da373298645bff624"
+    },
+    {
+      "path": "migrations/066-credential-use-ledger.sql",
+      "sha256": "5f184776a64844ca979cfc811613b5bb8e056b959968a4a7247daa04763e507a"
+    },
+    {
+      "path": "migrations/067-credential-proof-schema-version.sql",
+      "sha256": "48216baeefe5f0c13a269be232a9504d69c146786e5abca59d5b3557878d2f5b"
+    },
+    {
+      "path": "migrations/068-cognitive-weight-constitutional-bound.sql",
+      "sha256": "0efb0a15814efe9ecbbedde64ac2c884ee08dd6a381c31c473b97a9d6932f907"
+    },
+    {
+      "path": "migrations/069-retire-mutable-identity-authority.sql",
+      "sha256": "a8d39318c7e1cba2ec582ee209ac55b7200350dace4d3a0f527985b9ba738f8a"
+    },
+    {
+      "path": "migrations/071-retire-token-install-authority.sql",
+      "sha256": "4f35dfc76ed8230e7fd5b277096389af97c6084abb1b4bea19a0850459540f39"
+    },
+    {
+      "path": "migrations/072-retire-mutable-security-flags.sql",
+      "sha256": "56dddc5c0b2c3da3cd73278baa64db1b2573e9c33c566dba1c25a6732339ab14"
+    },
+    {
+      "path": "migrations/073-signed-directive-projection.sql",
+      "sha256": "c32905b3b294a11aef88c4e44a842c478941cf4e5c5fd5dd8c60d7f96ebc48fd"
+    },
+    {
+      "path": "migrations/074-retire-unsigned-trigger-authority.sql",
+      "sha256": "69d041c2cd1a528911c53c4e46212759a757a59b7720d4b824a41145fe95e173"
+    },
+    {
+      "path": "migrations/076-ledger-predecessor-topology.sql",
+      "sha256": "2fa86e8439233eb53c9f6919313b6f9e7d8f461b7f50e6e2e3f8b4e7a1cc6af4"
+    },
+    {
+      "path": "migrations/077-authorization-topology-authority.sql",
+      "sha256": "91130e0a7f8734c7b466b35998ae5d2ca02d88563f713f8fe057520f971a82b5"
+    },
+    {
+      "path": "migrations/078-signed-cross-ref-projection.sql",
+      "sha256": "19bb4dd6367bf2ef38d0291256d0cdd9ecf66bc4fd8ccc03f58198311473998a"
+    },
+    {
+      "path": "migrations/079-signed-dream-summary-projection.sql",
+      "sha256": "4f5c52ef9684a3f6a4a293fd7ca43b10919e401db44b0969a9dc1f3f74612f32"
+    },
+    {
+      "path": "migrations/080-signed-cognitive-weight-mutation.sql",
+      "sha256": "c8e59097195b1e737d61400ecff2499b584f44773df5dd76bab8f785fc7fdde9"
+    },
+    {
+      "path": "migrations/081-cognitive-weight-chain.sql",
+      "sha256": "fb70641d25f8a3c2bc8d3551c6fd7a9f06d85f092b048bffaa6168620d5fcd76"
+    },
+    {
+      "path": "migrations/082-cognitive-weight-chain-function.sql",
+      "sha256": "1c5b4a84df1e5db34166a56b59b7fa006978186a0d95cdc3ff762e682213d15a"
+    },
+    {
+      "path": "migrations/083-cognitive-weight-chain-verifier.sql",
+      "sha256": "4bc789b14c167eca88e1a5510268b44be041dfad423473db617b9b9f5e47e41b"
+    },
+    {
+      "path": "migrations/084-cognitive-weight-chain-signature.sql",
+      "sha256": "4d7f5a53df2927d0669d4f59e997f4e067a9874ae58bf0bee7a5be62958bcc3d"
+    },
+    {
+      "path": "migrations/085-cognitive-transition-binding-and-acl.sql",
+      "sha256": "39935128e03b129f1d949a5f1ba3cf36ffbbed026860fc4d10fb0b69275b5e72"
+    },
+    {
+      "path": "migrations/086-retire-integration-token-authority.sql",
+      "sha256": "b7fd086492ae661010c4e8f91a1e8dbac2e8ddfe52721f49cede9a876cb9ceef"
+    },
+    {
+      "path": "migrations/087-lock-pgsodium-runtime-surface.sql",
+      "sha256": "a9eb58166c943b360685151399c345102b3a71b21419dfc0288b8ad98e5ba899"
+    },
+    {
+      "path": "migrations/088-pgsodium-version-postcondition.sql",
+      "sha256": "6fac0be422a59b371887fbc616739d231a715fb0594aafd921ab82642b8842cd"
+    },
+    {
+      "path": "migrations/089-retained-memory-portable-binding.sql",
+      "sha256": "2797224d79f7cd2f09649cad8a846d3bf3e2c4d80da1d9e8ac06ca42d8f95e4c"
+    },
+    {
+      "path": "migrations/090-signed-supersession-lineage.sql",
+      "sha256": "645106b8e72a18009bda2efdddaa72f112bb5fe8592f533de87c38cfd8509a10"
+    },
+    {
+      "path": "migrations/091-cognitive-baseline-and-epoch-proof.sql",
+      "sha256": "f4272a5c779fe5a320cea0516251f9bb71649bb08037ccc6b92beb3e60582e36"
+    },
+    {
+      "path": "migrations/092-signed-memory-epistemic-classification.sql",
+      "sha256": "67cb60b9a6af25ec59e2f45d2ca52841b4cde1cfe50f6fb796fbdc4c05d4c024"
+    },
+    {
+      "path": "migrations/093-signed-memory-origin-time.sql",
+      "sha256": "0e964d9c0c74b3e39e4cca14784c03ea4fb1ce239f816860504bcaeba848266d"
+    },
+    {
+      "path": "migrations/094-native-retrieval-temporal-neighborhood-index.sql",
+      "sha256": "8d9714f59fd92cd9d4b368da23cd16a155c27c2162bde28e8e04e3e3f8c14183"
+    },
+    {
+      "path": "migrations/095-native-quim-and-concept-ppr-projections.sql",
+      "sha256": "29859d56d9d28a2cc474134460003a92e12f7e97b870266993eb04f5a3e49a0d"
+    },
+    {
+      "path": "migrations/096-native-retrieval-filtered-temporal-neighborhood-index.sql",
+      "sha256": "c1a3525c130e5bb07822a6fba6d24028baa58bd1f4e73ed018e8beca1050b05d"
+    },
+    {
+      "path": "migrations/097-signed-content-state-occurrence-v3.sql",
+      "sha256": "a5b1603c38f6df2bb2d49801b76238a29f6eca7f75cb049cc4c81c49f358baee"
+    },
+    {
+      "path": "migrations/098-request-receipt-occurrence-lookup.sql",
+      "sha256": "fed5e24f61751e6fea7efc01178f8cfd28ff2a3494abec9c971fdade7479925e"
+    },
+    {
+      "path": "migrations/099-occurrence-attributed-mutation-evidence.sql",
+      "sha256": "b4fd7e3b9360843c3538d1c052cfbccf77bcef25f9f4c7e88bcf98320f0224f8"
+    },
+    {
+      "path": "migrations/100-origin-family-ledger-and-writers.sql",
+      "sha256": "9d87f21c84734f59788c5821e3aaf31c09a817b59c57f1bc6af4592a5f0ff0d0"
+    },
+    {
+      "path": "migrations/101-origin-family-typed-writers.sql",
+      "sha256": "e768c5b35daaae254d79ccc48e36f7b688e0b6e32f00384ccd4a928aeabfa3ea"
+    },
+    {
+      "path": "migrations/102-origin-action-verdict-family-order-fix.sql",
+      "sha256": "cf776e2ee3bc0b107382d7e87bef504365bc0b5e536a81eb846ecf7f3208bc40"
+    },
+    {
+      "path": "migrations/103-origin-writer-independent-crypto-parity.sql",
+      "sha256": "b06d227b0f5bf030d9878798e504ce8d82234e611c5323b6a8065a6e1b8db903"
+    },
+    {
+      "path": "migrations/104-origin-event-local-timestamp-parity.sql",
+      "sha256": "3b69d0179c7e055b5f6e1a9c08925c81778e5e5d6feecdf9b2568bd9543abd29"
+    },
+    {
+      "path": "migrations/105-origin-security-family-byte-order.sql",
+      "sha256": "e581a2af47652a420d6d910de42ef00fefee9f74149e853cc9d8a64615c58e4d"
+    },
+    {
+      "path": "migrations/run.js",
+      "sha256": "15046acbb757e6d9c672051094e75de34223ab194bc11d72f3a9f316d170ac1a"
+    },
+    {
+      "path": "package-lock.json",
+      "sha256": "cac3a5c4b24034169558afd4cd345492715e8d505dacafae546f8ea532a48750"
+    },
+    {
+      "path": "package.json",
+      "sha256": "33f098f353fc0dcdafd0a59bbc60d0d0ba1dd58fb395b8158907b7e674c69e6f"
+    },
+    {
+      "path": "routes/agent-execution.js",
+      "sha256": "78713c9c1aa622601879ea95a0b86e5eecdf7558b3d855087eb40d3bcad1a726"
+    },
+    {
+      "path": "routes/agent-learning.js",
+      "sha256": "69682483b47cef7c547a764ad5eb603c3359f21f3ef23c0f159964d480fb0107"
+    },
+    {
+      "path": "routes/agent-management.js",
+      "sha256": "da63eb7e020a2d87205b6788afe2d3344d8153ac61f4f0fd28eb7c4e20e264ce"
+    },
+    {
+      "path": "routes/agent-shared.js",
+      "sha256": "e1db375a32c463bbdd5a9433a76dce6c6004309fa0c18fb907bf193f5d99a5fd"
+    },
+    {
+      "path": "routes/agents.js",
+      "sha256": "14ac2a253d0c49dd00c07c0006fca27dc8e9c33e5dc73f9478a2751e153e8c29"
+    },
+    {
+      "path": "routes/aimos-mcp-streamable.js",
+      "sha256": "2c4377cd6f8ac300e7bd5adad136fc6d67c5ad430224710b6b7b246c2d0b193b"
+    },
+    {
+      "path": "routes/aimos.js",
+      "sha256": "8aa18028a35d27f8f52dac47b3eb113d7771b67676ebe6c0056ea2245a2e5ab6"
+    },
+    {
+      "path": "routes/briefing.js",
+      "sha256": "495524fe0bf787f7eb858e8af001062a319662b911984b27a1fa94a4b70c74d7"
+    },
+    {
+      "path": "routes/command-center.js",
+      "sha256": "2f3bea3ac0bfc7f655d340f7f897d80048080b7599591c7305221206cd434d74"
+    },
+    {
+      "path": "routes/governance.js",
+      "sha256": "07f1958342c99b9787b4ec091110c34ac14436549a549065da6873ad8949d9a8"
+    },
+    {
+      "path": "routes/integrations.js",
+      "sha256": "931f2f3bd7b345c51d782da74d63cc796dce3c17340cb8627739faeae8fc2f08"
+    },
+    {
+      "path": "routes/mcp.js",
+      "sha256": "b304b477f5f4f92510b81ec541845cd4ec05f7864bd8e4642064ccb1008785ff"
+    },
+    {
+      "path": "routes/memory.js",
+      "sha256": "49f5fc54b6cb35c2f51394c27871236e19d04ce5f7089ee2f1dd4157915f99d3"
+    },
+    {
+      "path": "routes/mobile.js",
+      "sha256": "8bbf678407a5eb3014d73b363c19f858813663508c0bd9210ccd7fe32eb8d343"
+    },
+    {
+      "path": "routes/permissions.js",
+      "sha256": "8a7c1534c344864404997ad19fc6a81c5104046d9a551b0fab65f0580b009a64"
+    },
+    {
+      "path": "routes/security.js",
+      "sha256": "b8d66d6fbddcdee0afb80bb5e65b37c15b96916e6ba0d689548a84d520249a0a"
+    },
+    {
+      "path": "routes/settings.js",
+      "sha256": "369ad240d51bee936f26d1fef2e640b3a1f86b409220179f44ea1533b96627e2"
+    },
+    {
+      "path": "routes/setup.js",
+      "sha256": "24170be8dad7e73bdd0c3867ddc8e50a45ce8aafd82da704d59b840efaf3fed7"
+    },
+    {
+      "path": "routes/skills.js",
+      "sha256": "5f47b2c73a5789da1b1d305b8237d6ac74bd3c53169157a63a5ff852525d07c1"
+    },
+    {
+      "path": "routes/status.js",
+      "sha256": "a64ea3e1e1b15d745e727226526df501cdff2fb520284eda80ba4675d006b191"
+    },
+    {
+      "path": "routes/task.js",
+      "sha256": "ad994134856ce1aca89be88b01f659e7d223ce123f49874742589648125a8b01"
+    },
+    {
+      "path": "routes/tools.js",
+      "sha256": "022d793c8d206c0f1d7c471a63b427a352afd19d51130f96064d20bb43a593ac"
+    },
+    {
+      "path": "routes/v1-api.js",
+      "sha256": "8cae4a5a6f3d34f68b376034b886608ee44ad57770456837ecadd293bb9ac921"
+    },
+    {
+      "path": "scripts/verification/generate-origin-binding-ob1-artifacts.mjs",
+      "sha256": "80589dc1e7b9bf682fb940fcb11d272c7d3fe066110846c32c5820c7e24d5aeb"
+    },
+    {
+      "path": "scripts/verification/origin-binding-ob1-fixtures.mjs",
+      "sha256": "70030c95a685f945b010a72d5432a6faa7d81b51e40ed91ed50b480a61751a6a"
+    },
+    {
+      "path": "server.js",
+      "sha256": "7b2617a438a0690fe0ca5e54cb477393ad5dc27b191653b64eace8ebb9a5bfa7"
+    },
+    {
+      "path": "services/answering/ensemble-engine.js",
+      "sha256": "262838109349e2974ea0c1006662015dc19607279eacba40c20fd6a7e21b9ca4"
+    },
+    {
+      "path": "services/answering/prompt-variants.js",
+      "sha256": "8fbd90ed503089d83da5227caa3c7a99b02193d0ee4c448833d02040ca64f198"
+    },
+    {
+      "path": "services/caching/semantic-cache.js",
+      "sha256": "a1690bfb050963fdac8946fb3823312280fd30ed0928ce9c090efd16a2f24c2b"
+    },
+    {
+      "path": "services/context/active-memory-policy.js",
+      "sha256": "026c0fe8f0190a65648a8ef4f88fd2cd8d5ba7006bb73732c20b0b56a1f2afc2"
+    },
+    {
+      "path": "services/context/context-renewal.js",
+      "sha256": "00ec48378e29cb1b4befa55704122402606e776742d618d2247349707f152300"
+    },
+    {
+      "path": "services/context/linguistic-constraints.js",
+      "sha256": "629a004d088fc08d5f53c4ca52dfe65b5d22017b8dc206cd7da3e45757bc3a59"
+    },
+    {
+      "path": "services/context/mnemonic-encoder.js",
+      "sha256": "34d9774104da0cab16e0a3ae962a6e6dd6c7803f864467f21361d98678382ce9"
+    },
+    {
+      "path": "services/context/mvs-detector.js",
+      "sha256": "6caf839470da56eff5ac164cd639fcbf492190291bce386d4d91055340fbe019"
+    },
+    {
+      "path": "services/context/persistent-identity-bootstrap.js",
+      "sha256": "db0f964833fd61d1bb37415c4098eaab66e840084d02dbfd2cbe58820c99d24f"
+    },
+    {
+      "path": "services/context/post-compaction-delivery.js",
+      "sha256": "d26185dd27601a0fede3507606f9311b719f4919a074d5d3e09b5f2c349b6fcf"
+    },
+    {
+      "path": "services/context/scoped-state.js",
+      "sha256": "214496a9846d8aff741103515ea0a7b136990ef9cc20289382cf22dbbedcd680"
+    },
+    {
+      "path": "services/context/workspace-partitions.js",
+      "sha256": "80263143b3d38bbe8a43722f935fb16d94308125ae882e090f954591a06ee5e3"
+    },
+    {
+      "path": "services/core/authority-paths.js",
+      "sha256": "da268631d07b28cf31e65f5804ae6e8abc5b4b25fc620f096b25daea726e7544"
+    },
+    {
+      "path": "services/core/brain-contract.js",
+      "sha256": "b85dca76ea956e8d7924c6500fb7896cfbef7b1d1de019f879ccd117586e06a9"
+    },
+    {
+      "path": "services/core/concept-graph.js",
+      "sha256": "91be1fdaa485e6964bc80caa5c2f779733c705a9af9adfc942fb48b935da01db"
+    },
+    {
+      "path": "services/core/constitution-enforcer.js",
+      "sha256": "93bef44540314ff984a97d028589704d4f79a256ffd86916d7da639322c65c8a"
+    },
+    {
+      "path": "services/core/deontic-reasoner.js",
+      "sha256": "0e46c4432071180ccd63cb78bd972b19fc9d0736155495ceb521286a3f402774"
+    },
+    {
+      "path": "services/core/directive-claims.js",
+      "sha256": "d2cc40f33c5254d4dae9f674a39f553bdf4ceca0f53b625e88ff37fe8c229bae"
+    },
+    {
+      "path": "services/core/embeddings.js",
+      "sha256": "4a4c99956f46b01e7d0ee41f8e477a77a7607dcbbccda38ce249aa9ee6aaf155"
+    },
+    {
+      "path": "services/core/gaama-candidate/gaama-dormant-candidate.js",
+      "sha256": "79385315b3424e72b9421d888664043338418ce57e0df7b1795317d26afad507"
+    },
+    {
+      "path": "services/core/hom-constitution.js",
+      "sha256": "334fe4f9d0c71e1b9a0c7440a5bdcb9d34f036c87f51762f3b8a0462393fdead"
+    },
+    {
+      "path": "services/core/permissions.js",
+      "sha256": "d5d4d88f00eb15d3db535dbbb9bd5af716c771da07480b9d3c6847bf706c75f3"
+    },
+    {
+      "path": "services/core/provider-circuit-breaker.js",
+      "sha256": "e4cb59de3754dc5dde9ef74550104cbe325fc2e91d8627c97a60407f1b9a086c"
+    },
+    {
+      "path": "services/core/provider-health.js",
+      "sha256": "404a37fa1e78c38d669beb5d92d3daf521d77fe4d9c175ca763939d4e311c4ff"
+    },
+    {
+      "path": "services/core/providers.js",
+      "sha256": "c2c003137567f28d93d0ab58c491bf0a1699da7f3fbdae9b8ccb9bde8a6570e0"
+    },
+    {
+      "path": "services/core/rule-hierarchy.js",
+      "sha256": "bf6971f0e657febd855ec13dff7f21184961a74ff750b7aa12968d336f387707"
+    },
+    {
+      "path": "services/core/runtime-config.js",
+      "sha256": "8469b626ba0357707a4a4e4b71d72aadb146e035744d498d6383a286b725b8f1"
+    },
+    {
+      "path": "services/core/scheming-monitor.js",
+      "sha256": "4771c3e5c62a8e9ba5618e2715566c1057522d5d2f956cf145afab297887966e"
+    },
+    {
+      "path": "services/dream/curator.js",
+      "sha256": "b574156b07aabb1930c5a7752d1fb6c69733306e12db46e94e5b761a81e2bbd8"
+    },
+    {
+      "path": "services/dream/delta-writer.js",
+      "sha256": "20f0e6cedad6d9b435d06ddb772596923325716adcffe85165d38d0fc18cb2dc"
+    },
+    {
+      "path": "services/dream/dream-feedback.js",
+      "sha256": "8129d6f3052958bb910c179ba2134af57095ff5b3f37623e98f72d4c700d1d1d"
+    },
+    {
+      "path": "services/dream/hebbian-consensus.js",
+      "sha256": "2dd75a473a0c2c3169279e6618fc843c0389a61082b8006c69ce1db8c468a3e7"
+    },
+    {
+      "path": "services/dream/spiced-consolidator.js",
+      "sha256": "139b61be671ef52ceb8661b77abab2b019b2809c3e0721aec565afba26fc8e52"
+    },
+    {
+      "path": "services/governance/aladdin-compliance.js",
+      "sha256": "9d479e0372df184f4e9cd7337b79d585f9d23f0c7a75296379edb52a22bfc815"
+    },
+    {
+      "path": "services/governance/cohen-grossberg-energy-governor.js",
+      "sha256": "2e3ae0672d8fe464b526b5c383536fdb238c92e5f462ad62be014e8ec03b96ff"
+    },
+    {
+      "path": "services/governance/governor-config-ledger.js",
+      "sha256": "c719c5503ce77e83b4352fee9be0005a02cf34a98e7baba551aee192218b84e6"
+    },
+    {
+      "path": "services/governance/governor-provenance.js",
+      "sha256": "14a4834cf254904c7af910fc3937677852da2ae0e2626deaedfbaa2f2bd5304a"
+    },
+    {
+      "path": "services/governance/knowledge-gate-enforcer.js",
+      "sha256": "817eea6f04b9c6f97c138cfa32f73b378ff116e329414f1cc5128e625571a5d7"
+    },
+    {
+      "path": "services/governance/valence-judge.js",
+      "sha256": "d7f5bdb498afe948ea9b5727ff13d7db569d6c398f8ab48cf23067c63f8e4647"
+    },
+    {
+      "path": "services/governance/valence-ledger.js",
+      "sha256": "edd749496e467de974aa296c9b6ed3e63011369f50eaa1c9395014efa2196a93"
+    },
+    {
+      "path": "services/ingestion/entity-extractor.js",
+      "sha256": "532eddaafe94d40b42784ef43e02112ff7bb9943d0740b9795bfb0c978594882"
+    },
+    {
+      "path": "services/ingestion/ingestion-orchestrator.js",
+      "sha256": "15a832da7d0d0043fe929925a7dda5721fed8f1780c21f1f1ff2cbcebf557181"
+    },
+    {
+      "path": "services/ingestion/relationship-mapper.js",
+      "sha256": "d775d5b91ac6e5ee3903f7fd367d7786493ad954397053b79c0f5a3ca1601734"
+    },
+    {
+      "path": "services/ingestion/temporal-marker.js",
+      "sha256": "3cf85c33d4dfdc4601463d2d1807398f5db6a4828fe7e01164689eae3fa3cefc"
+    },
+    {
+      "path": "services/installation-context.js",
+      "sha256": "2932cd0a933f9e65111f5bfdf4db5ee95d5db4eca7fa10fd158a3ae51d12809c"
+    },
+    {
+      "path": "services/integrations/google-tools.js",
+      "sha256": "b5734642158175b89d6b946740d1b25a2b107882e5d39c11d4ca0ceaaa1290c5"
+    },
+    {
+      "path": "services/integrations/identity-vault.js",
+      "sha256": "ebf05e87b07223c0d7bc5af693250ecd5fd888d52860a4e4e74515cf67c94854"
+    },
+    {
+      "path": "services/integrations/integration-tools.js",
+      "sha256": "104fbca8bf55a648a9f164c31d3b04cc8f98e74bafd7ef47ef6a99adcbf9dbb8"
+    },
+    {
+      "path": "services/integrations/stripe-tools.js",
+      "sha256": "fae546a8cf4c929b1f24b01588cf18788490bb5c5b105fd22ce05539645db6e1"
+    },
+    {
+      "path": "services/integrations/telegram-tools.js",
+      "sha256": "d060c73847ee60a274eb209aa2aa751f571767dc9bd181e625ccdb57a63fbd7e"
+    },
+    {
+      "path": "services/integrations/web-search.js",
+      "sha256": "e5a240e6011ea19bcc7295f3bf4eba256d8a4735fc281e7131abc63d761a0b97"
+    },
+    {
+      "path": "services/integrations/x-automation.js",
+      "sha256": "463faac8cbdc007dbb6c00b36d2bfe002eae213384c89428f119b35c5e4acacd"
+    },
+    {
+      "path": "services/integrations/x-search.js",
+      "sha256": "fe5845264c7955bcd65163e9baac29aab5203e3c6a7c6f1f918e8f8b78c0f17a"
+    },
+    {
+      "path": "services/integrations/x-tools.js",
+      "sha256": "9f63b122892ffb97b777f0f89930aeff438b94dd70643c0e0bc7d6b6ae4b29f6"
+    },
+    {
+      "path": "services/learning/agent-learning.js",
+      "sha256": "1dc9eff320d912376c5e1fb5c1e6194697fc1668f44250f876bc49510494dfa9"
+    },
+    {
+      "path": "services/learning/batch-reflector.js",
+      "sha256": "5916804b90b41762605781e4ba771aae4b8893d83ef5ee894df4c136680b917e"
+    },
+    {
+      "path": "services/learning/bayesian-continual-memory.js",
+      "sha256": "b8e64f2aaae3577cd53942738bfd8d2b60a764b10013e1b7f91a227b4a6cd9c3"
+    },
+    {
+      "path": "services/learning/cognitive-consistency.js",
+      "sha256": "384845c5f8f238e573a96c9f01c995ed27210964db9fffc11af8b669ca3d5b4b"
+    },
+    {
+      "path": "services/learning/dual-skill-bank.js",
+      "sha256": "d4d161d514793ceb92bff904c2976608837cc9f9fe58c626eb48424f6c76f616"
+    },
+    {
+      "path": "services/learning/epistemic-vigilance.js",
+      "sha256": "140769e75fc11c41e1e7c32a8f54fbac8ad4bdb45ae0cc8d4bded300babc631c"
+    },
+    {
+      "path": "services/learning/error-normalizer.js",
+      "sha256": "82a4a954f3ac69d40bf5fe6e24177aafabd6c3599e12018aead1e3d8f8ebf683"
+    },
+    {
+      "path": "services/learning/failure-replay.js",
+      "sha256": "7c1f323215c41f8a8e68ee8cccfae4a44d3d2f76078fed5d5843677503e77106"
+    },
+    {
+      "path": "services/learning/hebbian-orthogonal-projection.js",
+      "sha256": "2df19cfcf4a9875fe48e035b4a189c836c2a569eadd6a5880c3fdee3a0d8014f"
+    },
+    {
+      "path": "services/learning/instruction-revision-diagnostics.js",
+      "sha256": "db0543afeac05358fc8aee3990a8730c87ee5576cc2d86c4d5edaaf713cfb275"
+    },
+    {
+      "path": "services/learning/memory-agent-benchmark.js",
+      "sha256": "65cb5b49ebb7887db42e272739247018f97044958e47b67d91dba4a34f49cd99"
+    },
+    {
+      "path": "services/learning/mutation-composition/outcome-authority.js",
+      "sha256": "cbe21486c60e40851936018ebd23351298014ba2249edd03d5e36fcf2129bf5c"
+    },
+    {
+      "path": "services/learning/mutation-composition/principal-state.js",
+      "sha256": "c2a1e3dbd188e850f177cfd223e84977d64acf4f38c7232f308722edc61031b8"
+    },
+    {
+      "path": "services/learning/mutation-composition/target-resolver.js",
+      "sha256": "8c152d80bd174857d97d2660ea92b9a872a09ee65cf99ced0e7f4f78af7a78ba"
+    },
+    {
+      "path": "services/learning/neurogenesis-catastrophic-forgetting.js",
+      "sha256": "6b4340c85b4163e2febc0ddf027a64c316f7227f6825f834bf3cae962c2adf84"
+    },
+    {
+      "path": "services/learning/neuroplasticity-stability-control.js",
+      "sha256": "4a9bb3aca360b270a667e4a656a0412577e538d320727ffee8c951e5a7047ae1"
+    },
+    {
+      "path": "services/learning/plasticity-controller.js",
+      "sha256": "10ebfa9f2adfbaf66b9cd9df3e50cb4846ca906cb7ed30cce2d6e2bf82408cf7"
+    },
+    {
+      "path": "services/learning/prospect-theory.js",
+      "sha256": "ad6bdc93fb351322e2c18774523c725c2ef6a5f9bc6f3ae4d539725d363df822"
+    },
+    {
+      "path": "services/learning/reflection-finetuner.js",
+      "sha256": "aa0ab9d883c436e8a0bd530b4c4e0a844b4b8e8b52e3a806d8a5637d52f284c9"
+    },
+    {
+      "path": "services/learning/serena-self-regulated-neurogenesis.js",
+      "sha256": "b36a072a7c9e46ef9c12bbe7fb3676eeb495dd703288a2672f6c64e28fa81f3a"
+    },
+    {
+      "path": "services/learning/skill-consolidation.js",
+      "sha256": "b2c5cf5f4790a3655eb9b2fe1db28741a408cbfaef5d4e6ae78e86e9d4894cea"
+    },
+    {
+      "path": "services/learning/spaced-repetition.js",
+      "sha256": "b56b2a781bc8734c8bd23fd1acb9de6c6d009369a52ca73be1e2a526be099e47"
+    },
+    {
+      "path": "services/learning/stdp-kernel.js",
+      "sha256": "d6608a902c4dc0178937580b90d0ec0c555aed8e8cfa3a5562435fbb2cd0a8d0"
+    },
+    {
+      "path": "services/learning/synaptic-consolidation-plasticity.js",
+      "sha256": "7696a067ec9d1bf17be3cbfcca5259b8104df9a57082a2c2e112c24c82e9c91c"
+    },
+    {
+      "path": "services/learning/tacos-neuromodulated-consolidation.js",
+      "sha256": "c2db41785a241d6f3d732f8b8c682ff2bed43c540f4ea831b9f821bb68b8cf9e"
+    },
+    {
+      "path": "services/learning/trust-score.js",
+      "sha256": "f09f5c17786f24c6ede915b8fa8710b2df778c5fd8475a8d3c68e0ced49acc95"
+    },
+    {
+      "path": "services/observe/agent-trace.js",
+      "sha256": "db461c339394cc09f0d228fd659e93257dee73895c725aa819eb3c2adc270649"
+    },
+    {
+      "path": "services/observe/aladdin-salience-sidecar.js",
+      "sha256": "dd593d0d0830a1c841a32c2b54af0d8d3d4a3d39b9e6497a494970167ab4107d"
+    },
+    {
+      "path": "services/observe/architecture-registry.js",
+      "sha256": "98eebacfcf21837d4487da2d21798d1130fca6728ee2c836547e5f499690a7fd"
+    },
+    {
+      "path": "services/observe/benchmark-scenarios.js",
+      "sha256": "93f527f7799ecba062898f82951bad700822a715ddd02a06e2fcd2f23fba92da"
+    },
+    {
+      "path": "services/observe/calibrated-rank-composition.js",
+      "sha256": "27dc7926d86b381d4666aa85ad1d0d4efa8beea73464d33af5e9848ffc3f6f52"
+    },
+    {
+      "path": "services/observe/coordination-audit.js",
+      "sha256": "84177277d96e80f16d32c99471394c5e290a65f8bc73508f1058756e7ca8a760"
+    },
+    {
+      "path": "services/observe/energy-budget.js",
+      "sha256": "7994c6656d268fcb351752369cb700bd39d782c4f97cbb69bf8ae4740b2580bf"
+    },
+    {
+      "path": "services/observe/entanglement-monitor.js",
+      "sha256": "2d1535bfe0f9054dccea66b7656bcaef7983cb3a032a160da5905a90e1d6ec27"
+    },
+    {
+      "path": "services/observe/event-ledger.js",
+      "sha256": "0e7430e942c378efa83a87bd575a0992ea9b1b6f8276e0712c6a60248d7a60ee"
+    },
+    {
+      "path": "services/observe/explainer.js",
+      "sha256": "7388c277dfe7985051ba5b026fd4e2075a126d790b5a3f4507358d360ca5dae8"
+    },
+    {
+      "path": "services/observe/mastery-paradox-detector.js",
+      "sha256": "203caefbb545657cfb9cf635fe1c56f5b7373de6a64944930209790a1acd20dd"
+    },
+    {
+      "path": "services/observe/memory-counts.js",
+      "sha256": "b799a5bf26a36d2511b12b114e15313b413842b53dacdd18e43b0e4d859a88f8"
+    },
+    {
+      "path": "services/observe/multimodal-contract.js",
+      "sha256": "c21fbb1bfa8f4c5f92af619fd1ca43b8913279e8d079479297ba554604c112c8"
+    },
+    {
+      "path": "services/observe/recall-doctor-sidecar.js",
+      "sha256": "51ff91860bf175583cb81488d5694cc7c631b07166f0be1fe8507dfc758a38b2"
+    },
+    {
+      "path": "services/observe/recall-doctor-trace.js",
+      "sha256": "8e010b3d6c0d3fc967348e6d40521f841fec5e47fd47beaf7254997c90c94063"
+    },
+    {
+      "path": "services/observe/recall-quantitative-gate.js",
+      "sha256": "9a0427a0eb830509450bfdfe3fd2ea8085be8f6487012af754df8c94d86d1126"
+    },
+    {
+      "path": "services/observe/recall-relevance-labels.js",
+      "sha256": "df7875c98d1ce2d83e4dc87d0776bb21e84364cf50e2cdecc0c8e0793013fafa"
+    },
+    {
+      "path": "services/observe/retrieval-drift-monitor.js",
+      "sha256": "04f3a3c68b761a783a5633ceed1066b0dc9fa4bf18f8cecd0c77cea29ef8a35a"
+    },
+    {
+      "path": "services/observe/routing-monitor.js",
+      "sha256": "c133eae98c67a3b3e76b8aa65903bd9843e2d41a5ff9fa1aa03b882cf3146b08"
+    },
+    {
+      "path": "services/observe/save-envelope.js",
+      "sha256": "42aa173557f3ef5864779085a800f113f32462df76aed67371656464f7073b24"
+    },
+    {
+      "path": "services/observe/semantic-intent.js",
+      "sha256": "d61bf1102556a63e9f0c886fc925b0e427f6d1144e2bc484654d29e760a8b365"
+    },
+    {
+      "path": "services/observe/svdd-anomaly.js",
+      "sha256": "f8a3765d983b869930f6734fd14cb8d00bd685277a21caa59d557097f757563a"
+    },
+    {
+      "path": "services/orchestration/agent-bdi-state.js",
+      "sha256": "79d2b3587738e402e332e2fd5dd626281133db5aba73a4584c7639826baaeb99"
+    },
+    {
+      "path": "services/orchestration/agent-confidence-calibration.js",
+      "sha256": "a4d6dd191f303c7c6d1ed978a0b40d472790199da07642d0f1a105f84ecd7750"
+    },
+    {
+      "path": "services/orchestration/agent-executive-fast-path.js",
+      "sha256": "22c82ea46f038cc86efd78be57d1d0ce5896ed16d3e2c6bca4b03dab0f9e2adf"
+    },
+    {
+      "path": "services/orchestration/agent-investigation-loop.js",
+      "sha256": "0308fdd9cd3c88fcd1ee840701064ed38de45293c380cbc42c3350db74b9a8ed"
+    },
+    {
+      "path": "services/orchestration/agent-prompts.js",
+      "sha256": "28ae01a386024b11a2213512ce7314445c6628c3c7e561c47830168d8e79c2ff"
+    },
+    {
+      "path": "services/orchestration/agent-run-diagnostics.js",
+      "sha256": "6a8cf9bc80c3513156f252bc5e5e7152a57fb12ee1b432d4adf1791fe1688d67"
+    },
+    {
+      "path": "services/orchestration/agent-runner.js",
+      "sha256": "74fe769a24d8a40b45ae7fda29fa8d2d8f2a30944175cbdebf6648cfbebcd044"
+    },
+    {
+      "path": "services/orchestration/agent-security-gates.js",
+      "sha256": "ab2120ad66343c6241442d67c1e04f6dd7a55f0e484891908239a670e345726f"
+    },
+    {
+      "path": "services/orchestration/agent-store.js",
+      "sha256": "a409d5e058c886c0f13918dafe0c0420fa90c0f9fa44452a4c81f973c7546646"
+    },
+    {
+      "path": "services/orchestration/agent-tools.js",
+      "sha256": "787fcb70a0b2e36f7f827e1c073affa973efc0963d0bfe087dd260951eea62fb"
+    },
+    {
+      "path": "services/orchestration/agent-xai-explanation.js",
+      "sha256": "066a723849b3bedd3bc0bba2ab3f92569f32f390cdbcf1818a1dfe1f0962de2d"
+    },
+    {
+      "path": "services/orchestration/aimos-mcp-catalog.js",
+      "sha256": "a98c500768962bdd41355d56592a5eb664b46e02e44d9183d07a06c481a2e284"
+    },
+    {
+      "path": "services/orchestration/capability-probe.js",
+      "sha256": "b9509d48a271a5c7fd265308ee8f34a45566031fd996893e7d04bed393753508"
+    },
+    {
+      "path": "services/orchestration/command-center.js",
+      "sha256": "2fa3351e56a0b63caa6f02d335736fc634619531ab60ad7cd8482204f7b4bd09"
+    },
+    {
+      "path": "services/orchestration/cooperative-action-arbitration.js",
+      "sha256": "b0220875c706fbbe34e76b73f03e3d596b1a410b587c4bf36a9802d5d82e18d9"
+    },
+    {
+      "path": "services/orchestration/decentralized-consensus.js",
+      "sha256": "31bf0feac665445f1b550cffc1d972236951b6808a27c90696be13b26548768b"
+    },
+    {
+      "path": "services/orchestration/decision-renderer.js",
+      "sha256": "68acda7d130a758a287dffc4b9704d832ca4d95383a8457033c6c8c3101f1cbc"
+    },
+    {
+      "path": "services/orchestration/escalation-resolver.js",
+      "sha256": "d5c7ff3a1d77edfb1b6572a8dac763f9aba3bf0541f5d31ff6f0c82381040379"
+    },
+    {
+      "path": "services/orchestration/explore-exploit-loop.js",
+      "sha256": "e2602604f18a8e4b2940bee8fe390634669bc5ff2d637012124432d8ea8a5911"
+    },
+    {
+      "path": "services/orchestration/fallback-resolver.js",
+      "sha256": "18c9fb1e2f2519ab898b8c522d2167d6f58b99c535e95ca890733ab218253a4b"
+    },
+    {
+      "path": "services/orchestration/governance-resolver.js",
+      "sha256": "b8057b6a3bfa9cac9f13df91c2d0e9fbec7fe3834a26521b61b873da173528d1"
+    },
+    {
+      "path": "services/orchestration/graph-designer.js",
+      "sha256": "cf07b705cc08f3fc0b2018322c07de20fb7f4f580757131cab394cc7a4b75794"
+    },
+    {
+      "path": "services/orchestration/http.js",
+      "sha256": "c34067cd20201eea9ee4f8d2675a5944084acc2f697be008539a30751f4b6576"
+    },
+    {
+      "path": "services/orchestration/hypothesis-verifier.js",
+      "sha256": "0c0473d8c6555a81cf45b12279e0af7a3d39bb0994f431c096f71f629df7ad0c"
+    },
+    {
+      "path": "services/orchestration/interaction-graph-healer.js",
+      "sha256": "575c2f67f849f3b05d755c5f2a20b240050b39f07df28758a43d8c7bf1cd5a76"
+    },
+    {
+      "path": "services/orchestration/meta-controller.js",
+      "sha256": "45343b53b03a46ee329c012c3629ae3152e1e0a24a09b69e82e9e15c04ae8524"
+    },
+    {
+      "path": "services/orchestration/model-context.js",
+      "sha256": "76c352269d85901d8d28de5e19924afa9306a544381b8ae9efa9238b1e6edbca"
+    },
+    {
+      "path": "services/orchestration/model-preferences.js",
+      "sha256": "99ecd917539662a1bb0acf0b8d3a873e6d157af0c92279b86861aa7931fbb33f"
+    },
+    {
+      "path": "services/orchestration/reasoning-trace-check.js",
+      "sha256": "081c3e8b8a6c69216486238d18248339569c2e86ea827ba0b7ab623a78d7f1d0"
+    },
+    {
+      "path": "services/orchestration/run-events.js",
+      "sha256": "23407c434807ec5d32e76feb441a8a25eb2675e7369fc85ddf53e0afd1bee072"
+    },
+    {
+      "path": "services/orchestration/run-metadata.js",
+      "sha256": "877587aa8ef67365de2c7e0bbd7bab4ba581f31849090e9e088f97e493e76aac"
+    },
+    {
+      "path": "services/orchestration/scheduler.js",
+      "sha256": "6d8a1ca4b73d57076b731f1451e9f8256e1cbd4c6ec513779360a217e9b329b4"
+    },
+    {
+      "path": "services/orchestration/session-memory-owner.js",
+      "sha256": "ec1035a0c35fa6c01e69a1826362f4c679fda7e477b0129862844a8fdefb9b70"
+    },
+    {
+      "path": "services/orchestration/session-runner.js",
+      "sha256": "6546de70867a7fbaa2829d13a81aa5b25c9bca4e5fece9e8df861596ab828ccb"
+    },
+    {
+      "path": "services/orchestration/skill-policy-diagnostics.js",
+      "sha256": "05832f81c5110928c5b62dce0702d2a5f0339f8edf59160453cab569591e89ad"
+    },
+    {
+      "path": "services/orchestration/skills-runtime.js",
+      "sha256": "6314a9315bf503704fdc9767a9ef521186a8e0561d179684321bcddf8ce89fc4"
+    },
+    {
+      "path": "services/orchestration/sun-tzu-analyzer.js",
+      "sha256": "714aebf62805cab94d31d1888826f9ee3e07c789480ffa7740648193932c87e3"
+    },
+    {
+      "path": "services/orchestration/symbolic-reasoner.js",
+      "sha256": "d776c0dbabafceccab14c4d5eaf333e80d3e24cb939969d57f6076ffe5b92ad8"
+    },
+    {
+      "path": "services/orchestration/tool-action-ledger.js",
+      "sha256": "9e34b1760aac937a9afdf45bfc84110a564acb3c5985c9bc946a0adad82e9dd3"
+    },
+    {
+      "path": "services/orchestration/tool-approval-store.js",
+      "sha256": "4844ddfd9ea99b8a4f083a66e399dc3afba469de285d7190dd40a99e21b219be"
+    },
+    {
+      "path": "services/orchestration/tool-registry.js",
+      "sha256": "00c036a8c32827e9e7095c719b3782e788a36ed80172f85bc9b9c426d4283b19"
+    },
+    {
+      "path": "services/orchestration/tool-representation-diagnostics.js",
+      "sha256": "36d15baac6d30c076ae87d2d833f47820913ae734539b54ca448faa86be5cbc2"
+    },
+    {
+      "path": "services/orchestration/trust-router.js",
+      "sha256": "1200fc230d59b3230b7ff9f6b6a7f6e55a37510293acccf3923bfde714e67af8"
+    },
+    {
+      "path": "services/pipeline-manifest.js",
+      "sha256": "0efe0d31480a9ef4ddceb02952b90d4cf55e25c8621ba39800fec19b1516184d"
+    },
+    {
+      "path": "services/retrieval/adaptive-early-exit.js",
+      "sha256": "273832e364369583dba1d403a1007156658ff0cf5f068d8bb63dd6c5161029ce"
+    },
+    {
+      "path": "services/retrieval/adaptive-recall.js",
+      "sha256": "cb5bc3110d449f7662140851807ccf5f03fdc84891360c7302cd4b302dc1d63f"
+    },
+    {
+      "path": "services/retrieval/aeon-atlas-memory.js",
+      "sha256": "f4f4e6b690351329aa8a616ed191adc61ec1a8d5df200b996e190d7dabe2d719"
+    },
+    {
+      "path": "services/retrieval/ai-hippocampus-memory-system.js",
+      "sha256": "fe8a83c78a48d36c6fbd0166e858a5fec3f24da8d432028818a1d4dbdad05b75"
+    },
+    {
+      "path": "services/retrieval/artificial-hippocampus-memory.js",
+      "sha256": "3007c6b0bda64c23587328d027686849ee23764a30737c4cabe5d0cf804c79c3"
+    },
+    {
+      "path": "services/retrieval/asmr-pipeline.js",
+      "sha256": "3153a937815deffb79b85d85afb215f3b096ae85c6e8184caae5eb0a73bdf0dd"
+    },
+    {
+      "path": "services/retrieval/chronos-temporal-retriever.js",
+      "sha256": "4d3e6517c7506507aa294c1e2e29e39d57737dd9944a179089462cda352de4fa"
+    },
+    {
+      "path": "services/retrieval/concept-ppr-native.js",
+      "sha256": "b6768d782c36310458f6485d7f4dc7e96787d2bd26d6e6e848d716648b69f323"
+    },
+    {
+      "path": "services/retrieval/content-state-occurrence/evidence-scope.js",
+      "sha256": "c98db80e062007118a52e7d6587c891210ecf366e9cea93f9ed72c21c8b6d8ec"
+    },
+    {
+      "path": "services/retrieval/content-state-occurrence/kernel.js",
+      "sha256": "2b56154601362614843fd2c02e0e5079fc440d9800a9015d6a08087a5b39f7a7"
+    },
+    {
+      "path": "services/retrieval/content-state-occurrence/legacy-occurrence-reference.js",
+      "sha256": "e9f2bb8b974af28f402f132260c8bbbb0a779de46b46063c0eaeb434c16d6397"
+    },
+    {
+      "path": "services/retrieval/content-state-occurrence/request-admission.js",
+      "sha256": "0223d9962c5a6a62649728d19f363c5ea2b8f5ad824953358b97d732d25af03b"
+    },
+    {
+      "path": "services/retrieval/context-builder.js",
+      "sha256": "9893e8469e6f69cb2e0c96fce946b550aee4846802903f02e250a340a145074d"
+    },
+    {
+      "path": "services/retrieval/deep-recall-override.js",
+      "sha256": "d16c080a8db1155ee96230f92cbfe0b33a2406bfa6d43d8ffb76bb4a9905d0ec"
+    },
+    {
+      "path": "services/retrieval/embedding-stability.js",
+      "sha256": "5ec686d6f7f86613b4b2b5eb2a578ed4836c324f9e8c95a759160af69154e2ff"
+    },
+    {
+      "path": "services/retrieval/ember-retention-memory.js",
+      "sha256": "d668b57ee81c9aa941c77e4f62687c95d6b48c02e854dc1898636d3f4023b560"
+    },
+    {
+      "path": "services/retrieval/epistemic-trust-retrieval.js",
+      "sha256": "18844998df3de00059b50304bfb92397f76d34ed133b2471127aecdcb17bc523"
+    },
+    {
+      "path": "services/retrieval/fact-finder.js",
+      "sha256": "e5ad6038a2f68e18962ccfd6e95da7d646620dbe15b81cc8b4a2e9fc6051dd47"
+    },
+    {
+      "path": "services/retrieval/hage-hybrid-agent-graph.js",
+      "sha256": "cc1b6e2467fc75ec978e166dca3059db62805318f59dc77b7f437aa21c8c7eba"
+    },
+    {
+      "path": "services/retrieval/hage-native-candidate/deterministic-reranker.js",
+      "sha256": "a51f81b54e425d96d482758d42f2e50774a75da4d97a0283b48c99d25c7ab10e"
+    },
+    {
+      "path": "services/retrieval/hage-native/graph-contract.js",
+      "sha256": "f7a0e1fcaa77a46333ddcc2a1e6d7c8fdf8109a09971640989cc7f7fbadaea76"
+    },
+    {
+      "path": "services/retrieval/hage-native/mdp.js",
+      "sha256": "24faa927a05984bc5386006c68110bf94dbefc1ce3992b1a9cdde9126a8f9dfb"
+    },
+    {
+      "path": "services/retrieval/hage-native/query-router.js",
+      "sha256": "0c439dd8fe0d49c428a7589b7616013b7201eaa63d7d7fdde961ae7c08513a5f"
+    },
+    {
+      "path": "services/retrieval/hage-native/reinforce.js",
+      "sha256": "cae32ec370c3d5f5a5a34eec279ea67fb220c824c3e0fef59d544765ee429186"
+    },
+    {
+      "path": "services/retrieval/hage-native/training-snapshot.js",
+      "sha256": "070737eeda8d7a0f50f30abbe6954d11c48f8e86d8c10aa12923d7953b1689c9"
+    },
+    {
+      "path": "services/retrieval/hindsight-memory-graph.js",
+      "sha256": "2bd7253fc7c2e4f4983fde09d799586b74e8bc5997d3dc5533154b6a9bd6c2e0"
+    },
+    {
+      "path": "services/retrieval/hindsight-tempr-candidate.js",
+      "sha256": "e898465124ee9f6f1c46ba924832f991ebe7a336fd3a9d11cf082c0dda6344ef"
+    },
+    {
+      "path": "services/retrieval/hingemem-boundary-hypergraph.js",
+      "sha256": "c5b19d091a64063e101b916f7887b3bb186c22a0d8bef5efce55f63583a609eb"
+    },
+    {
+      "path": "services/retrieval/hingemem-boundary-projection-candidate.js",
+      "sha256": "e635179f26a3c0ab94989a91af6f2271921f0507e5655dab262ce4211e8611c0"
+    },
+    {
+      "path": "services/retrieval/hingemem-same-set-candidate.js",
+      "sha256": "3500598584baadebc7d83c0973bf9735801c48d90d6178dfd112db57ebb1950f"
+    },
+    {
+      "path": "services/retrieval/hmem-hierarchical-reasoning.js",
+      "sha256": "480afc64fd34d1eb5fe1126b944a3644645f23817f20bc0a3c24425a69be66f4"
+    },
+    {
+      "path": "services/retrieval/hmem-native-candidate/governed-hierarchy.js",
+      "sha256": "4352fb04f238391ad2977616828ad07e2be2f77ab339c10e83ab388db290d3a9"
+    },
+    {
+      "path": "services/retrieval/hnsw-optimizer.js",
+      "sha256": "645b97bdbfb6503d16431ef66044ba363ae78c985482b417f30c034ecfab0345"
+    },
+    {
+      "path": "services/retrieval/identifier-recall.js",
+      "sha256": "37c466acefca71bca35943963bd59210d75842d0dcaf743d4fa98f3309d4e8d7"
+    },
+    {
+      "path": "services/retrieval/interval-algebra-rag.js",
+      "sha256": "2710ac98845ffb1808bbe98f2654e2e742d215bdd4f9972ed158910e22e93e84"
+    },
+    {
+      "path": "services/retrieval/keypoint-decomposer.js",
+      "sha256": "e6aa0811081f6419597ce43d02e9ba99397b26859f75bd9656beedd8e6a99014"
+    },
+    {
+      "path": "services/retrieval/longmemeval-v2-context-gathering.js",
+      "sha256": "32da7d17eea7b789b1f619b81789fd35217be13c16532af5196374284ffdd102"
+    },
+    {
+      "path": "services/retrieval/magma-lineage-retriever.js",
+      "sha256": "f449e3269bf1030b2fe9ae1a84a15e69e4b70118c4b0b2d66fea5ec639fc565a"
+    },
+    {
+      "path": "services/retrieval/magma-native-candidate.js",
+      "sha256": "c32bc2d506d2ed7ec4b068f7f7e98007b3afdb736a458cf659ee0127a86f7223"
+    },
+    {
+      "path": "services/retrieval/magma-native-reader.js",
+      "sha256": "c99350f6edfefdbde682e25c65240839368b56342a0ea0e74ac093f363a1cde3"
+    },
+    {
+      "path": "services/retrieval/memaudit-package-audit.js",
+      "sha256": "66e3b599c95d5acb27e80ee329d18c0d535e7b98682509233c7c1f23143aac5f"
+    },
+    {
+      "path": "services/retrieval/mnemis-dual-route-graph.js",
+      "sha256": "65037db6d7581884eeb95ac621764dfc7e898b0c5ee5728cb2c8568a5e92a157"
+    },
+    {
+      "path": "services/retrieval/mnemis-grounded-system1-candidate.js",
+      "sha256": "ca85ab2f190603e6fd2e49d15063147da42ebf8e12ccac048ead71d1bc612bbf"
+    },
+    {
+      "path": "services/retrieval/mnemis-marginal-gear.js",
+      "sha256": "e6bf409b97f25cdd80739e90407abb9fa35d474394e05b9a2e97f3dcdc8848ce"
+    },
+    {
+      "path": "services/retrieval/multi-stage-retrieval.js",
+      "sha256": "5af0bbfcf63138c2b66999490f2acce274c159abd420ec606795ac273dcb1302"
+    },
+    {
+      "path": "services/retrieval/native-recall-pipeline.js",
+      "sha256": "d66979960362166d9d839222b9958c0a71c0a8206ec45350774c2bcc84d05dee"
+    },
+    {
+      "path": "services/retrieval/native-recall.js",
+      "sha256": "4a6e131fd56a0f427d22581bd354256975c75244dc5a484d49a2a2ee2b686407"
+    },
+    {
+      "path": "services/retrieval/native-retrieval-fusion.js",
+      "sha256": "17acfae3df1c52b36782b17e322dfddc4bfa641182b1829d178a40be09590716"
+    },
+    {
+      "path": "services/retrieval/pipeline-instrumentation.js",
+      "sha256": "b7e713f1d4cd1651a6987fc4fb7a04023dd0182d034ef71d51706d0fcf944327"
+    },
+    {
+      "path": "services/retrieval/procedural-reasoning-retriever.js",
+      "sha256": "6fd420bb0a81c1f68854c6eb6c0f140053f192e5ede00254ce9b2d36f227c88a"
+    },
+    {
+      "path": "services/retrieval/qmd-parser.js",
+      "sha256": "b0884bc86e0d1b37cc1eb22eb022c7375f1628af5b293b03918af38f7f0e2aeb"
+    },
+    {
+      "path": "services/retrieval/qmd-planner.js",
+      "sha256": "791abe5fd6a7b56d6e8cf5135838e4db9a15c1648bc0f47c6c257150de164bb7"
+    },
+    {
+      "path": "services/retrieval/query-entity-anchors.js",
+      "sha256": "b131daf79e1e03c114e78b34246fa66bd2148a6c84256415ee6c75729ff1ed4f"
+    },
+    {
+      "path": "services/retrieval/quim-index.js",
+      "sha256": "625f38c57ac6f3b660f02c9596c1a857f49d57e3951d479b4c9e137ecb935775"
+    },
+    {
+      "path": "services/retrieval/rag-ranking-verification.js",
+      "sha256": "bf6eec33232707750c5a1060b23769fecef45c8b678ef4517057396188bee94a"
+    },
+    {
+      "path": "services/retrieval/recall-calibrator.js",
+      "sha256": "6f8d3d8d864b20adeea8b04f2152cc6137c0e2be6645373d0a8ba620c7d54e67"
+    },
+    {
+      "path": "services/retrieval/recall-diagnostics.js",
+      "sha256": "76bdb0bfa9051a5316db0852e33687b66cdcd8588ebb2ea56933612ee0927f1e"
+    },
+    {
+      "path": "services/retrieval/recall-lexical-calibration.js",
+      "sha256": "32cf37b81e4f9e93faf804c0091759d15468677fa21839fea0eb6205b87edf45"
+    },
+    {
+      "path": "services/retrieval/recall-mode-planner.js",
+      "sha256": "c9a1793fa081ddee3a29139b4607efc6a94a8197b8d7c68b2e56f4c4323b521e"
+    },
+    {
+      "path": "services/retrieval/recall-output-calibrator.js",
+      "sha256": "3272336fde4b32a978075be6799395061fe88d8cceff2c203e05ae3d8b82c30a"
+    },
+    {
+      "path": "services/retrieval/recall-runtime-config.js",
+      "sha256": "f6aba0f316e6e73dcec33f083fb5156b5e3e91e150361db4f7929005486027a9"
+    },
+    {
+      "path": "services/retrieval/reconstructed-graph-additive/graph-family-bounded-fusion.js",
+      "sha256": "980d547a4fdb469709fa60a65111e0cf1fc8c12be42b34871d8045f9f888e409"
+    },
+    {
+      "path": "services/retrieval/reconstructed-graph-additive/reconstructed-graph-marginal-gear.js",
+      "sha256": "c54b51cc06f81f27fde3401709bf542cd739513efd9ffe7a7b88060e52d043de"
+    },
+    {
+      "path": "services/retrieval/reconstructed-graph-grounded-candidate.js",
+      "sha256": "1d41ff8990f08dba6e3249c5de5cf877db8d58c6aca2baa14e27771ddabf7cde"
+    },
+    {
+      "path": "services/retrieval/reconstructed-graph-memory.js",
+      "sha256": "addf96da25e2d196bb543a94605c97b7a2d8e00a01bc4b817235466fb3405f5a"
+    },
+    {
+      "path": "services/retrieval/reconstructed-graph-native-candidate.js",
+      "sha256": "5984f0df519477724332bbbe428ac64243f4f1bcbf1b6797dc31073201a29ca5"
+    },
+    {
+      "path": "services/retrieval/retrieval-orchestrator.js",
+      "sha256": "bd721a6b813f1e95ae6899a2a8b1ad3794d35894a3ce68d62c53d8e42f6ffa87"
+    },
+    {
+      "path": "services/retrieval/similarity-stats.js",
+      "sha256": "060fb42f4dab453a84c71f999a8812e4259ebc41706dfb1ee8b35c270a0ebef6"
+    },
+    {
+      "path": "services/retrieval/situated-qa-context.js",
+      "sha256": "6bc56ad12f735277f7b30c900e25e7d3546a441fe0a43981f431714f904c34eb"
+    },
+    {
+      "path": "services/retrieval/source-attributed-synthesis.js",
+      "sha256": "78a9d780e6d164bd70eda780a051c3d2d37646bb05c322a6df1239052693384a"
+    },
+    {
+      "path": "services/retrieval/step-back-abstraction.js",
+      "sha256": "85409ae091bcf0cb6ec199831a686f710e8d2f929535462785a846400e880aa7"
+    },
+    {
+      "path": "services/retrieval/swiftmem-query-aware-index.js",
+      "sha256": "269d07de35dfa9a4b9d6be0899929e9cd44f183e2fe686ac03b8d63c6570e9e5"
+    },
+    {
+      "path": "services/retrieval/time-aware-representation.js",
+      "sha256": "85b4e14cc420b2e0677d34c72aa993302535a7ebb892bf326cf907e36fa12eac"
+    },
+    {
+      "path": "services/retrieval/timeline-reconstructor.js",
+      "sha256": "2b1bc224cb47ef6732f525fc7c2c3e11bec9d86d9e33390d65acb346e78bc5ab"
+    },
+    {
+      "path": "services/retrieval/twin-prime-arithmetic.js",
+      "sha256": "52221c4fdd74db91a4fa9e92eb27a3597a9da655b8fa6a81319e125f09a6bbf5"
+    },
+    {
+      "path": "services/retrieval/xmemory-beyond-rag.js",
+      "sha256": "e2676c9a7a8d147a167e01dd105e946ac52163808d49827f8fafd3131b8aae3c"
+    },
+    {
+      "path": "services/runtime/local-inference-control.js",
+      "sha256": "af35308365b36b2bf63e5ed1e62abe224086d5cc11cd5b351ba4ef6558739df8"
+    },
+    {
+      "path": "services/runtime/serving-control.js",
+      "sha256": "600b0b07e590abca0dc20d44103f64fccae988186ce178562f51db838872935c"
+    },
+    {
+      "path": "services/security/agent-identity.js",
+      "sha256": "e5229dd4d6e8cddd4c8a880e80ec7adb918a11d575d7387bcb75b5e04364bd69"
+    },
+    {
+      "path": "services/security/agent-revocation-cache.js",
+      "sha256": "db8b341d811cb4a5ac3533ac479da3862e6d715e8b9105d8bc0c91a603a077c3"
+    },
+    {
+      "path": "services/security/auth-gate.js",
+      "sha256": "b00766b2132db25a2a100dac898d96744bec8e4bc3caea20786ab4ac34137744"
+    },
+    {
+      "path": "services/security/auth-tier.js",
+      "sha256": "3386f9f8a96a2892a610975885ddad3a3d37a6fa58e2c7690c26cc57ce264e32"
+    },
+    {
+      "path": "services/security/canary-tracker.js",
+      "sha256": "46c0da6282e960d879f657275de603da5b881f59ed00f4d370361fc3228efa8a"
+    },
+    {
+      "path": "services/security/canary-write-gate.js",
+      "sha256": "ec6b29e24f296eddf5d192a6355b9b0df695547abf946b449157e55fab20d156"
+    },
+    {
+      "path": "services/security/cognitive-demand.js",
+      "sha256": "6c9510cefc09a59033817a90015146d2450a0957428917fe86e39f507dfe5b67"
+    },
+    {
+      "path": "services/security/cognitive-weight-verifier.js",
+      "sha256": "050fb3b103d77442a319e4d8bd858e265463d1c9c050b13a10c79aa38a25895f"
+    },
+    {
+      "path": "services/security/concept-edge-provenance.js",
+      "sha256": "208083c11645133e2fc95100e9770e28ea6ae5e18987a736709c9e9cdeaf4e7d"
+    },
+    {
+      "path": "services/security/credential-cache.js",
+      "sha256": "b16da694bce834020784a3a07abe64e05bd7d4256e81da44d4384bd776b871cf"
+    },
+    {
+      "path": "services/security/credential-ledger.js",
+      "sha256": "a368293f58b1a720b8e0a878999ccfbb45372abe90eef42bc0a4f70865bf3dd4"
+    },
+    {
+      "path": "services/security/credential-store.js",
+      "sha256": "7a99f9b53e88445c0555cf10fcb18da03600053b6b1b2f2ec013151fb1276601"
+    },
+    {
+      "path": "services/security/cybersec-firewall.js",
+      "sha256": "08a2c83e1dba11dde21c197fbc3b2d948c585e6f0f0a093a2e69bd25c92a9f43"
+    },
+    {
+      "path": "services/security/envelope-headers.js",
+      "sha256": "b5bbc3a80d43f4654e84c96e0709ed2d7de4320d88dedb17ff90f38dcc46fb97"
+    },
+    {
+      "path": "services/security/epistemic-certificate-ledger.js",
+      "sha256": "4dde45d72644c28ae9a8be2dbb866eed70f2d31341bd0cf583b2f4c67462ee35"
+    },
+    {
+      "path": "services/security/epistemic-edit-certificate-math.js",
+      "sha256": "028109d33c485ae6653de492a45135c8e5eb6733e0d246e3b7d0ef8d22c2b198"
+    },
+    {
+      "path": "services/security/epistemic-edit-certificate-multiclass-certifier.js",
+      "sha256": "84c401111bcecfe76581c678a166b6ecd6c74fcef05b8da245aca15d63f51445"
+    },
+    {
+      "path": "services/security/epistemic-edit-certificate-multiclass-math.js",
+      "sha256": "e727e9f4c6488634fdb4d68b486a2be4f91ef4bfd215ca9c9d580fd5da84c1d4"
+    },
+    {
+      "path": "services/security/epistemic-edit-certificate-multiclass-verifier.js",
+      "sha256": "7243849f0111dde219e4a727bd459e6d8913a0056489d0a752bb48d19744b0f5"
+    },
+    {
+      "path": "services/security/epistemic-edit-certificate-verifier.js",
+      "sha256": "f58d4bdcba962a170bf45be41ff9b371bcf2cbeeab258bfaa1a265c144cde3db"
+    },
+    {
+      "path": "services/security/epistemic-edit-certifier.js",
+      "sha256": "18469ecc1522193d1e9cd93f0529daa7cbe17995c0edfc98d83f229dac81f725"
+    },
+    {
+      "path": "services/security/golem-vuln-classes.js",
+      "sha256": "04003460a21da968be49664076030027046c0f4d2530e46ac0de86b3de444050"
+    },
+    {
+      "path": "services/security/housekeeper-pubkey-cache.js",
+      "sha256": "f0a7790f617dbdf2efb735c9f11f716523cd6819d44d3b55d4a83cafd2303c6f"
+    },
+    {
+      "path": "services/security/housekeeper-signer.js",
+      "sha256": "3d426647c1773868b75a62b18d2a3314bd047cf54585f57a315dfca2772dfb32"
+    },
+    {
+      "path": "services/security/identity-chain.js",
+      "sha256": "35ff00f417e78d466248c836105045bbeea665aa8c3634d9c6b7d5c97b74101b"
+    },
+    {
+      "path": "services/security/install-classifier.js",
+      "sha256": "09e370a729d084176faa9ce37ec566ebc90f58960acbdd13804db886688699e4"
+    },
+    {
+      "path": "services/security/knowledge-gate.js",
+      "sha256": "5536f015632c04298f88713282ca66a79383eba24c8f67cc6d1e2ccef6681dfb"
+    },
+    {
+      "path": "services/security/master-pubkey-cache.js",
+      "sha256": "3e81554f74951a14c6fa177ea43af1769b05758012e1ffef9559ac06dbaab8fc"
+    },
+    {
+      "path": "services/security/material-effect-owner.js",
+      "sha256": "faef565c12a5bd8983ec63ade296562d4abded6ebfba2af7290d1b9ea95d10af"
+    },
+    {
+      "path": "services/security/memory-epistemic-classifier-kernel.js",
+      "sha256": "f8686b4db99c1dce10d443f10dad14b8c8487ba3f050f027ddc2faa7ea2e211a"
+    },
+    {
+      "path": "services/security/memory-epistemic-classifier.js",
+      "sha256": "beede787a955370317f065dd3281b4c6c203a97214f5e294db7576e5b14b488e"
+    },
+    {
+      "path": "services/security/memory-epistemic-evidence-assertion.js",
+      "sha256": "43c47de112acb481e905f171c203fa390d6e6e8a133bf574a175fabc05668c96"
+    },
+    {
+      "path": "services/security/memory-epistemic-evidence-authorization.js",
+      "sha256": "d2a76c21d8404283c85b36dc56929c09610af539628869e10aef5de5624409b3"
+    },
+    {
+      "path": "services/security/memory-lineage.js",
+      "sha256": "25ead25cc7c88e15748b23ef58984c4265136eebcd97c035580b6b83658ba76e"
+    },
+    {
+      "path": "services/security/memory-provenance.js",
+      "sha256": "3423ce7b55eb55114789681dc1d1504646ca704372e7a449896b66477e201bf5"
+    },
+    {
+      "path": "services/security/nonce-window.js",
+      "sha256": "eda44e368820ecb264531101bdc36029a2a14f4c76b8174414cd3e406742c4ba"
+    },
+    {
+      "path": "services/security/origin-ledger.js",
+      "sha256": "97844a719ef67f2d66e473a2f87d27e0a40f18cf87f7852de0f83d09baa258a3"
+    },
+    {
+      "path": "services/security/protocol/canonical-json.js",
+      "sha256": "9bb4bb2171027f9ee0b30f897503bc968f5cf6c6a2d42ea826f02df637b23c4b"
+    },
+    {
+      "path": "services/security/protocol/cognitive-weight-evidence.js",
+      "sha256": "b4e2fd4ccf95123becff0761dc95795306405b5aa044b6a6019408eb28fb5c07"
+    },
+    {
+      "path": "services/security/protocol/content-state-occurrence-v3.js",
+      "sha256": "9592316e412c27e40f62df325ff07c8979f8308ea4d6a407b4603b0a72ebdd80"
+    },
+    {
+      "path": "services/security/protocol/memory-value.js",
+      "sha256": "f59fe861a26e6f339b5be7b3f327cbbecdcc9753573d0ad63623c2237f586495"
+    },
+    {
+      "path": "services/security/protocol/mutmem-portable-evidence-v2.js",
+      "sha256": "eead9508577c316b8496354e3e348c2f22ef2af4905653f9dc9e09d7f93890ef"
+    },
+    {
+      "path": "services/security/protocol/mutmem-portable-mutation-v2.js",
+      "sha256": "51284d511d63db4680326ea921d0617b1787c8dfaa45f55957a4db9abad944a3"
+    },
+    {
+      "path": "services/security/protocol/mutmem-portable-predicates-v2.js",
+      "sha256": "bb75ba9bf0555705ea068184e280350d1256a3c0a170b234b6a0682855bb8e61"
+    },
+    {
+      "path": "services/security/protocol/mutmem-protocol.js",
+      "sha256": "b3c23fa66d07ea25931d94e0b88cfe8be606e397f8575029dea9c989fb78836a"
+    },
+    {
+      "path": "services/security/protocol/mutmem-reproducibility-contract.js",
+      "sha256": "11a62733d4bf67e56fa05d1f63e19f5ae35a026fa6917ce32ecc323b68d56fb3"
+    },
+    {
+      "path": "services/security/protocol/occurrence-session-binding-v1.js",
+      "sha256": "c184ebcd508285a61e3017f1df578c1fda5153c3497f657fc2e7261211e2eea1"
+    },
+    {
+      "path": "services/security/protocol/origin-binding-v1.js",
+      "sha256": "fe3b716dab4eac5722314ec27e4caed1c30dfa760633997c0ec4893a744c1ac2"
+    },
+    {
+      "path": "services/security/purpose-authorization.js",
+      "sha256": "9574d1d92ea1ff71785680f27fbc9e5f45cf76dc72d2808ed4aee1dbc5f99827"
+    },
+    {
+      "path": "services/security/recall-authorization.js",
+      "sha256": "17fb91cf44fbd68f721417481d919774afa2237b8597bdaf3e985e2ee385b35f"
+    },
+    {
+      "path": "services/security/red-team-toolkit.js",
+      "sha256": "236acd395eb4af85066c3789ba75b09bcd64b0300eae30df0759a4621547d934"
+    },
+    {
+      "path": "services/security/refusal-detector.js",
+      "sha256": "54b0dc5fb55ebc1f1326e39fda90f810f2d7f91a98037c923784341e4807280d"
+    },
+    {
+      "path": "services/security/request-receipt-ledger.js",
+      "sha256": "e269d069c409e88c0c0d82829e962c7cb58380a388d472bfdb49a26eb6b22de5"
+    },
+    {
+      "path": "services/security/require-capability.js",
+      "sha256": "c80bcc490a4f4b9050a723dfc24ddd5c43edc184940f090b946f24048708d526"
+    },
+    {
+      "path": "services/security/save-envelope.js",
+      "sha256": "0787afa1ffae092f0ad7ed2d9e79a80823b7a867579bb033b8d7822f633c6e57"
+    },
+    {
+      "path": "services/security/save-origin-binding.js",
+      "sha256": "170897c4f55ff589da7b27e8e58bddfdd1dfd586d8e2a51ba47ad3020748f094"
+    },
+    {
+      "path": "services/security/se-gate.js",
+      "sha256": "b843fd404bb55cad160f05ad0ade8d4859c33e65ae8a8f18a975e39f66ae824d"
+    },
+    {
+      "path": "services/security/security-classifier.js",
+      "sha256": "5fd41103b731e7aa67d597382cfc93942aa53339b2e98675f9ec17d111ef062f"
+    },
+    {
+      "path": "services/security/security-ladder.js",
+      "sha256": "6747dadfce0611ff0ac172ba1d7cf5d637e31d16c6482bd5bdee1deb6aaa5218"
+    },
+    {
+      "path": "services/security/system-config-ledger.js",
+      "sha256": "cc927bf0e3489091b55bb0d6dc0898a7a5d710447c95f0977f5987abcbc00f98"
+    },
+    {
+      "path": "services/security/system-config-store.js",
+      "sha256": "459b7ce14d6b113587b2f4dba3d54e59dc421b4811ec0411075fd9115649c227"
+    },
+    {
+      "path": "services/security/whole-brain-purge.js",
+      "sha256": "b58c41dbae1db1fca78875188e46fedacf916a9985d71603e9bba27dc4e8f6c8"
+    },
+    {
+      "path": "services/shared/native-llm.js",
+      "sha256": "3db187f667bdf1ff3f14b189f15e2e8afbe22705a21ecc0e5d3dcfb9f5cb00a7"
+    },
+    {
+      "path": "services/shared/scale-baseline.js",
+      "sha256": "1095cf8a75f3a752364585a3201fae6c3d5df5195c72005355f0817cdb03beab"
+    },
+    {
+      "path": "services/shared/schema-mapper.js",
+      "sha256": "ba683e697e1672b9921247e00ebc5bedf1dcd20e0ce8946e47d1df07ea4cee83"
+    },
+    {
+      "path": "services/shared/session-scope.js",
+      "sha256": "1ece91d1154a6d9ea8b01089448d2db35c1dc58ec7a4941c7d944b8202f229f8"
+    },
+    {
+      "path": "services/temporal/decoder-only-time-series-forecast.js",
+      "sha256": "8bcf26b33f4c020c095d157a059799760143b697fa3f66ff374522b3c5ea59cd"
+    },
+    {
+      "path": "services/temporal/dormancy-manager.js",
+      "sha256": "4a47ca75e388054385bef2399ce87bcb13c09688b504d394562f2050b542aad5"
+    },
+    {
+      "path": "services/temporal/event-ordering-graph.js",
+      "sha256": "1849f5aabd4974d7cd41d5948ec586d51d90e200514a94aaf26e7ceae2558052"
+    },
+    {
+      "path": "services/temporal/freshness-metadata.js",
+      "sha256": "3660d073933dd1bbbd5301ddb48b8a5d1afaccdb73fad9fa0abbe1b280c31529"
+    },
+    {
+      "path": "services/temporal/memory-t1-learning-loop.js",
+      "sha256": "50949d99f5f892ac129f090adc92476d9597e76731086f1188a4d00b34796c5b"
+    },
+    {
+      "path": "services/temporal/multi-view-timeline.js",
+      "sha256": "79db844cc96122132df424272cabd1b097074f999373e302795a5d5febb065bd"
+    },
+    {
+      "path": "services/temporal/retrieval-pheromone.js",
+      "sha256": "b37b7b579b66eefea82cba754998a338f09e15f8f197cb4f7ef00b0f847bbc1b"
+    },
+    {
+      "path": "services/temporal/streaming-qa-horizon.js",
+      "sha256": "bb46cd1d1fc2b7ad55986909b04d03f8d8f4decd2cbcd6c519ff77e76538f518"
+    },
+    {
+      "path": "services/temporal/tcomplex-tntcomplex.js",
+      "sha256": "7f6273628dcb21e6aeac8a291632275515a23ad522f967ac2cf1eda77cdd8950"
+    },
+    {
+      "path": "services/temporal/tempcourt-normalization.js",
+      "sha256": "2426192943d91a3db5bd7267daccb941c02b3dc4fa874fed0dbe7142ed7110c0"
+    },
+    {
+      "path": "services/temporal/tempeval-merge-closure.js",
+      "sha256": "80028c17fe7000f1ca276fb96a8f7cf0b9794c68962a6cee109c4a77f4e1f852"
+    },
+    {
+      "path": "services/temporal/temporal-fingerprinter.js",
+      "sha256": "c6276073924c282de9c6fa7e03d7c7bfb95214a2fe91998d022e7640745db32d"
+    },
+    {
+      "path": "services/temporal/temporal-graph-fusion.js",
+      "sha256": "d12b91d00ddd29e8dd50792dd90313e68c193f225930bdaa98f72cdf8b86cd54"
+    },
+    {
+      "path": "services/temporal/temporal-kg-reasoning.js",
+      "sha256": "18742b3dd34a5478c109d4d83e30919ba707148a8fca00466b4c603186b74c4a"
+    },
+    {
+      "path": "services/temporal/temporal-knowledge-base.js",
+      "sha256": "8b49484a006cf4853e3ea212d28c87cf95742d0f9b62b1818a55570dd6c7d62e"
+    },
+    {
+      "path": "services/temporal/temporal-resolver.js",
+      "sha256": "356fbc4cc1d4bce3c2378d341d7d9924852d96f9765030a233e8eed5bfd63b42"
+    },
+    {
+      "path": "services/temporal/tempquestions-intervals.js",
+      "sha256": "7a62126a5314d188caea021b8b6b4f79a9b4511ad455b21b953dadc50a93dd45"
+    },
+    {
+      "path": "services/temporal/time-aware-lm-kb.js",
+      "sha256": "0bf3db34b99f2bc84a5f07db71350d5e04f49b6b009a5688b9c3aaa016b6816f"
+    },
+    {
+      "path": "services/temporal/timem-hierarchy.js",
+      "sha256": "77321f474d302f9349cafc93c987a48245a4b5b076118d08de249af14b67d2dd"
+    },
+    {
+      "path": "services/temporal/timex-normalizer.js",
+      "sha256": "5f0c80a1f8dfaac6ad1c094343cf6e4937bf835c76378591948395d25581af01"
+    },
+    {
+      "path": "services/temporal/topic-budget.js",
+      "sha256": "6917fd95fb797f3873cedc11e64cfbb8f53bed1b1ecc71a6f0fba30f6c0c6010"
+    },
+    {
+      "path": "services/temporal/xerte-temporal-kg-explain.js",
+      "sha256": "1a91082e4e207368cb593bafe828c48095df6ba508e34477152ff16803035195"
+    },
+    {
+      "path": "services/write/canonical-save-contract.js",
+      "sha256": "0bd0e97405ccf8e3789e060625710badc1a0cf86e03eda316b004aee5fc2c911"
+    },
+    {
+      "path": "services/write/canonical-save-owner.js",
+      "sha256": "70e8f39adacf5928b45ce6efa487e9e0f9b9f26d5a7153b3d4ae889a40c066f7"
+    },
+    {
+      "path": "services/write/channel-separator.js",
+      "sha256": "df7a65e314d69e767555eb9bc0f84b8e012cf9a71cd709a9f823c71dd072c949"
+    },
+    {
+      "path": "services/write/codebook-service.js",
+      "sha256": "df91f38e16dd89fcc60aa9e13f0aa064b63fea26fad6ea52cd2809cf77f07ddf"
+    },
+    {
+      "path": "services/write/compaction-save.js",
+      "sha256": "2a8ecfe0e92559adc2e484cd4a02c7d87f672eb0c43254a0e740b27137c30104"
+    },
+    {
+      "path": "services/write/credential-lane.js",
+      "sha256": "3bc825f791971cb40723fa072bb01aac83117a289ddd26c1e3b78b657f9f97b0"
+    },
+    {
+      "path": "services/write/execution-interceptor.js",
+      "sha256": "43e8f430c03b68342133342fd8a96523fdd339d3359fcff3575f5ee5529b9b52"
+    },
+    {
+      "path": "services/write/intent-classifier.js",
+      "sha256": "d8d14f24f5c19a669cdd5ec626d182de80dbc6c234d62585fc38c8ef76a22805"
+    },
+    {
+      "path": "services/write/persist-memory.js",
+      "sha256": "48ee8deb9ea4cddf1d1f06cc9eb47616c60344f4334455723769136bf2b92f6c"
+    },
+    {
+      "path": "services/write/quality-gate.js",
+      "sha256": "5e3f6ccf5384cfcc165982b1066d5dbd42de27c2d790e2bb363e030c76eee969"
+    },
+    {
+      "path": "services/write/rpe-gate.js",
+      "sha256": "fec2a7559622d17e03e0217cbe3675f81a3734bdd657b89040dae6f40221ff2d"
+    },
+    {
+      "path": "services/write/sensible-screening.js",
+      "sha256": "5881116d09d664fa85e195266702e0392e15fc8710330ecb47e079001f7c0a65"
+    },
+    {
+      "path": "services/write/transformation-cache.js",
+      "sha256": "2b58e8c4698e62c409a6e6bc89ddeb627ea60bd934fd1803b85de82147b81ad9"
+    },
+    {
+      "path": "services/write/turboquant-compat.js",
+      "sha256": "e90dab2d6d73e2972b3fcc13d20ba1a9772cebc4a6a91e8e4442a7ca9d1b4277"
+    },
+    {
+      "path": "services/write/write-validator.js",
+      "sha256": "19ded88f91805f26aa93ddba795dff6b7191dd3b3c85e84ef168f08d3158c842"
+    },
+    {
+      "path": "tests/security/origin-binding-ob1-artifacts.test.mjs",
+      "sha256": "a6e1353c8f576aefe45b0e79d37891cbc8f72ab9fcfe2a82ac2843f0e6aa29eb"
+    },
+    {
+      "path": "tests/security/origin-binding-v1.test.mjs",
+      "sha256": "bf0024c793576d5ed98a34a105dd25be13b1013f68fb7d3f3d784ffdd0c04139"
+    },
+    {
+      "path": "verifiers/origin-binding/v1/README.md",
+      "sha256": "87d954321cb60d44038d8e8332d71b869bd844c118a91c5ae98aed2328482216"
+    },
+    {
+      "path": "verifiers/origin-binding/v1/verify.py",
+      "sha256": "bf7eec85f3572e25bae0d5f60e812cacf9ef3efd6eef8a309432a574a47a6f04"
+    }
+  ],
+  "source_root_sha256": "c0f78112d06bd351bea736c868e5f57352f3f2e2eec39a052eacb6c39238af5f",
+  "manifest_sha256": "93fc7391a5134b4b07a6450e11e3ca89cc69b79e258f778aa09b8d2f423befab"
+}

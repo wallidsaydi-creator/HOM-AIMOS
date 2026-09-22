@@ -1,7 +1,7 @@
 {
   "project": "HOM Distributed Cognitive Engine",
   "version": "1.2.5-Batch9.75-Coexistence",
-  "updated": "2026-08-31",
+  "updated": "2026-09-22",
   "doctrine": "Distributed Aladdin Law",
   "total_services": 295,
   "research_papers_ingested": 197,
@@ -9,7 +9,7 @@
   "service_inventory": {
     "service_groups": 17,
     "counted_service_files": 295,
-    "census_sha256": "e71c332413b495b57e2349fe3f76dc98bacc66cc2b0dcc8b3c32ad05a7bff720",
+    "census_sha256": "a001876ec9e5f503247b55479ec9ad7d4a8bab65f01582fd3060321bdb3ded4c",
     "counting_policy": {
       "counted": "top-level services/<group>/*.js excluding index.js barrels and hidden directories",
       "excluded_root_infrastructure_files": [
@@ -238,7 +238,7 @@
       "retrieval": {
         "layer": "L2",
         "path": "services/retrieval/",
-        "services": 63,
+        "services": 61,
         "files": [
           "adaptive-early-exit.js",
           "adaptive-recall.js",
@@ -279,8 +279,6 @@
           "native-retrieval-fusion.js",
           "pipeline-instrumentation.js",
           "procedural-reasoning-retriever.js",
-          "qmd-parser.js",
-          "qmd-planner.js",
           "query-entity-anchors.js",
           "quim-index.js",
           "rag-ranking-verification.js",
@@ -317,7 +315,7 @@
       "security": {
         "layer": "L3",
         "path": "services/security/",
-        "services": 49,
+        "services": 51,
         "files": [
           "agent-identity.js",
           "agent-revocation-cache.js",
@@ -355,6 +353,7 @@
           "memory-lineage.js",
           "memory-provenance.js",
           "nonce-window.js",
+          "origin-ledger.js",
           "purpose-authorization.js",
           "recall-authorization.js",
           "red-team-toolkit.js",
@@ -362,6 +361,7 @@
           "request-receipt-ledger.js",
           "require-capability.js",
           "save-envelope.js",
+          "save-origin-binding.js",
           "se-gate.js",
           "security-classifier.js",
           "security-ladder.js",
@@ -459,7 +459,7 @@
     ],
     "pipeline_manifest": {
       "file": "services/pipeline-manifest.js",
-      "validated_connections": 116,
+      "validated_connections": 115,
       "pipelines": 6,
       "scope": "Critical pipeline wiring registry. Not the complete live service inventory."
     }

@@ -12,6 +12,7 @@ const MAX_SET_BINDINGS = 100_000;
 const FAMILY_FILES = Object.freeze([
   ['material_effect', 'services/security/material-effect-owner.js'],
   ['tool_action', 'services/orchestration/tool-action-ledger.js'],
+  ['model_context', 'services/orchestration/tool-action-ledger.js'],
   ['credential_use', 'services/security/credential-ledger.js'],
   ['canonical_save_action', 'services/write/canonical-save-owner.js'],
   ['agent_run', 'services/orchestration/run-metadata.js'],
@@ -67,6 +68,7 @@ export function proveCr7R6RecoverySetEquality() {
   const required = Object.freeze({
     material_effect: [/reconstructMaterialEffectTraces/, /reconcileOpen/, /externalEffectsReplayed: 0/],
     tool_action: [/tool_execution_terminal/, /reconstructToolActionTraces/, /reconcileOpenToolActions/, /toolInvocationsReplayed: 0/],
+    model_context: [/model_context_terminal/, /reconstructModelContextTraces/, /reconcileOpenModelContexts/, /modelInvocationsReplayed: 0/],
     credential_use: [/findOpenCredentialUses/, /reconcileOpenCredentialUses/, /externalEffectsReplayed: 0/],
     canonical_save_action: [/reconstructCanonicalSaveActionTraces/, /reconcileOpenCanonicalSaveActions/, /savesReplayed: 0/],
     agent_run: [/reconstructRunTraces/, /reconcileOpenRuns/, /runsReplayed: 0/, /responsesPublished: 0/],
@@ -88,6 +90,7 @@ export function proveCr7R6RecoverySetEquality() {
   assert(recoveryCall >= 0 && listenCall >= 0 && recoveryCall < listenCall, 'boot_recovery_must_precede_listen');
   for (const name of [
     'materialEffectOwner.reconcileOpen', 'reconcileOpenToolActions',
+    'reconcileOpenModelContexts',
     'credentialLedger.reconcileOpenCredentialUses', 'reconcileOpenCanonicalSaveActions',
     'reconcileOpenRuns', 'reconcileOpenSessionLanes',
   ]) assert(server.includes(name), `boot_recovery_family_missing:${name}`);

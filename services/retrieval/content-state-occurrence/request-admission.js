@@ -148,6 +148,7 @@ export function createRequestScopedContentStateAdmission({
   authority,
   admitBatch,
   evidenceScopeOwner,
+  creditOwner = null,
 } = {}) {
   if (!authority?.companyId || !authority?.actorAgentId || typeof admitBatch !== 'function'
       || typeof evidenceScopeOwner?.resolve !== 'function'
@@ -301,13 +302,14 @@ export function createRequestScopedContentStateAdmission({
           admittedOccurrenceByMemoryId.set(occurrence.memory_id, occurrence);
         }
       }
+      const projectedMemories = rows.map((memory) => {
+        const memoryId = String(memory.id || memory.memory_id || '').toLowerCase();
+        return withoutInternalOccurrenceProof(memory, admittedOccurrenceByMemoryId.get(memoryId) || null);
+      });
+      const creditBoundMemories = creditOwner ? await creditOwner(projectedMemories) : projectedMemories;
       return Object.freeze({
         ...admitted,
-        memories: Object.freeze(rows.map((memory) => {
-          const memoryId = String(memory.id || memory.memory_id || '').toLowerCase();
-          const occurrence = admittedOccurrenceByMemoryId.get(memoryId) || null;
-          return withoutInternalOccurrenceProof(memory, occurrence);
-        })),
+        memories: Object.freeze(creditBoundMemories),
         occurrence_admission_decision_sha256: projection.decision.decision_sha256,
       });
     },

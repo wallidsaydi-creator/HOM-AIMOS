@@ -76,8 +76,10 @@ async function initializeBootstrapFacts() {
 }
 
 function verifySupportedNodeRuntime() {
-  const major = Number(process.versions.node.split('.')[0]);
-  if (![20, 24, 26].includes(major)) throw new Error(`node_runtime_unsupported:${process.version}`);
+  const [major, minor, patch] = process.versions.node.split('.').map(Number);
+  if (![20, 24, 26].includes(major) || major === 20 && (minor < 18 || minor === 18 && patch < 1)) {
+    throw new Error(`node_runtime_unsupported:${process.version}`);
+  }
   console.log(`[A0.25] Node.js runtime supported: ${process.version}`);
 }
 
@@ -833,9 +835,10 @@ async function main() {
     // Phase A3 — schema migrations.
     await phaseA3SchemaMigrations();
 
-    // Migration 029 is immutable and contains its historical bootstrap
-    // password. Restore the random Keychain value before loading any runtime
-    // pool or starting any HTTP listener.
+    // Current migration 029 contains no password. Installations created by an
+    // earlier public release may retain its exact predecessor checksum and
+    // database effect. Reassert the random Keychain value in either case before
+    // loading any runtime pool or starting any HTTP listener.
     await phaseA3_1RuntimeCredentialSync();
 
     // Load the runtime DB pools only after A2 generated the restricted-role

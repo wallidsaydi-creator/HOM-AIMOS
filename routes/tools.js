@@ -4,7 +4,7 @@ import os from 'os';
 import path from 'path';
 import { searchWeb } from '../services/integrations/web-search.js';
 import { xSearchRecent } from '../services/integrations/x-search.js';
-import { xGetMyProfile, xGetMyTimeline, xPostTweet, xReplyToTweet, xQuoteTweet } from '../services/integrations/x-tools.js';
+import { xGetMyProfile, xGetMyTimeline } from '../services/integrations/x-tools.js';
 import {
   stripeAccountSummary,
   stripeListCustomers,
@@ -20,11 +20,16 @@ import {
   salesforceListObjects,
   contactsSearch,
   imessageListChats,
-  imessageSearchContact,
-  imessageSend
+  imessageSearchContact
 } from '../services/integrations/integration-tools.js';
-import { executeTool, preflightTool } from '../services/orchestration/tool-registry.js';
 import {
+  executeCorroboratedToolAction,
+  executeTool,
+  getNativeToolProfile,
+  preflightTool,
+} from '../services/orchestration/tool-registry.js';
+import {
+  createToolApprovalRequest,
   getToolApprovalRequest,
   listToolApprovalRequests,
   markToolApprovalApproved,
@@ -34,17 +39,24 @@ import {
   reserveToolApprovalExecution,
 } from '../services/orchestration/tool-approval-store.js';
 import {
-  gmailListInbox, gmailSearchMessages, gmailSendMessage, gmailReplyMessage, gmailGetMessage, gmailGetThread,
+  gmailListInbox, gmailSearchMessages, gmailGetMessage, gmailGetThread,
   youtubeSearch, youtubeChannelStats, youtubeVideoDetails, youtubeListChannelVideos,
   driveListFiles, driveGetFile, driveReadTextFile,
-  calendarListEvents, calendarCreateEvent, calendarTodayEvents,
+  calendarListEvents, calendarTodayEvents,
   docsGetDocument, sheetsGetValues,
   googleGetProfile
 } from '../services/integrations/google-tools.js';
-import { createScheduledTask, listScheduledTasks } from '../services/orchestration/scheduler.js';
-import { telegramGetUpdates, telegramSendMessage } from '../services/integrations/telegram-tools.js';
+import { listScheduledTasks } from '../services/orchestration/scheduler.js';
+import { telegramGetUpdates } from '../services/integrations/telegram-tools.js';
 import { systemConfigStore } from '../services/security/system-config-store.js';
 import { requireCapability } from '../services/security/require-capability.js';
+import { masterPubkeyCache } from '../services/security/master-pubkey-cache.js';
+import { buildConsequentialActionProjectionV1 } from '../services/security/protocol/consequential-action-v1.js';
+import { verifyOperatorActionAuthorizationProof } from '../services/security/protocol/operator-action-authorization-v1.js';
+import {
+  produceIndependentOriginElevation,
+  verifyOriginCorroborationReceipt,
+} from '../services/orchestration/tool-action-ledger.js';
 
 const router = express.Router();
 
@@ -237,7 +249,11 @@ router.post('/x/reply', requireCapability('x'), async (req, res, next) => {
   if (!text) return res.status(400).json({ success: false, error: 'text is required' });
   if (!replyToTweetId) return res.status(400).json({ success: false, error: 'reply_to_tweet_id is required' });
   try {
-    const result = await xReplyToTweet({ text, replyToTweetId, useContext: req.executionContext });
+    const result = await executeTool('x_reply', { text, replyToTweetId }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
+    });
+    if (result?.blocked || result?.requiresApproval) return res.status(403).json(result);
     res.json(result);
   } catch (error) {
     handleServiceError(
@@ -253,7 +269,11 @@ router.post('/x/post', requireCapability('x'), async (req, res, next) => {
   const text = String(req.body?.text || '').trim();
   if (!text) return res.status(400).json({ success: false, error: 'text is required' });
   try {
-    const result = await xPostTweet({ text, useContext: req.executionContext });
+    const result = await executeTool('x_post', { text }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
+    });
+    if (result?.blocked || result?.requiresApproval) return res.status(403).json(result);
     res.json(result);
   } catch (error) {
     handleServiceError(
@@ -271,7 +291,14 @@ router.post('/x/quote', requireCapability('x'), async (req, res, next) => {
   if (!text) return res.status(400).json({ success: false, error: 'text is required' });
   if (!quoteTweetId) return res.status(400).json({ success: false, error: 'quote_tweet_id is required' });
   try {
-    const result = await xQuoteTweet({ text, quoteTweetId, useContext: req.executionContext });
+    const result = await executeTool('x_quote', {
+      text,
+      quote_tweet_id: quoteTweetId,
+    }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
+    });
+    if (result?.blocked || result?.requiresApproval) return res.status(403).json(result);
     res.json(result);
   } catch (error) {
     handleServiceError(
@@ -373,18 +400,15 @@ router.post('/telegram/send', requireCapability('email'), async (req, res, next)
   }
 
   try {
-    const payload = await telegramSendMessage({
-      chatId,
+    const payload = await executeTool('telegram_send', {
+      chat_id: chatId,
       text,
-      parseMode: 'Markdown',
-      useContext: {
-        actorAgentId: req.executionContext?.actorAgentId,
-        requestReceiptId: req.executionContext?.requestReceiptId,
-        requestReceiptMutationHash: req.executionContext?.requestReceiptMutationHash,
-        requestAdmissionEventId: req.executionContext?.requestAdmissionEventId,
-        requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash,
-      },
+      parse_mode: 'Markdown',
+    }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
     });
+    if (payload?.blocked || payload?.requiresApproval) return res.status(403).json(payload);
     res.json({ success: true, message: payload?.result || null });
   } catch (error) {
     handleServiceError(res, error, 'Telegram credential is not enrolled in the signed Keychain lane.', next);
@@ -494,10 +518,14 @@ router.get('/imessage/chats', async (req, res, next) => {
 
 router.post('/imessage/send', requireCapability('email'), async (req, res, next) => {
   try {
-    const result = await imessageSend({
+    const result = await executeTool('imessage_send', {
       to: req.body?.to,
       message: req.body?.message
+    }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
     });
+    if (result?.blocked || result?.requiresApproval) return res.status(403).json(result);
     res.json(result);
   } catch (error) {
     error.statusCode = 500;
@@ -549,7 +577,93 @@ router.get('/approvals', requireCapability('admin_override'), async (req, res, n
   }
 });
 
-router.post('/approvals/:id/approve', requireCapability('admin_override'), async (req, res, next) => {
+// An enrolled agent may request review of an exact consequential action, but
+// this surface cannot approve, reserve, claim, or dispatch it. The existing
+// append-only approval owner and master-signed execution route remain the only
+// path from a pending request to a material effect.
+router.post('/approvals/request', async (req, res, next) => {
+  const tool = String(req.body?.tool || '').trim();
+  const args = req.body?.args && typeof req.body.args === 'object'
+    && !Array.isArray(req.body.args) ? req.body.args : null;
+  if (!tool || !args) {
+    return res.status(400).json({ success: false, error: 'tool and object args are required' });
+  }
+  try {
+    const nativeProfile = getNativeToolProfile(tool);
+    if (!nativeProfile.profile.action_authority) {
+      return res.status(400).json({ success: false, error: 'tool is not consequential' });
+    }
+    const preflight = preflightTool(tool, args, req.agentId);
+    if (!preflight.ok) {
+      return res.status(400).json({ success: false, error: 'tool preflight failed', issues: preflight.issues });
+    }
+    const approval = await createToolApprovalRequest({
+      tool,
+      args,
+      agentId: req.agentId,
+      plan: preflight.plan,
+      authority: req.executionContext,
+      parentEventId: req.executionContext?.requestAdmissionEventId || null,
+    });
+    return res.status(202).json({ success: true, approval });
+  } catch (error) {
+    error.statusCode = 500;
+    return next(error);
+  }
+});
+
+// The tenant selects one retained memory and one master-registered action id.
+// It cannot supply sources, trust labels, arguments, domains, licenses or an
+// elevation hash. Housekeeper derives those exclusively from verified state.
+router.post('/corroboration/execute', async (req, res, next) => {
+  const keys = Object.keys(req.body || {}).sort();
+  if (JSON.stringify(keys) !== JSON.stringify(['action_id', 'memory_id'])) {
+    return res.status(400).json({
+      success: false,
+      error: 'exact action_id and memory_id are required',
+    });
+  }
+  try {
+    const produced = await produceIndependentOriginElevation({
+      memoryId: req.body.memory_id,
+      actionId: req.body.action_id,
+      executionContext: req.executionContext,
+    });
+    await verifyOriginCorroborationReceipt(produced);
+    const result = await executeCorroboratedToolAction({
+      registry: produced.registry,
+      memoryId: produced.memoryId,
+      agentId: req.agentId,
+      executionContext: req.executionContext,
+    });
+    if (result?.blocked || result?.error || result?.success === false || result?.ok === false) {
+      return res.status(403).json({
+        success: false,
+        elevation_sha256: produced.elevation.elevation_sha256,
+        result,
+      });
+    }
+    return res.json({
+      success: true,
+      registry_sha256: produced.registry.registry_sha256,
+      elevation_sha256: produced.elevation.elevation_sha256,
+      source_observations: produced.licenses.map((entry) => ({
+        authority_id: entry.authority.authority_id,
+        event_id: entry.observation.event_id,
+        mutation_sha256: entry.observation.mutation_hash,
+        license_event_id: entry.license.event_id,
+        license_sha256: entry.license.mutation_hash,
+      })),
+      result,
+    });
+  } catch (error) {
+    error.statusCode = /not_active|expired|source_|corroboration_|event_operation_key_exists/.test(String(error?.message || ''))
+      ? 409 : 500;
+    return next(error);
+  }
+});
+
+router.post('/approvals/:id/approve', async (req, res, next) => {
   const approvalId = String(req.params.id || '').trim();
   if (!approvalId) return res.status(400).json({ success: false, error: 'approval id is required' });
 
@@ -565,8 +679,38 @@ router.post('/approvals/:id/approve', requireCapability('admin_override'), async
   }
 
   try {
+    const operatorProof = req.body?.operator_proof || null;
+    const nativeProfile = getNativeToolProfile(approval.tool);
+    if (!nativeProfile.profile.action_authority) {
+      return res.status(400).json({ success: false, error: 'tool is not consequential' });
+    }
+    const projection = buildConsequentialActionProjectionV1({
+      tool: approval.tool,
+      args: approval.args || {},
+      profile: nativeProfile.profile,
+    });
+    const masterPubkey = await masterPubkeyCache.get();
+    if (!masterPubkey) return res.status(503).json({ success: false, error: 'master authority unavailable' });
+    const proof = verifyOperatorActionAuthorizationProof(operatorProof, masterPubkey, {
+      company_id: req.executionContext?.companyId,
+      subject_agent_id: approval.agentId,
+      approval_request_id: approval.id,
+      approval_request_mutation_sha256: approval.requestMutationHash,
+      tool_name: approval.tool,
+      action_scope: projection.action_scope,
+      risk_class: projection.risk_class,
+      arguments_sha256: approval.argsHash,
+      security_value_sha256: projection.value_sha256,
+    });
+    if (!proof.valid || req.executionContext?.actorAgentId !== approval.agentId) {
+      return res.status(403).json({ success: false, error: proof.reason || 'operator action subject mismatch' });
+    }
+    if (approval.operatorProof
+        && approval.operatorProof.proof_sha256 !== operatorProof.proof_sha256) {
+      return res.status(409).json({ success: false, error: 'approval proof substitution' });
+    }
     const approved = approval.status === 'pending'
-      ? (await markToolApprovalApproved(approvalId, req.executionContext)).approval
+      ? (await markToolApprovalApproved(approvalId, req.executionContext, operatorProof)).approval
       : approval;
     const reserved = await reserveToolApprovalExecution(approvalId, req.executionContext);
     const result = await executeTool(
@@ -581,9 +725,14 @@ router.post('/approvals/:id/approve', requireCapability('admin_override'), async
           approvalId,
           reservationEventId: reserved.receipt.event_id,
           reservationMutationHash: reserved.receipt.mutation_hash,
+          operatorProof: approved.operatorProof,
         },
       }
     );
+    if (result?.error || result?.blocked || result?.success === false || result?.ok === false) {
+      const failed = await markToolApprovalFailed(approvalId, result?.error || 'native_tool_not_succeeded', req.executionContext);
+      return res.json({ success: false, approval: failed.approval, result });
+    }
     const updated = await markToolApprovalExecuted(approvalId, result, req.executionContext);
     res.json({ success: true, approval: updated.approval, result });
   } catch (error) {
@@ -687,7 +836,14 @@ router.get('/gmail/thread/:id', async (req, res, next) => {
 router.post('/gmail/send', requireCapability('email'), async (req, res, next) => {
   const { to, subject, body } = req.body || {};
   if (!to || !subject || !body) return res.status(400).json({ error: 'to, subject, body required' });
-  try { res.json(await gmailSendMessage({ to, subject, body }, req.executionContext)); }
+  try {
+    const result = await executeTool('gmail_send', { to, subject, body }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
+    });
+    if (result?.blocked || result?.requiresApproval) return res.status(403).json(result);
+    res.json(result);
+  }
   catch (e) {
     handleServiceError(
       res,
@@ -705,8 +861,12 @@ router.post('/gmail/reply', requireCapability('email'), async (req, res, next) =
     return res.status(400).json({ success: false, error: 'messageId and body are required' });
   }
   try {
-    const result = await gmailReplyMessage({ messageId, body }, req.executionContext);
-    res.json({ success: true, ...result });
+    const result = await executeTool('gmail_reply', { messageId, body }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
+    });
+    if (result?.blocked || result?.requiresApproval) return res.status(403).json(result);
+    res.json(result);
   } catch (error) {
     handleServiceError(
       res,
@@ -717,14 +877,18 @@ router.post('/gmail/reply', requireCapability('email'), async (req, res, next) =
   }
 });
 
-router.post('/email/send', async (req, res, next) => {
+router.post('/email/send', requireCapability('email'), async (req, res, next) => {
   const { to, subject, body } = req.body || {};
   if (!to || !subject || !body) {
     return res.status(400).json({ success: false, error: 'to, subject, body required' });
   }
   try {
-    const result = await gmailSendMessage({ to, subject, body }, req.executionContext);
-    res.json({ success: true, ...result });
+    const result = await executeTool('gmail_send', { to, subject, body }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
+    });
+    if (result?.blocked || result?.requiresApproval) return res.status(403).json(result);
+    res.json(result);
   } catch (error) {
     handleServiceError(
       res,
@@ -735,15 +899,19 @@ router.post('/email/send', async (req, res, next) => {
   }
 });
 
-router.post('/email/reply', async (req, res, next) => {
+router.post('/email/reply', requireCapability('email'), async (req, res, next) => {
   const messageId = String(req.body?.messageId || '').trim();
   const body = String(req.body?.body || '').trim();
   if (!messageId || !body) {
     return res.status(400).json({ success: false, error: 'messageId and body are required' });
   }
   try {
-    const result = await gmailReplyMessage({ messageId, body }, req.executionContext);
-    res.json({ success: true, ...result });
+    const result = await executeTool('gmail_reply', { messageId, body }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
+    });
+    if (result?.blocked || result?.requiresApproval) return res.status(403).json(result);
+    res.json(result);
   } catch (error) {
     handleServiceError(
       res,
@@ -838,16 +1006,25 @@ router.get('/calendar/events', async (req, res, next) => {
   }
 });
 
-router.post('/calendar/events', async (req, res, next) => {
+router.post('/calendar/events', requireCapability('email'), async (req, res, next) => {
   const { summary, description, start, end } = req.body || {};
   if (!summary || !start || !end) return res.status(400).json({ error: 'summary, start, end required' });
-  try { res.json(await calendarCreateEvent({ summary, description, start, end }, req.executionContext)); }
+  try {
+    const result = await executeTool('calendar_create', {
+      summary, description: description || '', start, end,
+    }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
+    });
+    if (result?.blocked || result?.requiresApproval) return res.status(403).json(result);
+    res.json(result);
+  }
   catch (e) {
     handleServiceError(res, e, 'Calendar not configured. Connect Google OAuth first.', next);
   }
 });
 
-router.post('/calendar/create', async (req, res, next) => {
+router.post('/calendar/create', requireCapability('email'), async (req, res, next) => {
   const { summary, description, start, end } = req.body || {};
   if (!summary || !start) {
     return res.status(400).json({ success: false, error: 'summary and start are required' });
@@ -857,13 +1034,17 @@ router.post('/calendar/create', async (req, res, next) => {
     || new Date(new Date(start).getTime() + 60 * 60 * 1000).toISOString();
 
   try {
-    const event = await calendarCreateEvent({
+    const event = await executeTool('calendar_create', {
       summary,
       description: description || '',
       start,
       end: endValue
-    }, req.executionContext);
-    res.json({ success: true, event });
+    }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
+    });
+    if (event?.blocked || event?.requiresApproval) return res.status(403).json(event);
+    res.json(event);
   } catch (error) {
     handleServiceError(res, error, 'Calendar not configured. Connect Google OAuth first.', next);
   }
@@ -915,29 +1096,17 @@ router.post('/schedule/tasks', requireCapability('admin_override'), async (req, 
   }
 
   try {
-    const schedule = await createScheduledTask({
-      cronExpression,
-      taskDescription,
+    const result = await executeTool('schedule_task', {
+      cron_expression: cronExpression,
+      task_description: taskDescription,
       label,
-      agentId,
-      authority: {
-        kind: 'verified_request',
-        actorAgentId,
-        actorValidFromIso: req.executionContext.actorValidFromIso,
-        requestReceiptId: req.executionContext.requestReceiptId,
-        requestReceiptMutationHash: req.executionContext.requestReceiptMutationHash,
-        requestAdmissionEventId: req.executionContext.requestAdmissionEventId,
-        requestAdmissionMutationHash: req.executionContext.requestAdmissionMutationHash,
-        certString: req.identityCertString,
-        sigBytes: req.identitySigBytes,
-        signedTs: req.identitySignedTs,
-        nonce: req.identityNonce,
-        requestSigForm: req.identityRequestSigForm,
-        signedMethod: req.identitySignedMethod,
-        signedPath: req.identitySignedPath,
-      },
+      agent_id: agentId,
+    }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
     });
-    res.json({ success: true, scheduled: true, schedule });
+    if (result?.blocked || result?.requiresApproval) return res.status(403).json(result);
+    res.json(result);
   } catch (error) {
     error.statusCode = 500;
     next(error);

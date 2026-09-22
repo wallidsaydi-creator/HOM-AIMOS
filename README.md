@@ -12,11 +12,11 @@ identity owns autonomous maintenance without borrowing an enrolled user agent.
 
 HOM-AIMOS is a complete persistent-memory backend, not a provenance layer
 attached to a vector store. Its source-derived architecture binds a
-current 295-service census and declares six critical pipelines containing 116
+current 295-service census and declares six critical pipelines containing 115
 service connections. SAVE exposes one fixed 15-stage owner; RECALL exposes its
 eight principal native execution boundaries.
 
-### SAVE — 15 fixed stages
+### SAVE — 16 fixed stages
 
 `services/write/canonical-save-owner.js` owns:
 
@@ -43,7 +43,7 @@ Housekeeper actions.
 | 2 | Embedding and candidate opening | `services/core/embeddings.js` |
 | 3 | Similarity statistics | `services/retrieval/similarity-stats.js` |
 | 4 | Trust scoring | `services/learning/trust-score.js` |
-| 5 | Permanent dense, sparse, temporal, entity, QuIM, QMD, HyDE, and concept gears plus one bounded Reconstructed-Graph G2 family channel with central deterministic RRF | `services/retrieval/native-recall-pipeline.js`, `services/retrieval/native-retrieval-fusion.js`, `services/retrieval/reconstructed-graph-native-candidate.js` |
+| 5 | Permanent dense, sparse, temporal, entity, QuIM, internal QMD candidates, HyDE, and concept gears plus one bounded Reconstructed-Graph G2 family channel with central deterministic RRF | `services/retrieval/native-recall-pipeline.js`, `services/retrieval/native-retrieval-fusion.js`, `services/retrieval/reconstructed-graph-native-candidate.js` |
 | 6 | Verified epistemic projection and selection | `services/retrieval/epistemic-trust-retrieval.js` |
 | 7 | Pre-disclosure calibration | `services/retrieval/recall-calibrator.js` |
 | 8 | Bounded evidence and signed receipt | `services/retrieval/native-recall.js` |
@@ -56,6 +56,11 @@ lexical, temporal, QuIM, QMD, HyDE, entity, Concept/PPR, and one bounded graph
 family channel. Every outer channel has one vote in deterministic reciprocal
 rank fusion; a graph subgear cannot multiply its voting mass or remove the
 admitted baseline.
+
+QMD is internal candidate logic under canonical recall authority. Its former
+standalone route, MCP tool, parser, and planner were removed after live proof
+showed that the separate surface could disclose memory without the canonical
+origin-aware recall receipt. Historical plans and audits retain that record.
 
 MAGMA is retained as dormant research. Its paper adaptation, principal-scoped
 reader, pure kernel, tests, and signed historical artifacts remain reviewable,
@@ -105,13 +110,13 @@ in [`docs/security/cognitive-weight-chain-SPEC.md`](docs/security/cognitive-weig
 
 The save manifest declares 15 critical service connections; recall declares
 34 spanning exact-identifier, semantic, temporal, graph, procedural, and
-lineage paths. The service census contains retrieval 63, orchestration 43,
-security 49, temporal 22, learning 23, observe 22, core 15, write 15, context
+lineage paths. The service census contains retrieval 61, orchestration 43,
+security 51, temporal 22, learning 23, observe 22, core 15, write 15, context
 9, integrations 9, governance 7, dream 5, ingestion 4, shared 4, answering 2,
 runtime 2, and caching 1.
 
 `services/pipeline-manifest.js` is the source of truth for the six critical
-connection maps. Its validator dynamically imports all 116 declarations and
+connection maps. Its validator dynamically imports all 115 declarations and
 checks their named exports; architecture tests and the release-source gate fail
 when the declared topology and public documentation diverge.
 
@@ -138,6 +143,12 @@ save, recall, mutation, tools, graph selection, and evidence output:
 - **Signed authority:** protected requests bind the certificate identity,
   method, path, body, nonce, and timestamp. Runtime policy comes from verified,
   append-only configuration—not request fields or environment variables.
+- **Native Origin Binding:** the server derives each SAVE origin and typed
+  classification family from verified ingress, retained inputs, and action
+  evidence. The binding commits atomically with memory, propagates
+  conservatively through derived values, appears in signed RECALL evidence,
+  and is consumed before consequential tool execution. A caller, model, or
+  Housekeeper signature cannot silently upgrade input integrity.
 - **Retention-preserving poison evidence:** potentially poisoned content is
   retained and receives a signed, reversible epistemic label. Recall consumes
   that label before active-context disclosure.
@@ -162,7 +173,11 @@ Canonical memory is never selectively removed, decayed, expired, suppressed,
 or deactivated. The sole erasure path is an offline, master-signed,
 all-or-nothing whole-brain purge that emits a signed terminal receipt.
 
-## Measured
+## Published benchmark snapshot (historical)
+
+The following values are the retained MutMem V2 publication snapshot. They are
+preserved for reproducibility and comparison, not used as a version lock or a
+release gate for the evolving system.
 
 | Result | Value |
 |---|---:|
@@ -197,14 +212,14 @@ names this failure class **Authenticated-But-False (ABF)**.
 
 ## Release status
 
-This repository contains the HOM-AIMOS 1.0 source release. Its promoted, isolated
-evaluation lanes are complete and bound to the sanitized, self-hashed aggregate
-in [`eval/publication/verified-benchmark-results.json`](eval/publication/verified-benchmark-results.json).
-It carries the canonical utility results above, 1.02% induced attack success
-among clean-negative PoisonedRAG targets, mutation-integrity evidence,
-epistemic ablation, blinded system-author agreement, and 39/39 verified signed
-scratch-brain purge evidence. Older batch-save runs are non-canonical and are
-not release claims.
+This repository contains the HOM-AIMOS 1.0.5 source release. It advances the
+system beyond the published MutMem V2 snapshot with complete native Origin
+Binding: typed family classification, atomic SAVE binding, conservative
+producer propagation, origin-bearing RECALL evidence, and exact
+consequential-action authority. Current releases are qualified against current
+runtime, security, installer, dependency, and clean-Genesis behavior. Historical
+paper artifacts and benchmark aggregates remain available as dated research
+records but do not constrain current source bytes.
 
 The architecture manifest mechanically binds the current 295-service census.
 That number is an inventory fact, not a performance claim.
@@ -241,7 +256,7 @@ deploying or integrating AIMOS.
 
 ## Platform and prerequisites
 
-The AIMOS 1.0 source release supports Intel and Apple silicon Macs running
+The AIMOS 1.0.5 source release supports Intel and Apple silicon Macs running
 macOS 14 or later. A clean installation requires:
 
 - Apple Command Line Tools (`xcode-select --install`), including `git`, `curl`,

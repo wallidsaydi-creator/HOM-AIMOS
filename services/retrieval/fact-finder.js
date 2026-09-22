@@ -62,7 +62,6 @@ async function defaultSearchFn(pool, query, opts = {}) {
       m.value,
       m.memory_type,
       m.source,
-      m.credit_score AS confidence_score,
       m.created_at,
       m.is_correction,
       m.supersedes_id
@@ -83,7 +82,8 @@ async function defaultSearchFn(pool, query, opts = {}) {
     value: r.value,
     memory_type: r.memory_type,
     source: r.source || 'aimos',
-    confidence: parseFloat(r.confidence_score) || 0.7,
+    confidence: null,
+    reported_usefulness: null,
     entities: [],
     created_at: r.created_at
   }));

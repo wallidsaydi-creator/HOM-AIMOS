@@ -12,7 +12,9 @@ import base64
 import hashlib
 import json
 import math
+import re
 import struct
+from urllib.parse import unquote_to_bytes
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -270,6 +272,35 @@ def _verify_certificate(certificate: str, authority: str, signed_at: int) -> tup
         return False, str(exc), None
 
 
+def _request_message_v5(body, method, target, claims, nonce, signed_at):
+    if isinstance(signed_at, bool) or not isinstance(signed_at, (int, float)) or abs(signed_at) > MAX_SAFE_INTEGER or not math.isfinite(signed_at) or int(signed_at) != signed_at:
+        raise ValueError("request_context_invalid")
+    signed_at = int(signed_at)
+    method = str(method or "").upper()
+    if (not re.fullmatch(r"[A-Z]+", method) or not isinstance(target, str)
+        or not target.startswith("/") or target.startswith("//")
+        or re.search(r"[^\x21-\x7e]|[#\\]|%(?![0-9a-fA-F]{2})", target)
+        or not isinstance(nonce, str) or not nonce or not 0 < signed_at <= MAX_SAFE_INTEGER):
+        raise ValueError("request_context_invalid")
+    keys = set()
+    for field in (target.split("?", 1)[1] if "?" in target else "").split("&"):
+        if not field:
+            continue
+        key = unquote_to_bytes(field.split("=", 1)[0].replace("+", " ")).decode("utf-8", errors="strict")
+        if key in keys or "\0" in key:
+            raise ValueError("request_context_invalid")
+        keys.add(key)
+    if not isinstance(claims, dict) or set(claims) != {"prev_chain_hash", "device_fp"}:
+        raise ValueError("request_claims_invalid")
+    prev, device = claims["prev_chain_hash"], claims["device_fp"]
+    if prev is not None and (not isinstance(prev, str) or not re.fullmatch(r"[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]", prev)):
+        raise ValueError("request_claims_invalid")
+    if device is not None and (not isinstance(device, str) or not device or prev is None):
+        raise ValueError("request_claims_invalid")
+    fields = [canonical_json(body), method, target, canonical_json(claims), nonce, str(signed_at)]
+    return b"hom.aimos.request-envelope/v5\0" + b"".join(struct.pack(">I", len(v.encode("utf-8"))) + v.encode("utf-8") for v in fields)
+
+
 def _verify_stored_signature(public_key: str, body: dict[str, Any], nonce: str,
                              signed_at: int, signature: bytes, *,
                              signature_form: int = 1,
@@ -278,7 +309,7 @@ def _verify_stored_signature(public_key: str, body: dict[str, Any], nonce: str,
                              method: str | None = None,
                              path: str | None = None,
                              claims: dict[str, Any] | None = None) -> tuple[bool, str | None]:
-    if not isinstance(nonce, str) or not nonce or not isinstance(signed_at, int):
+    if not isinstance(nonce, str) or not nonce or (request_signature_form != 5 and not isinstance(signed_at, int)):
         return False, "malformed_input"
     try:
         message = canonical_json(body)
@@ -286,6 +317,9 @@ def _verify_stored_signature(public_key: str, body: dict[str, Any], nonce: str,
             if not isinstance(memory_originated_at, int):
                 return False, "malformed_input"
             message += f"\n{nonce}\n{signed_at}\n{memory_originated_at}"
+        elif request_signature_form == 5:
+            valid = _verify_raw(public_key, _request_message_v5(body, method, path, claims, nonce, signed_at), signature)
+            return valid, None if valid else "sig_invalid"
         elif request_signature_form == 3:
             signed_method = str(method or "").upper()
             signed_path = str(path or "").split("?", 1)[0]
@@ -308,7 +342,7 @@ def _verify_stored_signature(public_key: str, body: dict[str, Any], nonce: str,
             message += f"\n{nonce}\n{signed_at}"
         valid = _verify_raw(public_key, message.encode(), signature)
         return valid, None if valid else "sig_invalid"
-    except VerificationError:
+    except (VerificationError, ValueError):
         return False, "malformed_input"
 
 
@@ -413,13 +447,98 @@ def _event_mutation(previous: bytes, content: bytes, nonce: str, signed_at: int)
     return _sha256(EVENT_LINK_DOMAIN + previous + content + nonce.encode() + str(signed_at).encode())
 
 
+def _event_json_equal(a, b):
+    if isinstance(a, bool) or isinstance(b, bool):
+        return type(a) is type(b) and a == b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        try:
+            return math.isfinite(float(a)) and math.isfinite(float(b)) and float(a) == float(b)
+        except OverflowError:
+            return False
+    if type(a) is not type(b):
+        return False
+    if isinstance(a, dict):
+        return a.keys() == b.keys() and all(_event_json_equal(a[k], b[k]) for k in a)
+    if isinstance(a, list):
+        return len(a) == len(b) and all(_event_json_equal(x, y) for x, y in zip(a, b))
+    return a == b
+
+
+def _event_body(event: dict[str, Any]) -> dict[str, Any]:
+    if "signed_body_bytes_b64u" not in event:
+        return event.get("signed_body")
+    encoded = event.get("signed_body_bytes_b64u")
+    wire = _b64u_decode(encoded, "event_payload_bytes_invalid")
+    if (not 1 <= len(wire) <= 64 * 1024 * 1024
+            or base64.urlsafe_b64encode(wire).decode().rstrip("=") != encoded):
+        raise VerificationError("event_payload_bytes_invalid")
+    try:
+        body = json.loads(wire.decode("utf-8"), object_pairs_hook=_reject_duplicates,
+                          parse_constant=lambda _: (_ for _ in ()).throw(VerificationError("json_non_finite")))
+    except (ValueError, UnicodeError, RecursionError) as error:
+        raise VerificationError("event_payload_bytes_invalid") from error
+    pending = [(body, 0)]
+    while pending:
+        node, depth = pending.pop()
+        if depth > MAX_DEPTH:
+            raise VerificationError("event_payload_bytes_invalid")
+        if isinstance(node, str):
+            if any(ord(c) == 0 or 0xD800 <= ord(c) <= 0xDFFF for c in node):
+                raise VerificationError("event_payload_bytes_invalid")
+        elif isinstance(node, (int, float)) and not isinstance(node, bool):
+            try:
+                finite = math.isfinite(float(node))
+            except OverflowError:
+                finite = False
+            if not finite:
+                raise VerificationError("event_payload_bytes_invalid")
+        elif isinstance(node, list):
+            pending.extend((child, depth + 1) for child in node)
+        elif isinstance(node, dict):
+            pending.extend((key, depth) for key in node)
+            pending.extend((child, depth + 1) for child in node.values())
+    if not isinstance(body, dict) or body.get("payload_schema") != "hom.aimos.event/v2":
+        raise VerificationError("event_payload_version_invalid")
+    if "signed_body" in event and not _event_json_equal(body, event["signed_body"]):
+        raise VerificationError("event_payload_projection_invalid")
+    return body
+
+
+def _event_payload_content(event: dict[str, Any]) -> bytes:
+    body = _event_body(event)
+    if not isinstance(body, dict):
+        raise VerificationError("event_proof_version")
+    if "payload_schema" not in body:
+        if "signed_body_bytes_b64u" in event:
+            raise VerificationError("event_payload_version_invalid")
+        return _sha256(canonical_json(body).encode())
+    if body["payload_schema"] != "hom.aimos.event/v2":
+        raise VerificationError("event_payload_version_invalid")
+    encoded = event.get("signed_body_bytes_b64u")
+    wire = _b64u_decode(encoded, "event_payload_bytes_invalid")
+    if not wire or base64.urlsafe_b64encode(wire).decode().rstrip("=") != encoded:
+        raise VerificationError("event_payload_bytes_invalid")
+    if (not isinstance(event.get("nonce"), str) or not event["nonce"]
+            or body.get("nonce") != event["nonce"]
+            or isinstance(body.get("ledger_version"), bool) or body.get("ledger_version") != 1):
+        raise VerificationError("event_payload_projection_invalid")
+    for field in ("ledger_seq", "ts_signed"):
+        value = body.get(field)
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not 1 <= value <= MAX_SAFE_INTEGER or int(value) != value):
+            raise VerificationError("event_payload_projection_invalid")
+    name = body["payload_schema"].encode("ascii")
+    return _sha256(b"hom.aimos.signed-json-bytes/v1\0" + struct.pack(">I", len(name))
+                   + name + struct.pack(">I", len(wire)) + wire)
+
+
 def _verify_event(event: dict[str, Any], identity: Identity) -> tuple[bool, str | None]:
     try:
-        body = event.get("signed_body")
+        body = _event_body(event)
         if not isinstance(body, dict) or event.get("proof_required") is not True \
                 or event.get("ledger_version") != 1:
             return False, "event_proof_version"
-        content_hash = _sha256(canonical_json(body).encode())
+        content_hash = _event_payload_content(event)
         previous = _exact_hex(event.get("previous_mutation_hash"), 32, "event_previous_invalid")
         mutation_hash = _event_mutation(previous, content_hash, str(event.get("nonce", "")), int(event.get("signed_at")))
         exact = (
@@ -433,7 +552,8 @@ def _verify_event(event: dict[str, Any], identity: Identity) -> tuple[bool, str 
             and body.get("authority_kind") == event.get("authority_kind")
             and body.get("operation") == event.get("operation")
             and body.get("key") == event.get("key")
-            and canonical_json(body.get("metadata")) == canonical_json(event.get("metadata"))
+            and (_event_json_equal(body.get("metadata"), event.get("metadata"))
+                 if "metadata" in event else "signed_body_bytes_b64u" in event)
             and body.get("parent_event_id") == event.get("parent_event_id")
             and body.get("ledger_seq") == event.get("ledger_sequence")
             and body.get("prev_mutation_hash") == previous.hex()
@@ -444,6 +564,9 @@ def _verify_event(event: dict[str, Any], identity: Identity) -> tuple[bool, str 
         if not exact:
             return False, "event_proof_hash_mismatch"
         signature = _exact_hex(event.get("signature"), 64, "event_signature_invalid")
+        if body.get("payload_schema") == "hom.aimos.event/v2":
+            valid = _verify_raw(identity.pubkey, content_hash, signature)
+            return valid, None if valid else "sig_invalid"
         valid, reason = _verify_stored_signature(
             identity.pubkey, body, str(event.get("nonce", "")),
             int(event.get("signed_at")), signature,
@@ -581,7 +704,7 @@ def _verify_baseline(baseline: dict[str, Any], memory: dict[str, Any],
         event_valid, event_reason = _verify_event(event, identity)
         if not event_valid:
             return False, f"baseline_event_{event_reason}"
-        metadata = event.get("metadata")
+        metadata = _event_body(event).get("metadata")
         if not isinstance(metadata, dict) or event.get("operation") != "cognitive_initial_weight_attested" \
                 or event.get("key") != memory.get("memory_id") \
                 or metadata.get("schema") != "hom.aimos.cognitive-initial-weight/v1" \
@@ -621,7 +744,12 @@ def _verify_provenance(provenance: dict[str, Any], identity: Identity) -> tuple[
             return False, "signed_body_content_hash_mismatch"
         if _sha256(identity.certificate.encode()).hex() != provenance.get("certificate_fingerprint"):
             return False, "signer_certificate_fingerprint_mismatch"
-        signed_at = _integer(provenance.get("signed_at"), "provenance_time_invalid", 1)
+        signed_time = provenance.get("signed_at")
+        if provenance.get("request_signature_form") == 5:
+            if isinstance(signed_time, bool) or not isinstance(signed_time, (int, float)) or abs(signed_time) > MAX_SAFE_INTEGER or not math.isfinite(signed_time) or int(signed_time) != signed_time:
+                return False, "provenance_time_invalid"
+            signed_time = int(signed_time)
+        signed_at = _integer(signed_time, "provenance_time_invalid", 1)
         identity_valid, identity_reason = _verify_identity_epoch(identity, signed_at)
         if not identity_valid or provenance.get("signer_agent_id") != identity.agent_id \
                 or provenance.get("signer_valid_from") != identity.valid_from:
@@ -638,10 +766,12 @@ def _verify_provenance(provenance: dict[str, Any], identity: Identity) -> tuple[
             return False, "provenance_genesis_shape_invalid"
         request_form = int(provenance.get("request_signature_form", 1))
         signature_form = int(provenance.get("signature_form", 1))
+        if request_form == 5 and signature_form == 2:
+            return False, "request_signature_form_invalid"
         claims = provenance.get("signed_claims")
-        if provenance.get("identity_tier") in {"T2", "T3"} and request_form != 4:
+        if provenance.get("identity_tier") in {"T2", "T3"} and request_form not in (4, 5):
             return False, "elevated_provenance_requires_form4"
-        if request_form == 4:
+        if request_form == 4 or (request_form == 5 and provenance.get("identity_tier") in {"T2", "T3"}):
             if not isinstance(claims, dict):
                 return False, "signed_chain_claim_invalid"
             previous_claim = claims.get("prev_chain_hash")
@@ -710,7 +840,7 @@ def _order_projections(projections: list[dict[str, Any]]) -> list[dict[str, Any]
 
 
 def _verify_memory(memory: dict[str, Any], master: dict[str, Any],
-                   event_index: dict[str, dict[str, Any]]) -> dict[str, Any]:
+                   event_index: dict[str, dict[str, Any]], ancestry_events=None) -> dict[str, Any]:
     memory_id = str(memory.get("memory_id", ""))
     projections = memory.get("projections")
     baseline = memory.get("baseline")
@@ -786,6 +916,42 @@ def _verify_memory(memory: dict[str, Any], master: dict[str, Any],
         if expected_transition != _exact_hex(projection.get("transition_hash"), 32, "transition_hash_invalid") \
                 or not _verify_raw(identity.pubkey, expected_transition, transition_signature):
             return _record(memory_id, "certified_chain", False, index, signatures, "transition_signature_invalid")
+        if "ancestry_binding" in body:
+            try:
+                binding = body["ancestry_binding"]
+                native = binding["native_predecessor"]
+                prior_projection = binding["projection_predecessor"]
+                predecessor = provenance.get("previous_mutation_hash")
+                if (set(binding) != {"schema", "native_predecessor", "projection_predecessor"}
+                    or binding["schema"] != "hom.aimos.cognitive-ancestry-binding/v1"
+                    or set(native) != {"kind", "commitment_hex", "provenance_id"}
+                    or native["commitment_hex"] != predecessor
+                    or (predecessor is None and (native["kind"] != "genesis" or native["provenance_id"] is not None))
+                    or (predecessor is not None and native["kind"] not in ("mutation_hash", "occurrence_ref"))
+                    or prior_projection != {"kind": "genesis" if previous_hash is None else "projection_hash",
+                        "commitment_hex": None if previous_hash is None else previous_hash.hex()}):
+                    raise VerificationError("ancestry_bridge_invalid")
+                if predecessor is not None:
+                    _uuid_bytes(native["provenance_id"], "ancestry_bridge_invalid")
+                events = (ancestry_events or {}).get(provenance_hash.hex(), [])
+                if len(events) != 1:
+                    raise VerificationError("ancestry_bridge_invalid")
+                event = events[0]
+                meta = _event_body(event)["metadata"]
+                if (event.get("event_stream_verified") is not True or event.get("company_id") != memory["company_id"]
+                    or event.get("subject_agent_id") != "housekeeper" or event.get("authority_kind") != "housekeeper_autonomous"
+                    or event.get("signer_valid_from") != provenance["signer_valid_from"]
+                    or event.get("certificate_fingerprint") != provenance["certificate_fingerprint"]
+                    or meta.get("schema") != "hom.aimos.cognitive-ancestry-bridge/v1"
+                    or meta.get("company_id") != memory["company_id"] or meta.get("memory_id") != memory_id
+                    or meta.get("native_mutation_hash") != provenance_hash.hex()
+                    or meta.get("projection_hash") != expected_projection.hex()
+                    or meta.get("old_weight_milli") != old_milli or meta.get("new_weight_milli") != new_milli
+                    or meta.get("attestation_kind") != "atomic_transition" or meta.get("historical_origin_claimed") is not False
+                    or meta.get("ancestry_binding") != binding):
+                    raise VerificationError("ancestry_bridge_invalid")
+            except (VerificationError, KeyError, TypeError, ValueError):
+                return _record(memory_id, "certified_chain", False, index, signatures, "ancestry_bridge_invalid")
         previous_hash = expected_projection
         previous_milli = new_milli
         signatures += 1
@@ -863,6 +1029,10 @@ def verify_bundle(bundle: Any) -> dict[str, Any]:
                 "reason": str(exc),
             })
 
+    ancestry_events = {}
+    for event in event_index.values():
+        if event.get("operation") == "cognitive_ancestry_bound":
+            ancestry_events.setdefault(str(event.get("key")), []).append(event)
     records = []
     previous_memory_id = None
     for memory in bundle["memories"]:
@@ -878,7 +1048,7 @@ def verify_bundle(bundle: Any) -> dict[str, Any]:
         if _js_round(retrieval_float * 1000) != memory.get("retrieval_weight_milli"):
             raise VerificationError("cognitive_evidence_memory_weight_invalid")
         try:
-            records.append(_verify_memory(memory, master, event_index))
+            records.append(_verify_memory(memory, master, event_index, ancestry_events))
         except Exception:
             records.append(_record(
                 memory_id,

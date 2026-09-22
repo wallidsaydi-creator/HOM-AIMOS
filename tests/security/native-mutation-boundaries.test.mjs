@@ -58,7 +58,8 @@ test('agent messaging routes bind sender, inbox, and advisory author to the veri
   assert.match(route, /req\.params\.id !== req\.agentId[\s\S]*verified_message_sender_mismatch/);
   assert.match(route, /sendAgentMessage\(req\.agentId, to, message/);
   assert.match(route, /req\.params\.id !== req\.agentId[\s\S]*verified_inbox_recipient_mismatch/);
-  assert.match(route, /getAgentInbox\(req\.agentId, limit\)/);
+  assert.match(route, /executeTool\('aimos_recall'/);
+  assert.match(route, /getAgentInbox\(req\.agentId, limit, recall\.memories \|\| \[\]\)/);
   assert.match(route, /postAdvisory\(agentId, advice, req\.agentId\)/);
   assert.doesNotMatch(route, /from\s*\|\|\s*req\.agentId/);
 });
@@ -88,8 +89,9 @@ test('agent creation fails closed when no verified model policy is available', a
 
   const governance = await source('services/orchestration/governance-resolver.js');
   assert.doesNotMatch(governance, /pickActiveProvider|discoverActiveProviders/);
-  assert.match(governance, /if \(!modelId\) continue/);
-  assert.match(governance, /throw new Error\(`model_policy_unavailable:/);
+  assert.match(governance, /if \(!primaryModel \|\| !modelCandidates\.some\(\(candidate\) => modelsEquivalent\(candidate, primaryModel\)\)\)/);
+  assert.match(governance, /const error = new Error\(`model_policy_unavailable:/);
+  assert.match(governance, /error\.code = 'MODEL_POLICY_UNAVAILABLE'/);
   const readiness = governance.slice(governance.indexOf('export async function ensureGovernanceReady'));
   assert.doesNotMatch(readiness, /hydrateAgentStoreFromGovernance|queuePersonaEmbeddingBackfill|UPDATE agent_profiles/);
 });

@@ -2,6 +2,9 @@ import express from 'express';
 import { gmailListInbox, calendarTodayEvents } from '../services/integrations/google-tools.js';
 import { searchWeb } from '../services/integrations/web-search.js';
 import { executeTool } from '../services/orchestration/tool-registry.js';
+import { createToolInputState } from '../services/orchestration/tool-action-ledger.js';
+import { createKnowledgeGateState } from '../services/security/knowledge-gate.js';
+import { normalizeSourceMemoryIds } from '../services/write/canonical-save-contract.js';
 
 const router = express.Router();
 
@@ -43,12 +46,24 @@ router.post('/quick-action', async (req, res) => {
       if (!text) {
         return res.status(400).json({ success: false, error: 'text is required for remember action' });
       }
-      const saved = await executeTool('aimos_save', { content: text }, req.agentId, {
+      const sourceMemoryIds = normalizeSourceMemoryIds(req.body.source_memory_ids);
+      const options = {
         executionContext: req.executionContext,
         credentialUseContext: req.executionContext,
-        clearanceLevel: 1,
-      });
-      return res.json({ success: true, action, result: saved });
+        clearanceLevel: req.body.clearance_level ?? 2,
+        nativeToolInputs: createToolInputState(),
+        knowledgeGateState: createKnowledgeGateState({ agentId: req.agentId, prompt: text, intent: 'remember' }),
+      };
+      const context = await executeTool('aimos_recall', sourceMemoryIds?.length
+        ? { memory_id: sourceMemoryIds[0], limit: 1 } : { query: text, limit: 5 }, req.agentId, options);
+      if (context?.blocked || context?.error) {
+        return res.status(403).json({ success: false, action, result: context });
+      }
+      const saved = await executeTool('aimos_save', {
+        content: text,
+        ...(req.body.source_memory_ids === undefined ? {} : { source_memory_ids: req.body.source_memory_ids }),
+      }, req.agentId, options);
+      return res.status(saved?.success === true ? 200 : 403).json({ success: saved?.success === true, action, result: saved });
     }
 
     return res.status(400).json({

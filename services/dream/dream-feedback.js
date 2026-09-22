@@ -32,7 +32,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
-import { query } from '../../db/connection.js';
 import { runProvider } from '../core/providers.js';
 import { logEvent } from '../observe/event-ledger.js';
 import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
@@ -125,34 +124,26 @@ Output format:
 }
 
 /**
- * Load the latest dream constraints from Aimos for a company.
+ * Select the latest dream constraints from a canonical recall result.
  *
  * @param {string} [companyId]
  * @returns {Promise<Object|null>} Dream constraints object, or null if none saved
  */
-export async function loadDreamConstraints(companyId) {
+export async function loadDreamConstraints(companyId, canonicalMemories = []) {
   const cid = companyId || COMPANY;
   const constraintsKey = `${DREAM_CONSTRAINTS_KEY_PREFIX}:${cid}`;
 
   try {
-    const result = await query(
-      `SELECT value, updated_at FROM aimos_memories
-       WHERE company_id = $1 AND key = $2
-       ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
-       LIMIT 1`,
-      [cid, constraintsKey]
-    );
-
-    if (!result.rows.length) return null;
-
-    const raw = result.rows[0].value;
+    const memory = canonicalMemories.find((entry) => entry?.key === constraintsKey);
+    if (!memory) return null;
+    const raw = memory.value;
     try {
       return typeof raw === 'string' ? JSON.parse(raw) : raw;
     } catch {
-      return { raw_value: raw, loaded_at: result.rows[0].updated_at };
+      return { raw_value: raw, loaded_at: memory.updated_at };
     }
   } catch (err) {
-    console.error('[dream-feedback] loadDreamConstraints DB error:', err.message);
+    console.error('[dream-feedback] canonical constraint projection error:', err.message);
     return null;
   }
 }

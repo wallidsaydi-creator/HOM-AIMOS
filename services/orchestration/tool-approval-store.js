@@ -78,6 +78,7 @@ export function projectToolApprovalHistory(rows = []) {
         claimEventId: null,
         claimMutationHash: null,
         stateHeadEventId: String(row.id),
+        operatorProof: null,
       });
       continue;
     }
@@ -93,14 +94,19 @@ export function projectToolApprovalHistory(rows = []) {
       || (row.key != null && String(row.key) !== current.tool)
       || (row.agent_id != null && String(row.agent_id) !== current.agentId)
     ) continue;
+    if (row.operation !== OPERATIONS.APPROVED
+        && current.operatorProof
+        && body.operator_proof_sha256 !== current.operatorProof.proof_sha256) continue;
     current.updatedAt = row.ts ? new Date(row.ts).toISOString() : current.updatedAt;
 
     if (row.operation === OPERATIONS.APPROVED && current.status === 'pending') {
+      if (!body.operator_proof || body.operator_proof.proof_sha256 !== body.operator_proof_sha256) continue;
       current.status = 'approved';
       current.decidedAt = current.updatedAt;
       current.decisionEventId = String(row.id);
       current.decisionMutationHash = mutationHashHex(row);
       current.error = null;
+      current.operatorProof = clone(body.operator_proof);
       current.stateHeadEventId = String(row.id);
     } else if (row.operation === OPERATIONS.REJECTED && ['pending', 'approved'].includes(current.status)) {
       current.status = 'rejected';
@@ -134,7 +140,10 @@ export function projectToolApprovalHistory(rows = []) {
 }
 
 async function readApprovals(client = null) {
-  const rows = await readVerifiedEventHistory(COMPANY, { client });
+  const rows = await readVerifiedEventHistory(COMPANY, {
+    client,
+    operations: Object.values(OPERATIONS),
+  });
   return projectToolApprovalHistory(rows);
 }
 
@@ -157,7 +166,7 @@ export async function createToolApprovalRequest({
     args_sha256: toolArgumentsHash(exactArgs),
     agent_id: normalizedAgent,
     plan: plan ? clone(plan) : null,
-    reasoning: `A bounded autonomous tool action requested explicit operator approval for ${normalizedTool}.`,
+    reasoning: `A bounded consequential tool action requested explicit operator approval for ${normalizedTool}.`,
     source_knowledge: 'tool-approval-store.js append-only certificate-envelope approval authority',
   }, parentEventId, { authority, returnReceipt: true });
   const projected = projectToolApprovalHistory([{
@@ -192,6 +201,7 @@ export async function listToolApprovalRequests({ status = null, agentId = null, 
 
 async function appendTransition(id, operation, {
   authority = null,
+  operatorProof = null,
   reason = null,
   result = null,
   error = null,
@@ -222,12 +232,22 @@ async function appendTransition(id, operation, {
         && current.reservationMutationHash === String(expected.reservationMutationHash || '');
       if (!exact) throw new Error('signed_tool_approval_execution_evidence_invalid');
     }
+    if (operation === OPERATIONS.APPROVED
+        && (!operatorProof?.proof_sha256 || current.operatorProof)) {
+      throw new Error('operator_action_authorization_proof_required');
+    }
     const receipt = await logEvent(COMPANY, current.agentId, operation, current.tool, {
       schema: SCHEMA,
       approval_request_id: requestId,
       tool: current.tool,
       args_sha256: current.argsHash,
       agent_id: current.agentId,
+      ...(operation === OPERATIONS.APPROVED ? {
+        operator_proof: clone(operatorProof),
+        operator_proof_sha256: operatorProof.proof_sha256,
+      } : current.operatorProof ? {
+        operator_proof_sha256: current.operatorProof.proof_sha256,
+      } : {}),
       ...(reason ? { reason: String(reason) } : {}),
       ...(result !== null ? { result: clone(result) } : {}),
       ...(error !== null ? { error: String(error) } : {}),
@@ -254,14 +274,16 @@ async function appendTransition(id, operation, {
         result: operation === OPERATIONS.EXECUTED ? clone(result) : current.result,
         error: operation === OPERATIONS.REJECTED ? String(reason || 'Rejected by operator')
           : operation === OPERATIONS.FAILED ? String(error || 'Unknown execution error') : null,
+        operatorProof: operation === OPERATIONS.APPROVED
+          ? clone(operatorProof) : current.operatorProof,
       },
       receipt,
     };
   }, { restricted: true, clientId: COMPANY, agentId: 'housekeeper' });
 }
 
-export async function markToolApprovalApproved(id, authority) {
-  return appendTransition(id, OPERATIONS.APPROVED, { authority });
+export async function markToolApprovalApproved(id, authority, operatorProof) {
+  return appendTransition(id, OPERATIONS.APPROVED, { authority, operatorProof });
 }
 
 export async function markToolApprovalRejected(id, reason = 'Rejected by operator', authority = null) {

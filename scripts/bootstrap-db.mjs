@@ -227,11 +227,11 @@ export async function bootstrapDatabase({ databaseUrl, databaseName } = {}) {
 }
 
 /**
- * Re-assert the Keychain-generated runtime credential after historical schema
- * migrations. Migration 029 is immutable and, on a fresh install, temporarily
- * applies its original public bootstrap password. No runtime process may start
- * in that interval; Genesis immediately restores the cryptographic Keychain
- * value here before loading db/connection.js.
+ * Re-assert the Keychain-generated runtime credential after schema migrations.
+ * Current migration 029 contains no password. An installation upgraded from an
+ * earlier public release may retain the predecessor migration's database
+ * effect, so Genesis synchronizes the cryptographic Keychain value before
+ * loading db/connection.js in both cases.
  */
 export async function synchronizeRuntimeRoleCredential({ databaseUrl, databaseName } = {}) {
   const dbName = validateBootstrapDatabaseName(databaseName || resolveAimosDatabaseName());

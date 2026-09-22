@@ -4,6 +4,12 @@
 import {
   canonicalBytes,
   canonicalJson,
+  decodeCertificate,
+  retainedProvenanceMessage,
+  legacyOccurrenceReference,
+  verifyEd25519,
+  eventPayloadCommitment,
+  eventPayloadBody,
   exactBase64url,
   exactHashBytes,
   framedUtf8,
@@ -16,6 +22,7 @@ import {
   verifyCertificate,
   verifyOccurrenceSignatureV3,
   verifyPayloadSignature,
+  verifyEventPayloadSignature,
   verifyRequestContextSignature,
 } from './crypto-kernel.mjs';
 
@@ -38,6 +45,24 @@ export const RECALL_SCHEMAS = Object.freeze({
   occurrence: 'hom.aimos.mutmem-occurrence-evidence/v2',
   epistemic_projection: 'hom.aimos.mutmem-epistemic-projection/v2',
   receipt_evidence: 'hom.aimos.mutmem-recall-evidence-entry/v2',
+});
+
+const ORIGIN_DISCLOSURE_FAILURE_CODES = Object.freeze([
+  'ORIGIN_FAMILY_PROFILE_INVALID', 'ORIGIN_DISCLOSURE_LABEL_INVALID',
+  'ORIGIN_DISCLOSURE_ROOT_INVALID', 'ORIGIN_DISCLOSURE_EVENT_BINDING_INVALID',
+]);
+const ORIGIN_PROFILE_HASH = '49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24';
+const CURRENT_RECEIPT_SCHEMA = 'hom-aimos/recall-merkle/v4-origin-family-disclosure';
+const PROVENANCE_FAILURE_CODES = Object.freeze([
+  'PROVENANCE_BYTES_INVALID', 'PROVENANCE_CONTEXT_INVALID', 'PROVENANCE_COMMITMENT_INVALID',
+  'PROVENANCE_CERTIFICATE_INVALID', 'PROVENANCE_REVOCATION_INVALID',
+  'PROVENANCE_SIGNATURE_INVALID', 'PROVENANCE_CHAIN_INVALID', 'PROVENANCE_SAVE_BINDING_INVALID',
+]);
+const CURRENT_OBJECT_SCHEMAS = Object.freeze({ ...RECALL_SCHEMAS,
+  native_recall_receipt: 'hom.aimos.mutmem-native-recall-receipt/v3',
+  receipt_evidence: 'hom.aimos.mutmem-recall-evidence-entry/v3',
+  provenance_chain: 'hom.aimos.mutmem-provenance-chain/v3',
+  occurrence: 'hom.aimos.mutmem-occurrence-evidence/v3',
 });
 
 export const STRUCTURAL_FAILURE_CODES = Object.freeze([
@@ -106,6 +131,8 @@ export class MutMemRecallVerificationError extends Error {
 
 function fail(reason) {
   if (!STRUCTURAL_FAILURE_CODES.includes(reason)
+      && !PROVENANCE_FAILURE_CODES.includes(reason)
+      && !ORIGIN_DISCLOSURE_FAILURE_CODES.includes(reason)
       && !CRYPTOGRAPHIC_FAILURE_CODES.includes(reason)) {
     throw new MutMemRecallVerificationError('UNDECLARED_FAILURE_CODE');
   }
@@ -244,8 +271,9 @@ function reconstructEnvelope(envelope) {
     }))).toString('hex');
     const fingerprint = string(envelope.expected_master_fingerprint).toLowerCase();
     if (!HEX32.test(fingerprint) || !HEX32.test(objectRoot)) fail('ENVELOPE_COMMITMENT_INVALID');
+    const current = envelope.format?.schema === 'hom.aimos.mutmem-portable-evidence/v3';
     const bundleHash = sha256Hex(Buffer.concat([
-      BUNDLE_DOMAIN,
+      current ? Buffer.from('hom.aimos.mutmem-portable-evidence/v3\0') : BUNDLE_DOMAIN,
       framedUtf8(envelope.bundle_id),
       framedUtf8(envelope.company_id),
       Buffer.from(fingerprint, 'hex'),
@@ -253,13 +281,14 @@ function reconstructEnvelope(envelope) {
       Buffer.from(objectRoot, 'hex'),
     ]));
     const format = envelope.format;
-    if (format?.schema !== 'hom.aimos.mutmem-portable-evidence/v2'
-        || format?.version !== 2 || format?.profile !== 'recall_disclosure'
+    if (!equal(Object.keys(format || {}).sort(), ['schema', 'version', 'profile', 'canonicalization', 'hash', 'signature', 'trust_anchor_mode', 'native_receipt_schema'].sort())
+        || format?.schema !== `hom.aimos.mutmem-portable-evidence/v${current ? 3 : 2}`
+        || format?.version !== (current ? 3 : 2) || format?.profile !== 'recall_disclosure'
         || format?.canonicalization !== 'hom-aimos/canonical-json/v1'
         || format?.hash !== 'sha256' || format?.signature !== 'ed25519'
         || format?.trust_anchor_mode !== 'external_expected_master_fingerprint_required'
         || format?.native_receipt_schema
-          !== 'hom-aimos/recall-merkle/v3-epistemic-and-security-closure'
+          !== (current ? CURRENT_RECEIPT_SCHEMA : 'hom-aimos/recall-merkle/v3-epistemic-and-security-closure')
         || envelope.object_root_sha256 !== objectRoot
         || envelope.bundle_sha256 !== bundleHash) fail('ENVELOPE_COMMITMENT_INVALID');
     return { envelope, singletons, results, objectRoot, bundleHash };
@@ -270,8 +299,11 @@ function reconstructEnvelope(envelope) {
 }
 
 function requireSchemas(state) {
+  const schemas = state.envelope.format.version === 3 ? CURRENT_OBJECT_SCHEMAS : RECALL_SCHEMAS;
   for (const object of state.envelope.objects) {
-    if (object.schema !== RECALL_SCHEMAS[object.kind] || object.body?.schema !== object.schema) {
+    const retainedShape = state.envelope.format.version === 3
+      && ['provenance_chain', 'occurrence'].includes(object.kind) && object.schema === RECALL_SCHEMAS[object.kind];
+    if ((!retainedShape && object.schema !== schemas[object.kind]) || object.body?.schema !== object.schema) {
       fail('OBJECT_SCHEMA_INVALID');
     }
   }
@@ -390,8 +422,9 @@ function validateAuthority(state) {
           agent_id: system.agent_id, valid_from: iso(system.valid_from, 'HOUSEKEEPER_SYSTEM_PRINCIPAL_INVALID'),
         })) fail('HOUSEKEEPER_SYSTEM_PRINCIPAL_INVALID');
   } else fail('GRANT_COMMITMENT_INVALID');
-  if (request.request_sig_form !== 3 || request.signed_method !== 'POST'
-      || request.signed_path !== '/aimos/recall' || !string(request.nonce)
+  if (![3, 5].includes(request.request_sig_form) || request.signed_method !== 'POST'
+      || String(request.signed_path || '').split('?')[0] !== '/aimos/recall'
+      || (request.request_sig_form === 3 && request.signed_path.includes('?')) || !string(request.nonce)
       || !request.request_body || typeof request.request_body !== 'object'
       || Array.isArray(request.request_body)) fail('REQUEST_CONTEXT_INVALID');
   signature(request.signature_b64u, 'REQUEST_CONTEXT_INVALID');
@@ -480,7 +513,7 @@ function validateDecisions(state, nativeReceipt) {
 }
 
 function validateResults(state, decisions, nativeReceipt) {
-  if (nativeReceipt.merkle_schema !== 'hom-aimos/recall-merkle/v3-epistemic-and-security-closure'
+  if (nativeReceipt.merkle_schema !== state.envelope.format.native_receipt_schema
       || Number(nativeReceipt.result_count) !== state.envelope.result_count
       || !Array.isArray(nativeReceipt.evidence)
       || nativeReceipt.evidence.length !== state.envelope.result_count
@@ -496,6 +529,7 @@ function validateResults(state, decisions, nativeReceipt) {
     const memory = group.get('memory_state').body;
     const provenance = group.get('provenance_chain').body;
     const occurrence = group.get('occurrence').body;
+    if (provenance.schema.endsWith('/v3') !== occurrence.schema.endsWith('/v3')) fail('OBJECT_SCHEMA_INVALID');
     const epistemic = group.get('epistemic_projection').body;
     const receipt = group.get('receipt_evidence').body;
     const memoryId = string(memory.memory_id).toLowerCase();
@@ -515,12 +549,15 @@ function validateResults(state, decisions, nativeReceipt) {
     if (occurrence.occurrence_ref !== receipt.occurrence_ref
         || !HEX32.test(string(occurrence.occurrence_ref))) fail('OCCURRENCE_BINDING_INVALID');
     if (occurrence.occurrence_form === 'v3') {
+      let commitment;
+      try { commitment = occurrenceCommitmentV3(occurrence.native_body); }
+      catch { fail('OCCURRENCE_NATIVE_BODY_INVALID'); }
       if (occurrence.native_schema !== 'hom.aimos.memory-occurrence/v3'
           || occurrence.native_body?.schema !== occurrence.native_schema
           || occurrence.native_body?.memory_id !== memoryId
           || occurrence.native_body?.live_content_hash_hex !== liveHash
           || occurrence.native_body?.occurrence_commitment !== occurrence.occurrence_ref
-          || occurrenceCommitmentV3(occurrence.native_body) !== occurrence.occurrence_ref
+          || commitment !== occurrence.occurrence_ref
           || !string(occurrence.signature_b64u) || !string(occurrence.signer_certificate)) {
         fail('OCCURRENCE_NATIVE_BODY_INVALID');
       }
@@ -564,7 +601,9 @@ function validateEvent(authority, decisions, evidence) {
   if (!equal(receipt.merkle_entries, entries)) fail('MERKLE_ENTRY_BINDING_INVALID');
   const root = recallMerkleRoot(entries).toString('hex');
   if (receipt.merkle_root !== root) fail('MERKLE_ROOT_MISMATCH');
-  const event = receipt.event_receipt;
+  let event;
+  try { event = receipt.event_receipt && { ...receipt.event_receipt, signed_body: eventPayloadBody(receipt.event_receipt) }; }
+  catch { fail('EVENT_RECEIPT_COMMITMENT_INVALID'); }
   const metadata = event?.signed_body?.metadata;
   if (!event || !metadata || event.signed_body.operation !== 'recall_receipt'
       || event.signed_body.company_id !== authority.identity.company_id
@@ -576,6 +615,7 @@ function validateEvent(authority, decisions, evidence) {
       || metadata.authority_mutation_hash !== receipt.authority_mutation_hash
       || metadata.request_receipt_id !== receipt.request_receipt_id
       || metadata.request_receipt_mutation_hash !== receipt.request_receipt_mutation_hash
+      || metadata.merkle_schema !== receipt.merkle_schema
       || metadata.merkle_root !== root || metadata.result_count !== evidence.length
       || !equal(metadata.evidence, evidence)
       || !equal(metadata.return_projection, receipt.return_projection)) {
@@ -588,7 +628,9 @@ function validateEvent(authority, decisions, evidence) {
       || event.signer_certificate !== authority.housekeeperIdentity.certificate
       || sha256Hex(Buffer.from(string(event.signer_certificate), 'utf8'))
         !== authority.housekeeperIdentity.cert_fingerprint) fail('HOUSEKEEPER_IDENTITY_INVALID');
-  const contentHash = canonicalSha(event.signed_body);
+  let contentHash;
+  try { contentHash = eventPayloadCommitment(event).toString('hex'); }
+  catch { fail('EVENT_RECEIPT_COMMITMENT_INVALID'); }
   const mutationHash = eventMutationHash(
     event.prev_mutation_hash, contentHash, event.nonce, Number(event.ts_signed),
   );
@@ -604,6 +646,101 @@ function validateEvent(authority, decisions, evidence) {
       || Number(authority.housekeeperRevocation.evaluated_at_unix_seconds)
         !== Number(event.ts_signed)) fail('REVOCATION_EVENT_BINDING_INVALID');
   return { event, root };
+}
+
+function validateLegacyOccurrence(state, authority, occurrence, ordinal) {
+  try {
+    if (state.envelope.format.version !== 3 || occurrence.schema !== CURRENT_OBJECT_SCHEMAS.occurrence) fail('HOUSEKEEPER_OCCURRENCE_SIGNATURE_INVALID');
+    const group = state.results[ordinal], memory = group.get('memory_state').body;
+    const provenance = group.get('provenance_chain').body, rows = provenance.rows;
+    if (!Array.isArray(rows) || !rows.length) fail('PROVENANCE_CHAIN_INVALID');
+    const byHash = new Map(), successors = new Map(), decoded = new Map(), certificates = new Map();
+    let genesis = null;
+    for (const row of rows) {
+      if (!row || typeof row !== 'object' || Array.isArray(row)
+          || row.memory_id !== memory.memory_id || !UUID.test(row.provenance_id)
+          || byHash.has(row.mutation_hash)) fail('PROVENANCE_CHAIN_INVALID');
+      const payload = retainedProvenanceMessage(row);
+      const cert = decodeCertificate(row.signer_certificate).body;
+      const fingerprint = sha256Hex(Buffer.from(row.signer_certificate));
+      const epochMs = new Date(row.agent_valid_from).getTime();
+      if (row.cert_fingerprint !== fingerprint || cert.agent_id !== row.agent_id
+          || !Number.isSafeInteger(epochMs) || epochMs !== cert.valid_from * 1000
+          || new Date(epochMs).toISOString() !== row.agent_valid_from
+          || (row.identity_tier === 'T3' && row.signed_claims?.device_fp !== cert.device_fp)) fail('PROVENANCE_CERTIFICATE_INVALID');
+      const selfHousekeeper = cert.issuer === 'housekeeper' && row.signer_certificate === authority.housekeeperIdentity.certificate;
+      if (!selfHousekeeper && !['aimos-master', state.envelope.expected_master_fingerprint].includes(cert.issuer)) fail('PROVENANCE_CERTIFICATE_INVALID');
+      if (!certificates.has(fingerprint)) {
+        const verification = verifyCertificate({ certificate: row.signer_certificate,
+          authorityPublicKey: selfHousekeeper ? authority.housekeeperIdentity.public_key_b64u : authority.trust.master_public_key_b64u,
+          expectedAgentId: row.agent_id, expectedSubjectPublicKey: cert.pubkey, atUnixSeconds: row.ts_signed });
+        if (!verification.valid) fail('PROVENANCE_CERTIFICATE_INVALID');
+        certificates.set(fingerprint, cert);
+      }
+      if (row.ts_signed < cert.valid_from || row.ts_signed > cert.valid_until) fail('PROVENANCE_CERTIFICATE_INVALID');
+      if (!Array.isArray(row.revocation_events) || !Object.hasOwn(row, 'identity_revoked_at')) fail('PROVENANCE_REVOCATION_INVALID');
+      if (row.identity_revoked_at !== null) {
+        const revokedMs = new Date(row.identity_revoked_at).getTime();
+        if (!Number.isSafeInteger(revokedMs) || new Date(revokedMs).toISOString() !== row.identity_revoked_at
+            || revokedMs <= row.ts_signed * 1000) fail('PROVENANCE_REVOCATION_INVALID');
+      }
+      for (const revocation of row.revocation_events) {
+        if (!revocation || typeof revocation !== 'object' || Array.isArray(revocation)
+            || ['signed_body', 'agent_id', 'agent_valid_from', 'master_fingerprint', 'target_cert_hash', 'prior_identity_hash', 'content_hash', 'mutation_hash', 'ts_signed', 'nonce', 'signature_b64u'].some(key => !Object.hasOwn(revocation, key))
+            || !revocation.signed_body || typeof revocation.signed_body !== 'object' || Array.isArray(revocation.signed_body)) fail('PROVENANCE_REVOCATION_INVALID');
+        const body = revocation.signed_body;
+        const prior = canonicalSha({ agent_id: row.agent_id, agent_valid_from: iso(row.agent_valid_from, 'PROVENANCE_REVOCATION_INVALID'), target_cert_hash: fingerprint });
+        const content = canonicalSha(body);
+        if (body?.schema !== 'hom.aimos.agent-revocation/v1' || body.event_type !== 'REVOKE_AGENT_IDENTITY'
+            || body.agent_id !== row.agent_id || iso(body.agent_valid_from, 'PROVENANCE_REVOCATION_INVALID') !== iso(row.agent_valid_from, 'PROVENANCE_REVOCATION_INVALID')
+            || revocation.agent_id !== row.agent_id || iso(revocation.agent_valid_from, 'PROVENANCE_REVOCATION_INVALID') !== iso(row.agent_valid_from, 'PROVENANCE_REVOCATION_INVALID')
+            || body.target_cert_hash !== fingerprint || revocation.target_cert_hash !== fingerprint
+            || body.prior_identity_hash !== prior || revocation.prior_identity_hash !== prior
+            || body.master_fingerprint !== state.envelope.expected_master_fingerprint || revocation.master_fingerprint !== body.master_fingerprint
+            || content !== revocation.content_hash || !Number.isSafeInteger(revocation.ts_signed)
+            || Math.floor(new Date(body.revoked_at).getTime() / 1000) !== revocation.ts_signed
+            || revocation.mutation_hash !== sha256Hex(Buffer.concat([Buffer.from('aimos-agent-revocation-v1\0'), exactHashBytes(prior), exactHashBytes(content), exactBase64url(revocation.signature_b64u)]))
+            || !verifyPayloadSignature({ publicKey: authority.trust.master_public_key_b64u, body, nonce: revocation.nonce, signedTs: revocation.ts_signed, signature: revocation.signature_b64u })
+            || revocation.ts_signed <= row.ts_signed) fail('PROVENANCE_REVOCATION_INVALID');
+      }
+      if (!verifyEd25519(cert.pubkey, payload.message, row.signature_b64u)) fail('PROVENANCE_SIGNATURE_INVALID');
+      if (payload.body.memory_id != null && payload.body.memory_id !== memory.memory_id) fail('PROVENANCE_SAVE_BINDING_INVALID');
+      if (payload.body.company_id != null && payload.body.company_id !== state.envelope.company_id) fail('PROVENANCE_SAVE_BINDING_INVALID');
+      byHash.set(row.mutation_hash, row); decoded.set(row.mutation_hash, payload.body);
+      if (row.prev_mutation_hash === null) { if (genesis) fail('PROVENANCE_CHAIN_INVALID'); genesis = row; }
+      else { if (successors.has(row.prev_mutation_hash)) fail('PROVENANCE_CHAIN_INVALID'); successors.set(row.prev_mutation_hash, row); }
+    }
+    const visited = new Set(); let cursor = genesis;
+    while (cursor) { if (visited.has(cursor.mutation_hash)) fail('PROVENANCE_CHAIN_INVALID'); visited.add(cursor.mutation_hash); cursor = successors.get(cursor.mutation_hash); }
+    if (visited.size !== rows.length) fail('PROVENANCE_CHAIN_INVALID');
+    const selected = byHash.get(occurrence.native_body?.mutation_hash);
+    if (!selected || !equal(selected, occurrence.native_body) || occurrence.signature_b64u !== selected.signature_b64u
+        || occurrence.signer_certificate !== selected.signer_certificate
+        || legacyOccurrenceReference(selected, state.envelope.company_id) !== occurrence.occurrence_ref) fail('PROVENANCE_SAVE_BINDING_INVALID');
+    const binding = byHash.get(provenance.binding_mutation_hash), save = byHash.get(provenance.save_mutation_hash);
+    const bindBody = decoded.get(provenance.binding_mutation_hash);
+    if (!binding || binding.event_type !== 'BIND' || binding.agent_id !== 'housekeeper'
+        || !bindBody || ![3, 4].includes(bindBody.binding_schema_version)
+        || bindBody.memory_id !== memory.memory_id || bindBody.company_id !== state.envelope.company_id
+        || bindBody.key !== memory.key || bindBody.live_content_hash !== memory.live_content_hash
+        || binding.live_content_hash !== memory.live_content_hash) fail('PROVENANCE_SAVE_BINDING_INVALID');
+    const liveFields = Object.fromEntries(['key', 'value', 'scope', 'memory_type', 'clearance_level', 'data_class', 'source']
+      .map(key => [key, memory[key] == null ? '' : String(memory[key])]));
+    if (['key', 'value', 'scope', 'memory_type', 'data_class', 'source'].some(key => memory[key] !== null && typeof memory[key] !== 'string')
+        || !Number.isSafeInteger(memory.clearance_level) || memory.clearance_level < 0 || memory.clearance_level > 12) fail('PROVENANCE_SAVE_BINDING_INVALID');
+    if (canonicalSha(liveFields) !== memory.live_content_hash) fail('PROVENANCE_SAVE_BINDING_INVALID');
+    if (save) {
+      if (save.event_type !== 'SAVE' || bindBody.request_mutation_hash !== save.mutation_hash
+          || bindBody.request_content_hash !== save.content_hash || bindBody.request_signature_hash !== sha256Hex(exactBase64url(save.signature_b64u))
+          || bindBody.request_signer_agent_id !== save.agent_id
+          || iso(bindBody.request_signer_valid_from, 'PROVENANCE_SAVE_BINDING_INVALID') !== iso(save.agent_valid_from, 'PROVENANCE_SAVE_BINDING_INVALID')
+          || binding.prev_mutation_hash !== save.mutation_hash) fail('PROVENANCE_SAVE_BINDING_INVALID');
+    } else if (selected.event_type === 'SAVE') fail('PROVENANCE_SAVE_BINDING_INVALID');
+    return rows.length + certificates.size + rows.reduce((count, row) => count + row.revocation_events.length, 0);
+  } catch (error) {
+    if (error instanceof MutMemRecallVerificationError) throw error;
+    fail(PROVENANCE_FAILURE_CODES.includes(error?.reason) ? error.reason : 'PROVENANCE_CONTEXT_INVALID');
+  }
 }
 
 function validateCryptography(state, authority, occurrences, event, expectedMasterFingerprint) {
@@ -652,6 +789,8 @@ function validateCryptography(state, authority, occurrences, event, expectedMast
     signatureCount += 1;
   }
   if (!verifyRequestContextSignature({
+    requestForm: authority.request.request_sig_form,
+    claims: authority.requestReceipt.signed_claims,
     publicKey: authority.identity.public_key_b64u,
     body: authority.request.request_body,
     method: authority.request.signed_method,
@@ -661,15 +800,15 @@ function validateCryptography(state, authority, occurrences, event, expectedMast
     signature: authority.request.signature_b64u,
   })) fail('ACTOR_REQUEST_SIGNATURE_INVALID');
   signatureCount += 1;
-  if (!verifyPayloadSignature({
-    publicKey: authority.housekeeperIdentity.public_key_b64u,
-    body: event.signed_body,
-    nonce: event.nonce,
-    signedTs: Number(event.ts_signed),
-    signature: event.signature_b64u,
-  })) fail('HOUSEKEEPER_EVENT_SIGNATURE_INVALID');
+  if (!verifyEventPayloadSignature(event, authority.housekeeperIdentity.public_key_b64u)) {
+    fail('HOUSEKEEPER_EVENT_SIGNATURE_INVALID');
+  }
   signatureCount += 1;
-  for (const occurrence of occurrences) {
+  for (const [ordinal, occurrence] of occurrences.entries()) {
+    if (occurrence.occurrence_form === 'legacy_v1' && occurrence.schema === CURRENT_OBJECT_SCHEMAS.occurrence) {
+      signatureCount += validateLegacyOccurrence(state, authority, occurrence, ordinal);
+      continue;
+    }
     if (occurrence.occurrence_form !== 'v3'
         || occurrence.signer_certificate !== authority.housekeeperIdentity.certificate
         || !verifyOccurrenceSignatureV3(
@@ -682,6 +821,81 @@ function validateCryptography(state, authority, occurrences, event, expectedMast
   return signatureCount;
 }
 
+// These are authenticated disclosure labels, not a proof of the origin DAG or
+// an action authorization. The profile is public data checked against its
+// versioned protocol commitment, never a trust root supplied by the artifact.
+function validateOriginDisclosure(state, receipt, evidence, event) {
+  if (state.envelope.format.version === 2) {
+    if (['origin_family_profile', 'disclosure_labels', 'disclosure_label_root_sha256']
+      .some((key) => Object.hasOwn(receipt, key))
+      || evidence.some((entry) => Object.hasOwn(entry, 'origin_disclosure'))) fail('OBJECT_SCHEMA_INVALID');
+    return;
+  }
+  const profile = receipt.origin_family_profile;
+  try {
+    const bytes = canonicalBytes(profile);
+    if (profile?.schema !== 'hom.aimos.origin-family-profile/v1'
+        || sha256Hex(Buffer.concat([Buffer.from('hom.aimos.origin-family-profile/v1\0'), u32(bytes.length), bytes])) !== ORIGIN_PROFILE_HASH) {
+      fail('ORIGIN_FAMILY_PROFILE_INVALID');
+    }
+  } catch { fail('ORIGIN_FAMILY_PROFILE_INVALID'); }
+  const families = new Map(profile.families.map((entry) => [entry.id, entry]));
+  const keys = ['schema', 'memory_id', 'live_content_hash', 'family_profile_sha256',
+    'family_ids', 'family_set_root_sha256', 'origin_binding_sha256s', 'origin_ledger_hashes',
+    'origin_event_ids', 'origin_event_mutation_sha256s', 'confidentiality', 'integrity',
+    'effective_action_class', 'legacy_unbound', 'unclassified', 'disclosure_label_sha256'].sort();
+  const labels = [];
+  for (let ordinal = 0; ordinal < evidence.length; ordinal += 1) {
+    try {
+      const label = evidence[ordinal].origin_disclosure;
+      const memory = state.results[ordinal].get('memory_state').body;
+      if (!label || !equal(Object.keys(label).sort(), keys)
+          || label.schema !== 'hom.aimos.native-recall-origin-disclosure/v1'
+          || label.memory_id !== memory.memory_id || label.live_content_hash !== memory.live_content_hash
+          || label.family_profile_sha256 !== ORIGIN_PROFILE_HASH
+          || !Array.isArray(label.family_ids) || !label.family_ids.length
+          || label.family_ids.length > profile.maximum_family_count
+          || !profile.confidentiality_order.includes(label.confidentiality)
+          || !profile.confidentiality_order.includes(memory.data_class)
+          || profile.confidentiality_order.indexOf(label.confidentiality) < profile.confidentiality_order.indexOf(memory.data_class)
+          || !profile.integrity_order.includes(label.integrity)
+          || !profile.action_class_order.includes(label.effective_action_class)
+          || typeof label.legacy_unbound !== 'boolean' || label.unclassified !== label.legacy_unbound) fail('ORIGIN_DISCLOSURE_LABEL_INVALID');
+      const familySet = new Set(label.family_ids);
+      for (let i = 0; i < label.family_ids.length; i += 1) {
+        const id = label.family_ids[i], entry = families.get(id);
+        if (!entry || (i && label.family_ids[i - 1] >= id)
+            || (entry.parent_id !== null && !familySet.has(entry.parent_id))) fail('ORIGIN_DISCLOSURE_LABEL_INVALID');
+      }
+      if (label.family_set_root_sha256 !== recallMerkleRoot(label.family_ids.map((family_id, i) => ({ ordinal: i, family_id }))).toString('hex')) fail('ORIGIN_DISCLOSURE_LABEL_INVALID');
+      for (const key of ['origin_binding_sha256s', 'origin_ledger_hashes', 'origin_event_ids', 'origin_event_mutation_sha256s']) {
+        const refs = label[key], pattern = key === 'origin_event_ids' ? UUID : HEX32;
+        if (!Array.isArray(refs) || (label.legacy_unbound ? refs.length !== 0 : refs.length === 0)
+            || refs.some((ref, i) => typeof ref !== 'string' || ref !== ref.toLowerCase()
+              || !pattern.test(ref) || (i > 0 && refs[i - 1] >= ref))) fail('ORIGIN_DISCLOSURE_LABEL_INVALID');
+      }
+      if (label.legacy_unbound && (!equal(label.family_ids, ['unknown_protected'])
+          || label.confidentiality !== 'restricted' || label.integrity !== 'untrusted'
+          || label.effective_action_class !== 'none')) fail('ORIGIN_DISCLOSURE_LABEL_INVALID');
+      const { disclosure_label_sha256: commitment, ...body } = label;
+      const bytes = canonicalBytes(body);
+      if (commitment !== sha256Hex(Buffer.concat([Buffer.from('hom.aimos.native-recall-origin-disclosure/v1\0'), u32(bytes.length), bytes]))) fail('ORIGIN_DISCLOSURE_LABEL_INVALID');
+      labels.push(label);
+    } catch { fail('ORIGIN_DISCLOSURE_LABEL_INVALID'); }
+  }
+  const root = recallMerkleRoot(labels.map((label, ordinal) => ({ ordinal,
+    memory_id: label.memory_id, live_content_hash: label.live_content_hash,
+    disclosure_label_sha256: label.disclosure_label_sha256,
+  }))).toString('hex');
+  if (!Array.isArray(receipt.disclosure_labels) || root !== receipt.disclosure_label_root_sha256
+      || !equal(labels, receipt.disclosure_labels)) fail('ORIGIN_DISCLOSURE_ROOT_INVALID');
+  let metadata;
+  try { metadata = eventPayloadBody(event)?.metadata; }
+  catch { fail('EVENT_RECEIPT_COMMITMENT_INVALID'); }
+  if (metadata?.disclosure_label_root_sha256 !== root || !Array.isArray(metadata.disclosure_labels)
+      || !equal(labels, metadata.disclosure_labels)) fail('ORIGIN_DISCLOSURE_EVENT_BINDING_INVALID');
+}
+
 export function verifyRecallEnvelope(envelope, {
   expectedMasterFingerprint = null,
   verifyCryptography = true,
@@ -691,6 +905,7 @@ export function verifyRecallEnvelope(envelope, {
   const authority = validateAuthority(state);
   const decisions = validateDecisions(state, authority.nativeReceipt);
   const results = validateResults(state, decisions, authority.nativeReceipt);
+  validateOriginDisclosure(state, authority.nativeReceipt, results.evidence, authority.nativeReceipt.event_receipt);
   const terminal = validateEvent(authority, decisions, results.evidence);
   const signatureCount = verifyCryptography
     ? validateCryptography(
@@ -702,15 +917,22 @@ export function verifyRecallEnvelope(envelope, {
     )
     : 0;
   return Object.freeze({
-    schema: 'hom.aimos.mutmem-independent-recall-result/v2',
+    schema: `hom.aimos.mutmem-independent-recall-result/v${state.envelope.format.version}`,
     valid: true,
     bundle_sha256: state.bundleHash,
     object_root_sha256: state.objectRoot,
     result_count: state.envelope.result_count,
-    structural_predicate_count: STRUCTURAL_FAILURE_CODES.length,
+    structural_predicate_count: STRUCTURAL_FAILURE_CODES.length
+      + (state.envelope.format.version === 3 ? ORIGIN_DISCLOSURE_FAILURE_CODES.length : 0),
     cryptographic_signatures_verified: Boolean(verifyCryptography),
     external_trust_established: Boolean(verifyCryptography),
     verified_signature_count: signatureCount,
+    ...(state.envelope.format.version === 3 ? {
+      origin_family_disclosure_verified: Boolean(verifyCryptography),
+      origin_ancestry_verified: false,
+      independent_corroboration_verified: false,
+      action_authority_granted: false,
+    } : {}),
   });
 }
 

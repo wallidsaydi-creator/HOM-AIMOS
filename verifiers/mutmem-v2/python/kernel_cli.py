@@ -12,6 +12,7 @@ import cryptography
 
 from crypto_kernel import (
     canonical_json,
+    parse_json_wire,
     occurrence_commitment_v3,
     recall_merkle_root,
     verify_certificate,
@@ -81,7 +82,7 @@ def main() -> int:
         raw = sys.stdin.buffer.read(MAXIMUM_INPUT_BYTES + 1)
         if len(raw) > MAXIMUM_INPUT_BYTES:
             raise ValueError("input_size_invalid")
-        request = json.loads(raw)
+        request = parse_json_wire(raw)
         result = execute(request)
         sys.stdout.write(json.dumps(result, separators=(",", ":"), sort_keys=True) + "\n")
         return 0

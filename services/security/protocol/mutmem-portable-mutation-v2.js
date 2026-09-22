@@ -6,6 +6,7 @@ import { canonicalJson } from './canonical-json.js';
 import {
   cognitiveProjectionHash,
   cognitiveTransitionHash,
+  verifyCognitiveAncestryBinding,
 } from './mutmem-protocol.js';
 
 export const MUTMEM_PORTABLE_MUTATION_V2 = Object.freeze({
@@ -21,6 +22,7 @@ export const MUTMEM_PORTABLE_MUTATION_V2 = Object.freeze({
 });
 
 export const MUTMEM_PORTABLE_MUTATION_FAILURE_CODES_V2 = Object.freeze([
+  'MUTATION_ANCESTRY_BINDING_INVALID',
   'MUTATION_BUNDLE_COMMITMENT_INVALID',
   'MUTATION_OUTCOME_SCHEMA_INVALID',
   'MUTATION_RECALL_BINDING_INVALID',
@@ -243,6 +245,17 @@ export function evaluateMutMemPortableMutationBundleV2(bundle) {
   const outcomeEvent = validateOutcomeEvent(bundle, outcome);
   const valence = validateValence(bundle, outcome, outcomeEvent);
   validateTerminal(bundle, outcome, outcomeEvent, valence);
+  const provenance=bundle.terminal?.reweight_provenance;
+  if(provenance?.body_json && Object.hasOwn(provenance.body_json,'ancestry_binding')) {
+    try {
+      if(!Object.hasOwn(provenance,'prev_mutation_hash')) throw new Error('predecessor_missing');
+      verifyCognitiveAncestryBinding(provenance.body_json.ancestry_binding,{
+        nativePredecessorHash:provenance.prev_mutation_hash===null?null:
+          Buffer.from(exactHash(provenance.prev_mutation_hash,'MUTATION_ANCESTRY_BINDING_INVALID'),'hex'),
+        previousProjectionHash:bundle.cognitive_projection.prev_projection_hash===null?null:
+          Buffer.from(exactHash(bundle.cognitive_projection.prev_projection_hash,'MUTATION_ANCESTRY_BINDING_INVALID'),'hex')});
+    } catch { fail('MUTATION_ANCESTRY_BINDING_INVALID'); }
+  }
   return Object.freeze({
     schema: 'hom.aimos.mutmem-portable-mutation-result/v2',
     valid: true,

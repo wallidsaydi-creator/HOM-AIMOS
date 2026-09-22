@@ -72,9 +72,16 @@ assert.equal(
 
 for (const forbidden of [
   'architecture-authority.json',
+  'scripts/verification/audit-ob5-independent-corroboration.mjs',
+  'scripts/verification/generate-phase1-origin-closure-artifacts.mjs',
+  'verifiers/origin-binding/phase1-closure',
+  'tests/security/audit-007-remediation.test.mjs',
+  'tests/security/audit-008-remediation.test.mjs',
+  'tests/security/audit-018-event-domain-retained.test.mjs',
+  'tests/security/audit-024-remediation.test.mjs',
+  'tests/security/phase1-origin-closure.test.mjs',
   'plans',
   'engineering',
-  'baselines',
   'remediation',
   'research',
   'scratchpad',
@@ -101,9 +108,43 @@ for (const required of [
   '.github/dependabot.yml',
   '.gitleaks.toml',
   'package-lock.json',
-  'docs/benchmarks/POISONEDRAG-N100-EPISTEMIC-ABLATION-PREREGISTRATION.md',
-  'eval/publication/poisonedrag-epistemic-ablation.json',
-  'eval/publication/verified-benchmark-results.json',
+  'baselines/live-canonical/migration-098-099-uncertainty.json',
+  'db/atomic-save-origin.sql',
+  'migrations/compatibility/029-runtime-role-password-removal.json',
+  'migrations/100-origin-family-ledger-and-writers.sql',
+  'migrations/101-origin-family-typed-writers.sql',
+  'migrations/102-origin-action-verdict-family-order-fix.sql',
+  'migrations/103-origin-writer-independent-crypto-parity.sql',
+  'migrations/104-origin-event-local-timestamp-parity.sql',
+  'migrations/105-origin-security-family-byte-order.sql',
+  'migrations/106-consequential-action-verdict-binding.sql',
+  'migrations/107-origin-elevation-license-binding.sql',
+  'migrations/108-operator-action-authorization-verifier.sql',
+  'migrations/109-origin-trust-registry-and-elevation-v2.sql',
+  'migrations/110-origin-source-effect-projection-binding.sql',
+  'migrations/111-origin-elevation-v2-ledger-domain.sql',
+  'migrations/112-origin-corroborator-key-precedence.sql',
+  'migrations/113-origin-elevation-attempt-continuity.sql',
+  'migrations/114-origin-elevation-exact-selector.sql',
+  'scripts/identity/authorize-tool-action.js',
+  'services/orchestration/tool-action-ledger.js',
+  'services/orchestration/tool-registry.js',
+  'services/security/origin-ledger.js',
+  'services/security/save-origin-binding.js',
+  'services/security/protocol/consequential-action-v1.js',
+  'services/security/protocol/origin-authority-v2.js',
+  'services/security/protocol/origin-binding-v1.js',
+  'services/security/protocol/origin-corroboration-v1.js',
+  'tests/security/consequential-action-ob5.test.mjs',
+  'tests/security/native-tool-action-authority.test.mjs',
+  'tests/security/native-tool-action-db.test.mjs',
+  'tests/security/origin-binding-ob1-artifacts.test.mjs',
+  'tests/security/origin-binding-v1.test.mjs',
+  'tests/security/origin-corroboration-ob5.test.mjs',
+  'tests/security/origin-ledger-ob2.test.mjs',
+  'verifiers/origin-binding/v1/protocol-manifest.json',
+  'verifiers/origin-binding/v1/vectors.json',
+  'verifiers/origin-binding/v1/verify.py',
 ]) {
   assert.equal(existsSync(path.join(root, required)), true, `public source missing: ${required}`);
 }
@@ -215,17 +256,26 @@ assert.deepEqual(
   'public source must carry only the canonical publication-evidence benchmark test',
 );
 
+const retainedBaselines = observed
+  .map((entry) => entry.path)
+  .filter((file) => file.startsWith('baselines/'));
+assert.deepEqual(
+  retainedBaselines,
+  ['baselines/live-canonical/migration-098-099-uncertainty.json'],
+  'public source may carry only the exact migration compatibility baseline',
+);
+
 if (existsSync(path.join(root, '.git'))) {
-  const count = Number(execFileSync('git', ['rev-list', '--all', '--count'], {
+  const count = Number(execFileSync('git', ['rev-list', 'HEAD', '--count'], {
     cwd: root,
     encoding: 'utf8',
   }).trim() || 0);
   if (count > 0) {
-    const roots = execFileSync('git', ['rev-list', '--max-parents=0', '--all'], {
+    const roots = execFileSync('git', ['rev-list', '--max-parents=0', 'HEAD'], {
       cwd: root,
       encoding: 'utf8',
     }).trim().split('\n').filter(Boolean);
-    assert.equal(roots.length, 1, `public repository has ${roots.length} root commits`);
+    assert.equal(roots.length, 1, `public HEAD has ${roots.length} root commits`);
     const status = execFileSync('git', ['status', '--porcelain=v1'], {
       cwd: root,
       encoding: 'utf8',

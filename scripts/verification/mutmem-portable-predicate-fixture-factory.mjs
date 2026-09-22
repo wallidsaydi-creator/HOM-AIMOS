@@ -184,6 +184,7 @@ export function baseMutMemPortablePredicateBodies() {
     authority_mutation_hash: grantMutationHash,
     request_receipt_id: RECEIPT_ID,
     request_receipt_mutation_hash: requestReceiptMutationHash,
+    merkle_schema: 'hom-aimos/recall-merkle/v3-epistemic-and-security-closure',
     merkle_root: merkleRoot,
     result_count: 1,
     evidence: [evidence],

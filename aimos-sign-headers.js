@@ -4,8 +4,7 @@
 //        No env fallback for agent_id or privkey path — env-based identity bypasses the cert envelope.
 // R1 Step 2: header construction delegated to the single shared
 // buildEnvelopeHeaders(agentId, method, path, body) helper. --method/--path
-// are folded into the signature only once OUTBOUND_SIG_FORM flips to 2; they
-// are always advertised via the X-Aimos-Sig-Form header.
+// and the exact dispatched origin-form target are bound by request form 5.
 import fs from 'node:fs';
 import { buildEnvelopeHeaders } from './services/security/envelope-headers.js';
 
@@ -59,6 +58,16 @@ async function main() {
     process.exit(2);
   }
 
+  if (args.execUrl) {
+    const destination = new URL(args.execUrl);
+    if (!['http:', 'https:'].includes(destination.protocol) || destination.username || destination.password
+        || destination.hash || args.path !== destination.pathname + destination.search) {
+      throw new Error('signed_request_target_dispatch_mismatch');
+    }
+    if (['GET', 'HEAD'].includes(String(args.method).toUpperCase()) && JSON.stringify(body) !== '{}') {
+      throw new Error('bodyless_request_requires_empty_signed_body');
+    }
+  }
   const headers = await buildEnvelopeHeaders(args.agentId, args.method, args.path, body);
   if (!args.execUrl) {
     console.log(JSON.stringify(headers));

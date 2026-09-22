@@ -42,7 +42,9 @@ import {
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { canonicalJson } from './protocol/canonical-json.js';
+import { canonicalJson, parseJsonWire } from './protocol/canonical-json.js';
+import { buildSignedRequestMessageV5 } from './protocol/mutmem-protocol.js';
+export { buildSignedRequestMessageV5, validateRequestTargetV5, requestClaimsV5 } from './protocol/mutmem-protocol.js';
 
 export { canonicalJson } from './protocol/canonical-json.js';
 
@@ -224,7 +226,7 @@ export async function getAgentCert(agentId, opts = {}) {
     const cert = String(row.cert);
     let certBody = null;
     try {
-      certBody = JSON.parse(Buffer.from(cert, 'base64url').toString('utf8'))?.body || null;
+      certBody = parseJsonWire(Buffer.from(cert, 'base64url').toString('utf8'))?.body || null;
     } catch {
       throw new Error('getAgentCert: cert_malformed');
     }
@@ -268,7 +270,7 @@ export async function getAgentCert(agentId, opts = {}) {
 // PAYLOAD SIGN / VERIFY
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function buildSignedMessage(body, nonce, ts) {
+export function buildSignedMessage(body, nonce, ts) {
   if (typeof nonce !== 'string' || nonce.length === 0) {
     throw new Error('signPayload: nonce must be non-empty string');
   }
@@ -569,6 +571,29 @@ export function verifyStoredPayloadSigV2(pubkeyB64u, body, nonce, ts, memoryOrig
   }
 }
 
+
+export function signPayloadWithRequestTarget(privkeyB64u, body, method, target, claims, nonce, ts) {
+  return bufToB64u(cryptoSign(null, buildSignedRequestMessageV5(body, method, target, claims, nonce, ts), loadPriv(privkeyB64u)));
+}
+
+export function verifyStoredPayloadSigWithRequestTarget(pubkeyB64u, body, method, target, claims, nonce, ts, sigB64u) {
+  try {
+    // Stored form-5 wire claims are the explicit two-field object. Only the
+    // signing constructor may normalize an omitted internal claims argument.
+    if (claims === null || claims === undefined) return { valid: false, reason: 'malformed_input' };
+    return cryptoVerify(null, buildSignedRequestMessageV5(body, method, target, claims, nonce, ts),
+      loadPub(pubkeyB64u), b64uToBuf(sigB64u)) ? { valid: true, reason: null } : { valid: false, reason: 'sig_invalid' };
+  } catch (error) { return { valid: false, reason: error.message === 'request_query_duplicate' ? error.message : 'malformed_input' }; }
+}
+
+export function verifyPayloadSigWithRequestTarget(pubkeyB64u, body, method, target, claims, nonce, ts, sigB64u, opts = {}) {
+  const skew = Number.isFinite(opts.skewSeconds) ? opts.skewSeconds : DEFAULT_SKEW_SECONDS;
+  const now = typeof opts.nowFn === 'function' ? opts.nowFn() : Math.floor(Date.now() / 1000);
+  if (!Number.isSafeInteger(ts) || ts <= 0) return { valid: false, reason: 'malformed_input' };
+  if (Math.abs(now - ts) > skew) return { valid: false, reason: 'clock_skew' };
+  return verifyStoredPayloadSigWithRequestTarget(pubkeyB64u, body, method, target, claims, nonce, ts, sigB64u);
+}
+
 /** Verify a stored form-3 request signature without applying request freshness. */
 export function verifyStoredPayloadSigWithContext(pubkeyB64u, body, method, path, nonce, ts, sigB64u) {
   try {
@@ -778,7 +803,7 @@ export function verifyCertChain(certB64u, masterPubkeyB64u, opts = {}) {
   let envelope;
   try {
     const json = b64uToBuf(certB64u).toString('utf8');
-    envelope = JSON.parse(json);
+    envelope = parseJsonWire(json);
   } catch {
     return { valid: false, reason: 'cert_malformed', body: null };
   }

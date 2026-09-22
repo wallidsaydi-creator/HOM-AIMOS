@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // P1 live projection proof. One signed native RECALL is projected into the
-// portable v2 envelope. The script performs no SAVE, classification, weight,
+// version-matched portable envelope. The script performs no SAVE, classification, weight,
 // authorization, schema, or configuration mutation.
 
 import { createHash } from 'node:crypto';
@@ -14,12 +14,15 @@ import { buildEnvelopeHeaders } from '../../services/security/envelope-headers.j
 import { canonicalJson } from '../../services/security/protocol/canonical-json.js';
 import {
   createMutMemPortableEvidenceEnvelopeV2,
+  createMutMemPortableEvidenceEnvelopeV3,
   createMutMemPortableObjectV2,
 } from '../../services/security/protocol/mutmem-portable-evidence-v2.js';
 import {
-  MUTMEM_PORTABLE_OBJECT_SCHEMAS_V2 as SCHEMA,
+  MUTMEM_PORTABLE_OBJECT_SCHEMAS_V2,
+  MUTMEM_PORTABLE_OBJECT_SCHEMAS_V3,
   evaluateMutMemPortablePredicatesV2,
 } from '../../services/security/protocol/mutmem-portable-predicates-v2.js';
+import { ORIGIN_FAMILY_PROFILE_BODY_V1 } from '../../services/security/protocol/origin-binding-v1.js';
 import { normalizeNativeRecallCommand } from '../../services/retrieval/native-recall.js';
 import {
   occurrenceReferenceForProvenanceRow,
@@ -72,14 +75,14 @@ function decodeCertificate(certificate) {
 async function eventById(id) {
   if (!UUID.test(String(id || ''))) throw new Error('p1_live_event_id_invalid');
   const result = await pool.query(
-    `SELECT id::text,company_id,agent_id,operation,key,metadata,parent_event_id::text,
+    `SELECT e.*,id::text,company_id,agent_id,operation,key,metadata,parent_event_id::text,
             proof_required,ledger_version,ledger_seq,signer_agent_id,signer_valid_from,
             cert_fingerprint,identity_tier,authority_kind,signed_body,
             encode(content_hash,'hex') content_hash,
             encode(mutation_hash,'hex') mutation_hash,
             encode(prev_mutation_hash,'hex') prev_mutation_hash,
             ts_signed,nonce,encode(sig,'base64') sig_base64
-       FROM aimos_events WHERE id=$1::uuid`,
+       FROM aimos_events e WHERE id=$1::uuid`,
     [id],
   );
   if (result.rowCount !== 1) throw new Error('p1_live_event_missing');
@@ -93,7 +96,8 @@ function eventReceiptProjection(row, signerCertificate) {
     proof_required: row.proof_required,
     ledger_version: Number(row.ledger_version),
     ledger_seq: Number(row.ledger_seq),
-    signed_body: asObject(row.signed_body),
+    ...(row.signed_body_bytes == null ? { signed_body: asObject(row.signed_body) }
+      : { signed_body_bytes_b64u: b64u(row.signed_body_bytes) }),
     content_hash: row.content_hash,
     mutation_hash: row.mutation_hash,
     prev_mutation_hash: row.prev_mutation_hash,
@@ -146,7 +150,7 @@ async function revokedAt(agentId, validFromIso, signedTs) {
 
 async function provenanceRows(memoryId) {
   const result = await pool.query(
-    `SELECT p.*,identity.cert AS signer_cert
+    `SELECT p.*,identity.cert AS signer_cert,identity.revoked_at AS identity_revoked_at
        FROM aimos_memory_provenance p
        LEFT JOIN agent_identity identity
          ON identity.agent_id=p.agent_id AND identity.valid_from=p.agent_valid_from
@@ -156,7 +160,7 @@ async function provenanceRows(memoryId) {
   return result.rows;
 }
 
-function portableProvenanceRow(row) {
+function portableProvenanceRow(row, exactBody = false) {
   return {
     provenance_id: String(row.provenance_id),
     memory_id: String(row.memory_id),
@@ -171,7 +175,19 @@ function portableProvenanceRow(row) {
     signature_b64u: b64u(row.sig),
     identity_tier: row.identity_tier,
     event_type: row.event_type,
-    body_json: asObject(row.body_json),
+    ...(exactBody ? {
+      body_json_encoding: 'hom-aimos/canonical-json/v1',
+      body_json_bytes_b64u: row.body_json == null ? null
+        : Buffer.from(canonicalJson(row.body_json), 'utf8').toString('base64url'),
+      request_sig_form: Number(row.request_sig_form || 1),
+      signed_method: row.signed_method || null,
+      signed_path: row.signed_path || null,
+      signed_claims: row.signed_claims || null,
+      memory_originated_at: row.memory_originated_at ? new Date(row.memory_originated_at).toISOString() : null,
+      is_genesis: row.is_genesis,
+      identity_revoked_at: row.identity_revoked_at ? new Date(row.identity_revoked_at).toISOString() : null,
+      revocation_events: row.revocation_events || [],
+    } : { body_json: asObject(row.body_json) }),
     sig_form_version: Number(row.sig_form_version || 1),
     live_content_hash: hex(row.live_content_hash),
     signer_certificate: row.signer_cert || null,
@@ -202,13 +218,18 @@ async function main() {
   if (health.ready !== true || health.runtime?.database_name !== 'aimos') {
     throw new Error('p1_live_server_not_ready');
   }
+  const selectedId = process.argv.find((arg) => arg.startsWith('--memory-id='))?.slice('--memory-id='.length) || null;
+  if (selectedId !== null && !UUID.test(selectedId)) throw new Error('p1_live_memory_id_invalid');
   const selected = await pool.query(
     `SELECT memory.id::text
        FROM aimos_memories memory
       WHERE memory.company_id='hom'
+        AND ($1::uuid IS NULL OR memory.id=$1::uuid)
         AND EXISTS (
           SELECT 1 FROM aimos_memory_provenance provenance
-           WHERE provenance.memory_id=memory.id AND provenance.sig_form_version=3
+           WHERE provenance.memory_id=memory.id
+             AND (provenance.sig_form_version=3
+               OR ($1::uuid IS NOT NULL AND provenance.sig_form_version=1))
         )
         AND memory.clearance_level <= 10
         AND memory.data_class IN ('public','internal','confidential')
@@ -227,6 +248,7 @@ async function main() {
           )
         )
       ORDER BY memory.id LIMIT 1`,
+    [selectedId],
   );
   const memoryId = selected.rows[0]?.id;
   if (!UUID.test(String(memoryId || ''))) throw new Error('p1_live_v3_memory_unavailable');
@@ -250,10 +272,12 @@ async function main() {
   }
   const nativeReceipt = responseBody.recall_receipt;
   const eventReceipt = nativeReceipt?.event_receipt;
-  if (!eventReceipt || nativeReceipt.merkle_schema
-      !== 'hom-aimos/recall-merkle/v3-epistemic-and-security-closure') {
-    throw new Error('p1_live_v3_receipt_missing');
+  const current = nativeReceipt?.merkle_schema === 'hom-aimos/recall-merkle/v4-origin-family-disclosure';
+  if (!eventReceipt || (!current && nativeReceipt.merkle_schema
+      !== 'hom-aimos/recall-merkle/v3-epistemic-and-security-closure')) {
+    throw new Error('p1_live_receipt_version_unsupported');
   }
+  const SCHEMA = current ? MUTMEM_PORTABLE_OBJECT_SCHEMAS_V3 : MUTMEM_PORTABLE_OBJECT_SCHEMAS_V2;
   const actorCert = headers['Aimos-Agent-Cert'];
   const actorCertBody = decodeCertificate(actorCert);
   const actorValidFrom = isoEpoch(actorCertBody.valid_from);
@@ -309,6 +333,26 @@ async function main() {
   const memory = responseBody.memories[0];
   const proof = memory.provenance_proof;
   const allProvenance = await provenanceRows(memoryId);
+  if (current) {
+    const byEpoch = new Map();
+    const epochKey = row => `${row.agent_id}:${new Date(row.agent_valid_from).toISOString()}`;
+    const revocations = (await pool.query(`SELECT r.* FROM aimos_agent_revocation_events r
+      JOIN (SELECT DISTINCT agent_id,agent_valid_from FROM aimos_memory_provenance WHERE memory_id=$1) selected
+        ON selected.agent_id=r.agent_id AND selected.agent_valid_from=r.agent_valid_from
+      ORDER BY r.ts_signed,r.mutation_hash`, [memoryId])).rows;
+    for (const row of revocations) {
+      const key = epochKey(row);
+      if (!byEpoch.has(key)) byEpoch.set(key, []);
+      byEpoch.get(key).push({
+        agent_id: row.agent_id, agent_valid_from: new Date(row.agent_valid_from).toISOString(),
+        master_fingerprint: row.master_fingerprint, target_cert_hash: hex(row.target_cert_hash),
+        prior_identity_hash: hex(row.prior_identity_hash), signed_body: row.signed_body,
+        content_hash: hex(row.content_hash), mutation_hash: hex(row.mutation_hash),
+        ts_signed: Number(row.ts_signed), nonce: row.nonce, signature_b64u: b64u(row.sig),
+      });
+    }
+    for (const row of allProvenance) row.revocation_events = row.agent_valid_from ? byEpoch.get(epochKey(row)) || [] : [];
+  }
   const selectedOccurrence = allProvenance.find(
     (row) => occurrenceReferenceForProvenanceRow(row, 'hom') === evidence[0].occurrence_ref,
   );
@@ -317,7 +361,7 @@ async function main() {
     ? 'v3' : 'legacy_v1';
   const occurrenceBody = occurrenceForm === 'v3'
     ? asObject(selectedOccurrence.body_json)
-    : portableProvenanceRow(selectedOccurrence);
+    : portableProvenanceRow(selectedOccurrence, current);
   const occurrenceNativeSchema = occurrenceForm === 'v3'
     ? 'hom.aimos.memory-occurrence/v3'
     : 'hom.aimos.memory-occurrence-ref/legacy-v1';
@@ -440,6 +484,7 @@ async function main() {
     native_recall_receipt: {
       schema: SCHEMA.native_recall_receipt,
       ...nativeReceipt,
+      ...(current ? { origin_family_profile: ORIGIN_FAMILY_PROFILE_BODY_V1 } : {}),
       result_count: evidence.length,
       event_receipt: eventReceiptProjection(terminalEvent, signerCert),
     },
@@ -464,7 +509,7 @@ async function main() {
       live_content_hash: evidence[0].live_content_hash,
       save_mutation_hash: evidence[0].save_mutation_hash,
       binding_mutation_hash: evidence[0].binding_mutation_hash,
-      rows: allProvenance.map(portableProvenanceRow),
+      rows: allProvenance.map(row => portableProvenanceRow(row, current)),
     },
     occurrence: {
       schema: SCHEMA.occurrence,
@@ -510,7 +555,8 @@ async function main() {
       }
     }),
   ];
-  const bundle = createMutMemPortableEvidenceEnvelopeV2({
+  const createEnvelope = current ? createMutMemPortableEvidenceEnvelopeV3 : createMutMemPortableEvidenceEnvelopeV2;
+  const bundle = createEnvelope({
     bundleId: `P1-LIVE-${eventReceipt.event_id}`,
     companyId: 'hom',
     expectedMasterFingerprint: master.fingerprint,
@@ -534,7 +580,9 @@ async function main() {
   await chmod(artifact, 0o600);
   console.log(JSON.stringify({
     success: true,
-    status: 'P1_LIVE_NATIVE_RECALL_V3_PROJECTED',
+    status: current ? 'LIVE_NATIVE_RECALL_V4_PROJECTED' : 'P1_LIVE_NATIVE_RECALL_V3_PROJECTED',
+    native_receipt_schema: nativeReceipt.merkle_schema,
+    portable_envelope_schema: bundle.format.schema,
     recall_event_id: eventReceipt.event_id,
     bundle_sha256: bundle.bundle_sha256,
     object_root_sha256: bundle.object_root_sha256,

@@ -11,8 +11,12 @@ import { readFileSync } from 'node:fs';
 
 import { pool } from '../../db/connection.js';
 import { resolveAimosDatabaseName } from '../../services/core/runtime-config.js';
-import { verifyGenesisManifest } from '../verify-genesis-manifest.mjs';
-import { phaseA6GenesisGuideIngestion } from '../genesis-install.mjs';
+import { signAsHousekeeper } from '../../services/security/housekeeper-signer.js';
+import {
+  genesisGuideMemoryType,
+  genesisGuideRequestBody,
+  verifyGenesisManifest,
+} from '../verify-genesis-manifest.mjs';
 import { verifySchedulerGenesisReadiness } from '../../services/orchestration/scheduler.js';
 
 const brainRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -93,10 +97,56 @@ try {
       retained_prior_version_rows: retainedPriorRows,
     }, null, 2));
   } else {
-    const result = await phaseA6GenesisGuideIngestion({
-      targetPool: pool,
-      manifestVerification: manifest,
+    const healthResponse = await fetch('http://127.0.0.1:9100/health', {
+      signal: AbortSignal.timeout(10_000),
     });
+    const health = await healthResponse.json();
+    if (!healthResponse.ok || health?.ready !== true
+        || health?.runtime?.database_name !== database
+        || Number(health?.runtime?.server_port) !== 9100) {
+      throw new Error('guide_upgrade_canonical_runtime_not_ready');
+    }
+    const readinessBefore = await verifySchedulerGenesisReadiness({ brainRoot });
+    let ingested = readinessBefore.ok ? manifest.files.length : 0;
+    const results = [];
+    for (const record of readinessBefore.ok ? [] : manifest.files) {
+      const content = readFileSync(record.absolutePath, 'utf8');
+      const key = `guide:housekeeper:${path.basename(record.path, '.md')}`;
+      const body = genesisGuideRequestBody({
+        manifest,
+        fileRecord: record,
+        content,
+        key,
+      });
+      const signed = await signAsHousekeeper(body, {
+        method: 'POST',
+        path: '/aimos/save',
+      });
+      const response = await fetch('http://127.0.0.1:9100/aimos/save', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'aimos-agent-cert': signed.certString,
+          'aimos-agent-signature': signed.sigB64u,
+          'aimos-agent-nonce': signed.nonce,
+          'aimos-agent-timestamp': String(signed.signedTs),
+          'x-aimos-sig-form': String(signed.sigForm),
+        },
+        body: JSON.stringify(signed.body),
+        signal: AbortSignal.timeout(180_000),
+      });
+      const responseBody = await response.json().catch(() => ({}));
+      if (!response.ok || responseBody.success !== true) {
+        throw new Error(`guide_upgrade_canonical_save_failed:${record.path}:${response.status}:${responseBody.error || 'unknown'}`);
+      }
+      ingested += 1;
+      results.push({
+        path: record.path,
+        memory_id: responseBody.memory_id,
+        terminal_event_id: responseBody.terminal_event_id,
+        occurrence_reasserted: responseBody.occurrence_reasserted === true,
+      });
+    }
     const readiness = await verifySchedulerGenesisReadiness({ brainRoot });
     if (!readiness.ok) {
       throw new Error(`guide_upgrade_readiness_failed:${readiness.reason}`);
@@ -149,7 +199,13 @@ try {
       retained_prior_version_rows: retainedPriorRowsAfter,
       scheduler_readiness: readiness,
       topology: topology.rows,
-      ...result,
+      ingested,
+      total: manifest.files.length,
+      canonical_port: 9100,
+      canonical_database: database,
+      second_listener_started: false,
+      already_bound_before_run: readinessBefore.ok,
+      results,
     }, null, 2));
   }
 } finally {

@@ -213,10 +213,12 @@ export function createRecallAuthorizationService({ pool = defaultPool } = {}) {
     masterFingerprint,
     reason,
     dryRun = false,
+    client: transactionClient = null,
   }) {
-    const client = await pool.connect();
+    if (transactionClient && dryRun) throw new Error('recall_dry_run_requires_owned_transaction');
+    const client = transactionClient || await pool.connect();
     try {
-      await client.query('BEGIN');
+      if (!transactionClient) await client.query('BEGIN');
       const company = String(companyId || '').trim();
       const subject = String(subjectAgentId || '').trim();
       const validFrom = new Date(subjectValidFrom).toISOString();
@@ -303,13 +305,15 @@ export function createRecallAuthorizationService({ pool = defaultPool } = {}) {
           !proof.prevMutationHash,
         ],
       );
-      await client.query('COMMIT');
+      if (!transactionClient) await client.query('COMMIT');
       return { ...inserted.rows[0], ...proof };
     } catch (error) {
-      try { await client.query('ROLLBACK'); } catch { /* connection may be gone */ }
+      if (!transactionClient) {
+        try { await client.query('ROLLBACK'); } catch { /* connection may be gone */ }
+      }
       throw error;
     } finally {
-      client.release();
+      if (!transactionClient) client.release();
     }
   }
 

@@ -43,7 +43,7 @@ test('legacy MCP save retains the verified caller instead of elevating to housek
   const rest = read('routes/aimos.js');
   const block = rest.slice(
     rest.indexOf("router.post('/mcp/tools/call'"),
-    rest.indexOf('// ═══════════════════════════════════════════════════════════════════════════════\n// QMD'),
+    rest.indexOf("router.all('/recall/demo'"),
   );
   assert.match(block, /mutation_authority: requestAuthority/);
   assert.doesNotMatch(block, /mutation_authority: 'housekeeper'/);

@@ -3,6 +3,7 @@
 // Pipeline: TOOL_REGISTRY | Position: Google API tool implementation
 // ─────────────────────────────────────────────────────────────────────────────
 import { randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { fetchWithTimeout } from '../orchestration/http.js';
 import {
@@ -12,11 +13,12 @@ import {
 import { checkoutCachedCredential } from '../security/credential-cache.js';
 import { credentialLedger, credentialUseEvidenceHash } from '../security/credential-ledger.js';
 import { systemConfigStore } from '../security/system-config-store.js';
+import { verifyToolActionAuthority } from '../orchestration/tool-action-ledger.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 const GOOGLE_REQUEST_TIMEOUT_MS = 12_000;
 
-async function refreshGoogleAccessToken(row, useContext = {}) {
+async function refreshGoogleAccessToken(row, useContext = {}, deadlineAt = useContext.deadlineAt) {
   const refreshCheckout = row?.refresh_token_checkout || null;
   if (!refreshCheckout?.value) throw new Error('Google refresh token missing');
   const googleSecretCheckout = checkoutCachedCredential('google_client_secret');
@@ -72,7 +74,10 @@ async function refreshGoogleAccessToken(row, useContext = {}) {
     res = await fetchWithTimeout(endpoint, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body
+      body,
+      signal: useContext?.signal,
+      deadlineAt,
+      destinationPolicy: 'public',
     }, GOOGLE_REQUEST_TIMEOUT_MS);
     const data = await res.json();
     if (!res.ok || data.error) {
@@ -99,6 +104,7 @@ async function refreshGoogleAccessToken(row, useContext = {}) {
       terminalRecorded = true;
       throw new Error(data.error_description || data.error || `Google token refresh failed (${res.status})`);
     }
+    if (typeof data.access_token !== 'string' || !data.access_token) throw new Error('google_oauth_response_invalid');
     const outcomeHash = credentialUseEvidenceHash({
       status: res.status,
       responseHash: credentialUseEvidenceHash(data),
@@ -130,7 +136,7 @@ async function refreshGoogleAccessToken(row, useContext = {}) {
       if (refreshReservation) {
         await credentialLedger.finalizeCredentialUse({
           reservation: refreshReservation,
-          outcome: 'failed',
+          outcome: 'indeterminate',
           outcomeClass,
           errorClass,
           outcomeHash,
@@ -139,7 +145,7 @@ async function refreshGoogleAccessToken(row, useContext = {}) {
       if (clientSecretReservation) {
         await credentialLedger.finalizeCredentialUse({
           reservation: clientSecretReservation,
-          outcome: 'failed',
+          outcome: 'indeterminate',
           outcomeClass,
           errorClass,
           outcomeHash,
@@ -147,11 +153,13 @@ async function refreshGoogleAccessToken(row, useContext = {}) {
       }
     }
     throw error;
+  } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
   }
 }
 
-async function forceRefreshGoogleToken(row, useContext = {}) {
-  const { data: refreshed, credentialUseEvidence } = await refreshGoogleAccessToken(row, useContext);
+async function forceRefreshGoogleToken(row, useContext = {}, deadlineAt = useContext.deadlineAt) {
+  const { data: refreshed, credentialUseEvidence } = await refreshGoogleAccessToken(row, useContext, deadlineAt);
   const expiresAt = refreshed.expires_in
     ? new Date(Date.now() + Number(refreshed.expires_in) * 1000)
     : null;
@@ -180,7 +188,7 @@ async function forceRefreshGoogleToken(row, useContext = {}) {
   return updated;
 }
 
-async function getGoogleToken(useContext = {}) {
+async function getGoogleToken(useContext = {}, deadlineAt = useContext.deadlineAt) {
   const row = await getLatestIntegrationToken(COMPANY, 'google', ['gmail']);
   if (!row?.credential_integrity || !row.access_token_checkout?.value) {
     throw new Error('Google not connected or credential lifecycle verification failed');
@@ -190,7 +198,7 @@ async function getGoogleToken(useContext = {}) {
     const expiresAt = new Date(row.expires_at).getTime();
     const now = Date.now();
     if (Number.isFinite(expiresAt) && expiresAt <= now + 60_000 && row.refresh_token) {
-      return forceRefreshGoogleToken(row, useContext);
+      return forceRefreshGoogleToken(row, useContext, deadlineAt);
     }
   }
 
@@ -198,7 +206,9 @@ async function getGoogleToken(useContext = {}) {
 }
 
 async function gFetch(path, options = {}, useContext = {}, responseMode = 'json') {
-  let row = await getGoogleToken(useContext);
+  const deadlineAt = Math.min(options.deadlineAt ?? Infinity, useContext.deadlineAt ?? Infinity,
+    performance.now() + GOOGLE_REQUEST_TIMEOUT_MS);
+  let row = await getGoogleToken(useContext, deadlineAt);
   const base = 'https://www.googleapis.com';
   const target = new URL(path, base);
   const endpoint = `${target.origin}${target.pathname}`;
@@ -236,7 +246,10 @@ async function gFetch(path, options = {}, useContext = {}, responseMode = 'json'
           Authorization: `Bearer ${checkout.value}`,
           'Content-Type': 'application/json',
           ...(options.headers || {})
-        }
+        },
+        signal: options.signal ?? useContext?.signal,
+        deadlineAt,
+        destinationPolicy: 'public',
       }, GOOGLE_REQUEST_TIMEOUT_MS);
       if (res.status === 401 && attempt === 0 && row.refresh_token_checkout?.value) {
         await credentialLedger.finalizeCredentialUse({
@@ -247,7 +260,8 @@ async function gFetch(path, options = {}, useContext = {}, responseMode = 'json'
           outcomeHash: credentialUseEvidenceHash({ status: res.status, attempt }),
         });
         terminalRecorded = true;
-        row = await forceRefreshGoogleToken(row, useContext);
+        await res.body?.cancel();
+        row = await forceRefreshGoogleToken(row, useContext, deadlineAt);
         continue;
       }
       if (!res.ok) {
@@ -281,7 +295,7 @@ async function gFetch(path, options = {}, useContext = {}, responseMode = 'json'
       if (!terminalRecorded) {
         await credentialLedger.finalizeCredentialUse({
           reservation,
-          outcome: res ? 'failed' : 'indeterminate',
+          outcome: 'indeterminate',
           outcomeClass: res ? 'google_api_response_invalid' : 'google_api_transport_failed',
           errorClass: error?.name || 'google_api_failed',
           outcomeHash: credentialUseEvidenceHash({
@@ -291,6 +305,8 @@ async function gFetch(path, options = {}, useContext = {}, responseMode = 'json'
         });
       }
       throw error;
+    } finally {
+      if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
     }
   }
   throw new Error('Google API retry exhausted');
@@ -330,7 +346,7 @@ export async function gmailSearchMessages({ query: q, maxResults = 10 }, credent
   return Promise.all(ids.map(m => gmailGetMessage(m.id, credentialUseContext)));
 }
 
-export async function gmailSendMessage({
+async function sendGmailMessageTransport({
   to,
   subject,
   body,
@@ -367,6 +383,20 @@ export async function gmailSendMessage({
   }, credentialUseContext);
 }
 
+export async function gmailSendMessage({ to, subject, body }, credentialUseContext = {}) {
+  const authorizedArgs = credentialUseContext.toolActionArguments || { to, subject, body };
+  if (authorizedArgs.to !== to || authorizedArgs.subject !== subject || authorizedArgs.body !== body) {
+    throw new Error('gmail_action_argument_substitution');
+  }
+  await verifyToolActionAuthority(credentialUseContext.toolActionAuthority, {
+    expectedCompanyId: COMPANY,
+    expectedTool: 'gmail_send',
+    expectedActorAgentId: credentialUseContext.actorAgentId,
+    expectedArguments: authorizedArgs,
+  });
+  return sendGmailMessageTransport({ to, subject, body }, credentialUseContext);
+}
+
 export async function gmailGetThread(threadId, credentialUseContext = {}) {
   const thread = await gFetch(`/gmail/v1/users/me/threads/${threadId}?format=metadata`, {}, credentialUseContext);
   return thread;
@@ -374,6 +404,16 @@ export async function gmailGetThread(threadId, credentialUseContext = {}) {
 
 export async function gmailReplyMessage({ messageId, body }, credentialUseContext = {}) {
   if (!messageId) throw new Error('messageId is required');
+  const authorizedArgs = credentialUseContext.toolActionArguments || { messageId, body };
+  if (authorizedArgs.messageId !== messageId || authorizedArgs.body !== body) {
+    throw new Error('gmail_action_argument_substitution');
+  }
+  await verifyToolActionAuthority(credentialUseContext.toolActionAuthority, {
+    expectedCompanyId: COMPANY,
+    expectedTool: 'gmail_reply',
+    expectedActorAgentId: credentialUseContext.actorAgentId,
+    expectedArguments: authorizedArgs,
+  });
   const message = await gFetch(
     `/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}?format=full`,
     {},
@@ -390,7 +430,7 @@ export async function gmailReplyMessage({ messageId, body }, credentialUseContex
     ? `${headers.references} ${inReplyTo}`.trim()
     : inReplyTo;
 
-  return gmailSendMessage({
+  return sendGmailMessageTransport({
     to,
     subject,
     body: String(body || ''),
@@ -488,6 +528,20 @@ export async function calendarCreateEvent({
   end,
   calendarId = 'primary',
 }, credentialUseContext = {}) {
+  if (calendarId !== 'primary') throw new Error('calendar_action_target_not_authorized');
+  const authorizedArgs = credentialUseContext.toolActionArguments || {
+    summary, description, start, end,
+  };
+  if (authorizedArgs.summary !== summary || (authorizedArgs.description ?? '') !== description
+      || authorizedArgs.start !== start || authorizedArgs.end !== end) {
+    throw new Error('calendar_action_argument_substitution');
+  }
+  await verifyToolActionAuthority(credentialUseContext.toolActionAuthority, {
+    expectedCompanyId: COMPANY,
+    expectedTool: 'calendar_create',
+    expectedActorAgentId: credentialUseContext.actorAgentId,
+    expectedArguments: authorizedArgs,
+  });
   return gFetch(`/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`, {
     method: 'POST',
     body: JSON.stringify({

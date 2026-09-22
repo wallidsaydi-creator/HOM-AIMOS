@@ -30,6 +30,7 @@ import { query } from '../../db/connection.js';
 import { runProvider } from '../core/providers.js';
 import { logEvent } from '../observe/event-ledger.js';
 import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
+import { createToolInputState, recordToolContextInput } from '../orchestration/tool-action-ledger.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -62,6 +63,8 @@ export async function clusterSimilarSkills(companyId) {
        WHERE a.company_id = $1
          AND a.memory_type IN ('procedural', 'skill')
          AND b.memory_type IN ('procedural', 'skill')
+         AND a.scope NOT IN ('agent', 'private')
+         AND b.scope NOT IN ('agent', 'private')
          AND a.embedding IS NOT NULL
          AND b.embedding IS NOT NULL
          AND (a.embedding <=> b.embedding) < $2
@@ -126,30 +129,24 @@ export async function clusterSimilarSkills(companyId) {
  * @param {string} [companyId]
  * @returns {Promise<{abstractionKey: string, abstractionValue: string, saved: boolean}>}
  */
-export async function extractAbstraction(skillCluster, companyId) {
+export async function extractAbstraction(skillCluster, companyId, { canonicalMemories = [], nativeToolInputs = null } = {}) {
   const cid = companyId || COMPANY;
 
   if (!Array.isArray(skillCluster?.skillIds) || skillCluster.skillIds.length < 2) {
     return { abstractionKey: null, abstractionValue: null, saved: false };
   }
 
-  // Fetch skill values for LLM analysis
-  let skillRows;
-  try {
-    const result = await query(
-      `SELECT key, value FROM aimos_memories
-       WHERE id = ANY($1) AND company_id = $2`,
-      [skillCluster.skillIds, cid]
-    );
-    skillRows = result.rows;
-  } catch (err) {
-    console.error('[skill-consolidation] extractAbstraction fetch error:', err.message);
-    return { abstractionKey: null, abstractionValue: null, saved: false };
+  const skillById = new Map(canonicalMemories.map((memory) => [String(memory?.id || ''), memory]));
+  const skillRows = skillCluster.skillIds.map((id) => skillById.get(String(id))).filter(Boolean);
+  if (skillRows.length !== skillCluster.skillIds.length) {
+    return { abstractionKey: null, abstractionValue: null, saved: false,
+      reason: 'canonical_skill_recall_incomplete' };
   }
 
   const skillSummaries = skillRows
     .map((r) => `Key: ${r.key}\nValue: ${String(r.value || '').slice(0, 300)}`)
     .join('\n---\n');
+  const modelInputs = nativeToolInputs || createToolInputState(skillCluster.skillIds);
 
   const prompt = `You are a skill abstraction engine. Find the shared generalised pattern from these similar skills.
 
@@ -168,6 +165,12 @@ Output:
   let raw = '';
   try {
     raw = await runProvider({ prompt });
+    recordToolContextInput(modelInputs, {
+      kind: 'derived',
+      owner: 'services/learning/skill-consolidation.js#extractAbstraction',
+      ref: `skill-abstraction-model-output:${skillCluster.clusterId}`,
+      value: raw,
+    });
   } catch (err) {
     console.error('[skill-consolidation] extractAbstraction LLM call failed:', err.message);
     return { abstractionKey: null, abstractionValue: null, saved: false };
@@ -199,7 +202,8 @@ Output:
       memory_type: 'procedural',
       clearance_level: 3,
       source: 'skill-consolidation',
-    });
+      source_memory_ids: skillCluster.skillIds,
+    }, { nativeToolInputs: modelInputs });
 
     await logEvent(cid, 'skill-consolidation', 'abstraction_extracted', abstractionKey, {
       reasoning: `Extracted abstraction from ${skillCluster.skillIds.length} similar skills. Pattern: ${abstraction?.shared_pattern?.slice(0, 100) || 'n/a'}`,
@@ -222,25 +226,17 @@ Output:
  * @param {string} [companyId]
  * @returns {Promise<Array<{skillIdA: string, skillIdB: string, contradiction: string}>>}
  */
-export async function detectSkillContradictions(skillCluster, companyId) {
+export async function detectSkillContradictions(skillCluster, companyId, { canonicalMemories = [] } = {}) {
   const cid = companyId || COMPANY;
 
   if (!Array.isArray(skillCluster?.skillIds) || skillCluster.skillIds.length < 2) {
     return [];
   }
 
-  let skillRows;
-  try {
-    const result = await query(
-      `SELECT id, key, value FROM aimos_memories
-       WHERE id = ANY($1) AND company_id = $2`,
-      [skillCluster.skillIds, cid]
-    );
-    skillRows = result.rows;
-  } catch (err) {
-    console.error('[skill-consolidation] detectSkillContradictions fetch error:', err.message);
-    return [];
-  }
+  void cid;
+  const skillById = new Map(canonicalMemories.map((memory) => [String(memory?.id || ''), memory]));
+  const skillRows = skillCluster.skillIds.map((id) => skillById.get(String(id))).filter(Boolean);
+  if (skillRows.length !== skillCluster.skillIds.length) return [];
 
   const summaries = skillRows
     .map((r) => `ID: ${r.id}\nKey: ${r.key}\nValue: ${String(r.value || '').slice(0, 250)}`)
@@ -289,10 +285,12 @@ export async function promoteProvisionalSkill(skillId, companyId) {
   try {
     const result = await query(
       `SELECT projected.id, projected.key, projected.value, projected.memory_type,
+              projected.agent_id,
               projected.scope, projected.clearance_level, projected.data_class
          FROM aimos_memories requested
          JOIN LATERAL (
            SELECT version.id, version.key, version.value, version.memory_type,
+                  version.agent_id,
                   version.scope, version.clearance_level, version.data_class
              FROM aimos_memories version
            WHERE version.company_id = requested.company_id
@@ -353,7 +351,7 @@ export async function promoteProvisionalSkill(skillId, companyId) {
   try {
     const saved = await executeHousekeeperCanonicalSave({
       company_id: cid,
-      agent_id: 'skill-consolidation',
+      agent_id: row.agent_id,
       key: row.key,
       value: JSON.stringify(valueObj),
       scope: row.scope || 'system',
@@ -362,6 +360,7 @@ export async function promoteProvisionalSkill(skillId, companyId) {
       data_class: row.data_class || 'internal',
       source: 'skill-consolidation',
       supersedes_id: row.id,
+      source_memory_ids: [row.id],
     });
     if (!saved?.id || saved.rejected) {
       throw new Error(saved?.reason || 'promotion_persistence_failed');

@@ -14,6 +14,7 @@ import {
   createP2RecallCryptographicVectors,
 }
   from '../../scripts/verification/mutmem-p2-crypto-vector-factory.mjs';
+import { createMutMemPortablePredicateVectorsV2 } from '../../scripts/verification/mutmem-portable-predicate-fixture-factory.mjs';
 
 import {
   MutMemMutationVerificationError,
@@ -74,8 +75,8 @@ function python(request) {
   return JSON.parse(run.stdout);
 }
 
-test('P2 independent Node and Python recall verifiers reproduce all 39 P1 structural terminals', async () => {
-  const vectors = (await json(RECALL_VECTORS)).vectors;
+test('P2 independent Node and Python recall verifiers reproduce every current structural terminal', async () => {
+  const vectors = createMutMemPortablePredicateVectorsV2();
   const nodeTerminals = vectors.map((vector) => {
     try {
       verifyRecallEnvelope(vector.bundle, { verifyCryptography: false });
@@ -197,7 +198,7 @@ test('P2 deterministic mutation-witness cryptographic vectors have exact Node/Py
   assert.deepEqual(pythonTerminals, expected);
 });
 
-test('P2 committed cryptographic vectors are deterministic, self-hashed, and failure-complete', async () => {
+test('P2 historical vectors stay self-hashed; current cryptographic vectors are deterministic and failure-complete', async () => {
   const [bytes, hashLine] = await Promise.all([
     readFile(CRYPTO_VECTORS),
     readFile(new URL(`${CRYPTO_VECTORS.href}.sha256`), 'utf8'),
@@ -208,16 +209,25 @@ test('P2 committed cryptographic vectors are deterministic, self-hashed, and fai
   assert.equal(sha(bytes), fileHash);
   const { manifest_sha256: manifestHash, ...unsigned } = artifact;
   assert.equal(sha(Buffer.from(canonicalJson(unsigned), 'utf8')), manifestHash);
-  assert.deepEqual(artifact.recall.vectors, createP2RecallCryptographicVectors());
-  assert.deepEqual(artifact.mutation.vectors, createP2MutationCryptographicVectors());
+  const recall = createP2RecallCryptographicVectors();
+  const mutation = createP2MutationCryptographicVectors();
+  assert.deepEqual(recall, createP2RecallCryptographicVectors());
+  assert.deepEqual(mutation, createP2MutationCryptographicVectors());
+  // The old receipt did not bind its Merkle schema. Preserve its bytes and
+  // demonstrate that current verification rejects it rather than re-signing it.
+  for (const vector of artifact.recall.vectors.filter(v => v.expected === 'valid')) {
+    assert.throws(() => verifyRecallEnvelope(vector.bundle, {
+      expectedMasterFingerprint: vector.expected_master_fingerprint,
+    }), error => error.reason === 'EVENT_RECEIPT_BINDING_INVALID');
+  }
   assert.deepEqual(
-    artifact.recall.vectors.filter((vector) => vector.expected === 'invalid')
+    recall.filter((vector) => vector.expected === 'invalid')
       .map((vector) => vector.reason).sort(),
     [...CRYPTOGRAPHIC_FAILURE_CODES].sort(),
   );
   assert.deepEqual(
     [
-      ...artifact.mutation.vectors.filter((vector) => vector.expected === 'invalid')
+      ...mutation.filter((vector) => vector.expected === 'invalid')
         .map((vector) => vector.reason),
       'MUTATION_CRYPTOGRAPHIC_WITNESS_REQUIRED',
     ].sort(),

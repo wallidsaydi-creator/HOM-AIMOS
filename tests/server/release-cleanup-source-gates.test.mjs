@@ -103,19 +103,19 @@ test('dead direct dependencies are absent and the maintained transformer runtime
   }
 
   assert.equal(packageJson.dependencies?.['@xenova/transformers'], undefined);
-  assert.equal(packageJson.dependencies?.['@huggingface/transformers'], '^4.2.0');
+  assert.equal(packageJson.dependencies?.['@huggingface/transformers'], '^4.3.0');
   assert.equal(lock.packages?.['node_modules/nodemailer'], undefined);
   assert.equal(lock.packages?.['node_modules/playwright'], undefined);
   assert.equal(lock.packages?.['node_modules/playwright-core'], undefined);
   assert.equal(lock.packages?.['node_modules/@xenova/transformers'], undefined);
   assert.equal(
     lock.packages?.['node_modules/@huggingface/transformers']?.dependencies?.sharp,
-    '^0.34.5'
+    '^0.35.4'
   );
-  assert.equal(packageJson.overrides?.sharp, '0.35.3');
-  assert.equal(packageJson.overrides?.['adm-zip'], '0.6.0');
-  assert.equal(lock.packages?.['node_modules/sharp']?.version, '0.35.3');
-  assert.equal(lock.packages?.['node_modules/adm-zip']?.version, '0.6.0');
+  assert.equal(packageJson.overrides?.sharp, '0.35.4');
+  assert.equal(packageJson.overrides?.['adm-zip'], '0.6.1');
+  assert.equal(lock.packages?.['node_modules/sharp']?.version, '0.35.4');
+  assert.equal(lock.packages?.['node_modules/adm-zip']?.version, '0.6.1');
 
   const embeddings = read('services/core/embeddings.js');
   assert.match(embeddings, /const MODEL_REVISION = '[0-9a-f]{40}'/);
@@ -188,7 +188,10 @@ test('obsolete paper draft and local package configuration are absent from the r
   const npmIgnore = read('.npmignore');
   assert.match(npmIgnore, /^\.claude\/$/m);
   assert.match(npmIgnore, /^engineering\/$/m);
-  assert.match(npmIgnore, /^baselines\/$/m);
+  assert.match(npmIgnore, /^baselines\/\*$/m);
+  assert.match(npmIgnore, /^!baselines\/live-canonical\/$/m);
+  assert.match(npmIgnore, /^baselines\/live-canonical\/\*$/m);
+  assert.match(npmIgnore, /^!baselines\/live-canonical\/migration-098-099-uncertainty\.json$/m);
   assert.match(npmIgnore, /^docs\/security\/\*\.pdf$/m);
   assert.match(npmIgnore, /^paper\/\*\.aux$/m);
   assert.match(npmIgnore, /^paper\/\*\.out$/m);
@@ -200,4 +203,8 @@ test('public repository builder requires manifest-to-git exact set equality', ()
   assert.match(builder, /public_release_source_untracked/);
   assert.match(builder, /git', \['ls-files', '-z'\]/);
   assert.match(builder, /public_release_git_tree_mismatch/);
+
+  const verifier = read('scripts/test/verify-public-source-tree.mjs');
+  assert.match(verifier, /\['rev-list', '--max-parents=0', 'HEAD'\]/);
+  assert.doesNotMatch(verifier, /\['rev-list', '--max-parents=0', '--all'\]/);
 });

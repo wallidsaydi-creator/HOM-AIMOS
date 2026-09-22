@@ -1,9 +1,7 @@
 import express from 'express';
 import { randomUUID } from 'crypto';
-import { URL } from 'url';
-import dns from 'node:dns';
-import net from 'node:net';
-import { fetchWithTimeout } from '../services/orchestration/http.js';
+import { performance } from 'node:perf_hooks';
+import { fetchWithTimeout, assertPublicHttpUrl } from '../services/orchestration/http.js';
 import { buildAimosMcpManifest } from '../services/orchestration/aimos-mcp-catalog.js';
 import { withTransaction } from '../db/connection.js';
 import { logEvent, readVerifiedEventById } from '../services/observe/event-ledger.js';
@@ -53,118 +51,6 @@ async function hydrateConnections() {
   }
 }
 
-/**
- * R1 Step 7: SSRF protection with DNS resolution.
- *
- * The old filter only matched LITERAL private-IP / localhost strings, so a
- * hostname that *resolves* to 127.0.0.1 (DNS rebinding) sailed through, and
- * callRemote re-fetched the stored URL without re-validating. Now:
- *   - the hostname is RESOLVED and EVERY resolved address is checked against
- *     the private / loopback / link-local / metadata blocklist, and
- *   - validation runs again at fetch time (callRemote), so a record that
- *     flipped to a private address after connect is caught.
- */
-function ipIsBlocked(ip) {
-  const kind = net.isIP(ip);
-  if (kind === 4) {
-    const o = ip.split('.').map(Number);
-    if (o.some((n) => !Number.isInteger(n) || n < 0 || n > 255)) return true;
-    const [a, b] = o;
-    return (
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 169 && b === 254) ||        // link-local + 169.254.169.254 metadata
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 100 && b >= 64 && b <= 127) || // CGNAT 100.64.0.0/10
-      a >= 224                            // multicast / reserved
-    );
-  }
-  if (kind === 6) {
-    const v = ip.toLowerCase();
-    // IPv4-mapped (::ffff:a.b.c.d) — extract and re-check the IPv4.
-    const mapped = v.match(/::ffff:(\d+\.\d+\.\d+\.\d+)$/);
-    if (mapped) return ipIsBlocked(mapped[1]);
-    return (
-      v === '::1' || v === '::' ||
-      v.startsWith('fe80') ||   // link-local
-      v.startsWith('fc') || v.startsWith('fd') || // unique-local
-      v.startsWith('fec0')      // deprecated site-local
-    );
-  }
-  return true; // unparseable → block
-}
-
-function isBlockedHostnameLiteral(hostname) {
-  return (
-    hostname === 'localhost' ||
-    hostname === '0.0.0.0' ||
-    hostname.endsWith('.localhost')
-  );
-}
-
-async function assertSafeUrl(raw) {
-  let parsed;
-  try {
-    parsed = new URL(raw);
-  } catch {
-    const err = new Error('Invalid URL');
-    err.statusCode = 400;
-    throw err;
-  }
-
-  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
-    const err = new Error('Only http and https protocols are allowed');
-    err.statusCode = 400;
-    throw err;
-  }
-
-  let hostname = parsed.hostname.toLowerCase();
-  if (hostname.startsWith('[') && hostname.endsWith(']')) {
-    hostname = hostname.slice(1, -1); // strip IPv6 brackets
-  }
-
-  if (isBlockedHostnameLiteral(hostname)) {
-    const err = new Error('Requests to localhost are not allowed');
-    err.statusCode = 400;
-    throw err;
-  }
-
-  // If the host is already a literal IP, validate it directly (no DNS).
-  if (net.isIP(hostname)) {
-    if (ipIsBlocked(hostname)) {
-      const err = new Error('Requests to private/internal IP addresses are not allowed');
-      err.statusCode = 400;
-      throw err;
-    }
-    return parsed;
-  }
-
-  // Resolve the hostname and validate EVERY resolved address.
-  let addresses;
-  try {
-    addresses = await dns.promises.lookup(hostname, { all: true });
-  } catch {
-    const err = new Error('Hostname could not be resolved');
-    err.statusCode = 400;
-    throw err;
-  }
-  if (!addresses.length) {
-    const err = new Error('Hostname resolved to no addresses');
-    err.statusCode = 400;
-    throw err;
-  }
-  for (const { address } of addresses) {
-    if (ipIsBlocked(address)) {
-      const err = new Error('Hostname resolves to a private/internal address (SSRF blocked)');
-      err.statusCode = 400;
-      throw err;
-    }
-  }
-  return parsed;
-}
-
 function normalizeUrl(value) {
   const url = String(value || '').trim();
   if (!url) return '';
@@ -189,21 +75,21 @@ async function callRemote(connection, path, options = {}, authority = null) {
     parentEventId: authority?.requestAdmissionEventId || connection.eventId || null,
   });
   let terminalCommitted = false;
+  let res;
   try {
-  // R1 Step 7: re-validate at FETCH time. The stored URL is re-resolved and
-  // re-checked so a DNS record that flipped to a private address after connect
-  // (rebinding) is rejected before we ever open the socket.
-  await assertSafeUrl(connection.url);
   const headers = {
     'Content-Type': 'application/json',
     ...(connection.headers || {}),
     ...(options.headers || {})
   };
-  const res = await fetchWithTimeout(`${connection.url}${path}`, {
+  res = await fetchWithTimeout(`${connection.url}${path}`, {
     ...options,
-    headers
+    headers,
+    signal: options.signal ?? authority?.signal,
+    deadlineAt: options.deadlineAt,
+    destinationPolicy: 'public',
   }, 12_000);
-  const payload = await res.json().catch(() => ({}));
+  const payload = await res.json();
   if (!res.ok) {
     await materialEffectOwner.finish({
       action: effect,
@@ -239,6 +125,8 @@ async function callRemote(connection, path, options = {}, authority = null) {
       }
     }
     throw error;
+  } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
   }
 }
 
@@ -251,7 +139,7 @@ async function createConnectionFromBody(body = {}, authority = null) {
     throw error;
   }
 
-  await assertSafeUrl(url);
+  assertPublicHttpUrl(url);
   if (Object.keys(headers).length) {
     const error = new Error('inline MCP headers are forbidden; use the credential lifecycle owner');
     error.statusCode = 400;
@@ -275,7 +163,7 @@ async function createConnectionFromBody(body = {}, authority = null) {
     protocol: 'mcp',
     status: 'connected',
     metadata,
-    reasoning: 'The verified actor retained one SSRF-validated credential-free MCP connection projection.',
+    reasoning: 'The verified actor retained one credential-free MCP connection projection; public DNS/dial authority is enforced on each outbound call.',
   }, authority?.requestAdmissionEventId || null, { authority, returnReceipt: true });
 
   const connection = {
@@ -355,11 +243,12 @@ router.get('/tools', async (req, res) => {
     const connection = await resolveConnection(connectionId);
     const authority = verifiedRequestAuthorityFromRequest(req);
     let payload;
+    const deadlineAt = performance.now() + 12_000;
     try {
-      payload = await callRemote(connection, '/mcp/tools', { method: 'GET' }, authority);
+      payload = await callRemote(connection, '/mcp/tools', { method: 'GET', deadlineAt }, authority);
     } catch (error) {
       if (!error?.definiteRemoteRejection || ![404, 405].includes(Number(error.statusCode))) throw error;
-      payload = await callRemote(connection, '/tools', { method: 'GET' }, authority);
+      payload = await callRemote(connection, '/tools', { method: 'GET', deadlineAt }, authority);
     }
     res.json({ success: true, ...payload });
   } catch (error) {
@@ -380,15 +269,18 @@ router.post('/execute', async (req, res) => {
     const connection = await resolveConnection(connectionId);
     const authority = verifiedRequestAuthorityFromRequest(req);
     let payload;
+    const deadlineAt = performance.now() + 12_000;
     try {
       payload = await callRemote(connection, '/mcp/execute', {
         method: 'POST',
+        deadlineAt,
         body: JSON.stringify({ tool, args })
       }, authority);
     } catch (error) {
       if (!error?.definiteRemoteRejection || ![404, 405].includes(Number(error.statusCode))) throw error;
       payload = await callRemote(connection, '/execute', {
         method: 'POST',
+        deadlineAt,
         body: JSON.stringify({ tool, args })
       }, authority);
     }

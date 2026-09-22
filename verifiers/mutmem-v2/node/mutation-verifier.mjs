@@ -3,6 +3,8 @@
 import {
   canonicalBytes,
   canonicalJson,
+  eventPayloadCommitment,
+  eventPayloadBody,
   exactBase64url,
   exactHashBytes,
   framedUtf8,
@@ -11,10 +13,14 @@ import {
   uuidBytes,
   verifyEd25519,
   verifyPayloadSignature,
+  verifyEventPayloadSignature,
+  retainedProvenanceMessage, legacyOccurrenceReference, decodeCertificate, verifyCertificate,
+  occurrenceCommitmentV3, occurrenceSignatureMessageV3, parseJsonWire,
 } from './crypto-kernel.mjs';
 import { verifyRecallEnvelope } from './recall-verifier.mjs';
 
 export const MUTATION_FAILURE_CODES = Object.freeze([
+  'MUTATION_ANCESTRY_REQUIRED','MUTATION_ANCESTRY_BINDING_INVALID','MUTATION_ANCESTRY_BRIDGE_INVALID','MUTATION_ANCESTRY_PARENT_INVALID',
   'MUTATION_BUNDLE_COMMITMENT_INVALID', 'MUTATION_OUTCOME_SCHEMA_INVALID',
   'MUTATION_RECALL_BINDING_INVALID', 'MUTATION_OUTCOME_EVENT_INVALID',
   'MUTATION_VALENCE_BINDING_INVALID', 'MUTATION_TERMINAL_KIND_INVALID',
@@ -103,50 +109,87 @@ function witnessHash(body) {
   return sha256Hex(Buffer.concat([WITNESS_DOMAIN, canonicalBytes(body)]));
 }
 
+function sameTimestamp(left, right) {
+  if (typeof left !== 'string' || typeof right !== 'string') return false;
+  try { return new Date(left).toISOString() === new Date(right).toISOString(); }
+  catch { return false; }
+}
+
 function sameIdentity(proof, housekeeper) {
-  return proof.signer_agent_id === 'housekeeper'
+  try { return proof.signer_agent_id === 'housekeeper'
+    && typeof proof.signer_valid_from === 'string'
+    && proof.identity_tier === housekeeper.identity_tier
+    && Number.isSafeInteger(proof.ts_signed)
+    && proof.ts_signed * 1000 >= Date.parse(housekeeper.valid_from)
+    && proof.ts_signed * 1000 <= Date.parse(housekeeper.valid_until)
+    && ['signer_valid_until', 'agent_valid_until'].every(field => !Object.hasOwn(proof, field)
+      || (typeof proof[field] === 'string'
+        && new Date(proof[field]).toISOString() === new Date(housekeeper.valid_until).toISOString()))
     && new Date(proof.signer_valid_from).toISOString()
       === new Date(housekeeper.valid_from).toISOString()
     && proof.cert_fingerprint === housekeeper.cert_fingerprint
     && proof.signer_public_key_b64u === housekeeper.public_key_b64u
     && proof.signer_certificate === housekeeper.certificate;
+  } catch { return false; }
+}
+
+// Summaries do not carry their own authority. Every repeated field must agree
+// with the full witness whose signed body is checked below.
+function sameRepeatedFields(summary, proof, fields) {
+  return fields.every((field) => !Object.hasOwn(summary, field)
+    || (Object.hasOwn(proof, field)
+      && canonicalJson(summary[field]) === canonicalJson(proof[field])));
 }
 
 function verifyFullEvent(proof, summary, housekeeper) {
+  if (!proof) return false;
+  try {
+    const body = eventPayloadBody(proof);
+    proof = { ...proof, signed_body: body,
+      metadata: Object.hasOwn(proof,'metadata') ? proof.metadata
+        : Object.hasOwn(proof,'signed_body_bytes_b64u') ? body?.metadata : undefined };
+  } catch { return false; }
   const summaryId = summary.event_id || summary.id;
   if (!proof || proof.event_id !== summaryId || proof.operation !== summary.operation
+      || typeof proof.timestamp !== 'string'
+      || !['event_id', 'id'].every(field => !Object.hasOwn(summary, field) || summary[field] === proof.event_id)
+      || (Object.hasOwn(proof, 'id') && proof.id !== proof.event_id)
+      || !Number.isSafeInteger(proof.ledger_seq) || proof.ledger_seq < 1
       || proof.parent_event_id !== (summary.parent_event_id ?? null)
       || proof.mutation_hash !== summary.mutation_hash
       || canonicalJson(proof.metadata) !== canonicalJson(summary.metadata)
       || proof.proof_required !== true || proof.ledger_version !== 1
-      || !sameIdentity(proof, housekeeper)) return false;
+      || !sameIdentity(proof, housekeeper)
+      || !sameRepeatedFields(summary, proof, [
+        'company_id', 'subject_agent_id', 'key', 'timestamp', 'ledger_seq',
+        'signer_agent_id', 'signer_valid_from', 'cert_fingerprint', 'identity_tier',
+        'authority_kind', 'ts_signed', 'nonce', 'content_hash', 'prev_mutation_hash',
+        'signature_b64u', 'signed_body', 'signed_body_bytes_b64u', 'signer_valid_until',
+        'signer_public_key_b64u', 'signer_certificate',
+      ])) return false;
   const body = proof.signed_body;
   if (!body || body.event_id !== proof.event_id || body.company_id !== proof.company_id
+      || typeof body.signer_valid_from !== 'string'
       || body.subject_agent_id !== proof.subject_agent_id
       || body.signer_agent_id !== proof.signer_agent_id
-      || new Date(body.signer_valid_from).toISOString()
-        !== new Date(proof.signer_valid_from).toISOString()
+      || !sameTimestamp(body.signer_valid_from, proof.signer_valid_from)
       || body.cert_fingerprint !== proof.cert_fingerprint
       || body.identity_tier !== proof.identity_tier
       || body.authority_kind !== proof.authority_kind || body.operation !== proof.operation
       || body.key !== proof.key || canonicalJson(body.metadata) !== canonicalJson(proof.metadata)
       || body.parent_event_id !== (proof.parent_event_id ?? null)
-      || Number(body.ledger_seq) !== Number(proof.ledger_seq)
+      || body.ledger_seq !== proof.ledger_seq
       || body.prev_mutation_hash !== proof.prev_mutation_hash
-      || Number(body.ts_signed) !== Number(proof.ts_signed)
+      || body.ts_signed !== proof.ts_signed
       || new Date(proof.timestamp).getTime() !== Number(proof.ts_signed) * 1000) return false;
-  const contentHash = sha256Hex(canonicalBytes(body));
+  let contentHash;
+  try { contentHash = eventPayloadCommitment(proof).toString('hex'); }
+  catch { return false; }
   if (proof.content_hash !== contentHash
       || proof.mutation_hash !== eventMutationHash(
         proof.prev_mutation_hash, contentHash, proof.nonce, proof.ts_signed,
       )) return false;
-  return verifyPayloadSignature({
-    publicKey: housekeeper.public_key_b64u,
-    body,
-    nonce: proof.nonce,
-    signedTs: Number(proof.ts_signed),
-    signature: proof.signature_b64u,
-  });
+  return verifyEventPayloadSignature(proof, housekeeper.public_key_b64u);
 }
 
 function verifyValenceProof(proof, summary, bundle, housekeeper) {
@@ -154,7 +197,19 @@ function verifyValenceProof(proof, summary, bundle, housekeeper) {
       || proof.row_hash !== summary.row_hash || proof.reward_sign !== summary.reward_sign
       || canonicalJson(proof.body_json) !== canonicalJson(summary.body_json)
       || proof.memory_id !== bundle.outcome_evidence.memory_id
-      || proof.company_id !== bundle.company_id) return false;
+      || proof.company_id !== bundle.company_id
+      || !sameRepeatedFields(summary, proof, [
+        'company_id', 'memory_id', 'context_hash', 'identity_tier', 'ts_signed',
+        'signer_agent_id', 'signer_valid_from', 'cert_fingerprint', 'signature_b64u',
+        'nonce', 'content_hash', 'prev_hash', 'signer_valid_until',
+        'signer_public_key_b64u', 'signer_certificate',
+      ])) return false;
+  const body = proof.body_json;
+  if (!body || body.event_type !== 'VALENCE'
+      || ![-1, 1].includes(body.reward_sign) || body.reward_sign !== proof.reward_sign
+      || body.memory_id !== proof.memory_id || body.company_id !== proof.company_id
+      || body.context_hash !== proof.context_hash || body.identity_tier !== proof.identity_tier
+      || !Number.isSafeInteger(proof.ts_signed)) return false;
   const contentHash = sha256Hex(canonicalBytes(proof.body_json));
   const rowHash = sha256Hex(Buffer.concat([
     Buffer.from(contentHash, 'hex'),
@@ -166,8 +221,7 @@ function verifyValenceProof(proof, summary, bundle, housekeeper) {
       || proof.body_json.ts_signed !== proof.ts_signed
       || proof.body_json.cert_fingerprint !== proof.cert_fingerprint
       || proof.body_json.signer_agent_id !== proof.signer_agent_id
-      || new Date(proof.body_json.signer_valid_from).toISOString()
-        !== new Date(proof.signer_valid_from).toISOString()) return false;
+      || !sameTimestamp(proof.body_json.signer_valid_from, proof.signer_valid_from)) return false;
   return verifyPayloadSignature({
     publicKey: housekeeper.public_key_b64u,
     body: proof.body_json,
@@ -183,11 +237,16 @@ function verifyProvenanceProof(proof, summary, housekeeper) {
       || proof.mutation_hash !== summary.mutation_hash
       || canonicalJson(proof.body_json) !== canonicalJson(summary.body_json)
       || proof.event_type !== 'REWEIGHT' || proof.body_json.event_type !== 'REWEIGHT'
+      || (Object.hasOwn(proof, 'is_genesis') && proof.is_genesis !== false)
       || proof.backfilled !== false || !sameIdentity({
         ...proof,
         signer_agent_id: proof.agent_id,
         signer_valid_from: proof.agent_valid_from,
-      }, housekeeper)) return false;
+      }, housekeeper)
+      || !sameRepeatedFields(summary, proof, Object.keys(proof))) return false;
+  if (proof.body_json.memory_id !== proof.memory_id
+      || proof.body_json.company_id !== housekeeper.company_id
+      || (Object.hasOwn(proof.body_json, 'ts_signed') && proof.body_json.ts_signed !== proof.ts_signed)) return false;
   const contentHash = sha256Hex(canonicalBytes(proof.body_json));
   const pieces = [
     Buffer.from(contentHash, 'hex'),
@@ -211,6 +270,114 @@ function verifyProvenanceProof(proof, summary, housekeeper) {
   });
 }
 
+function validateAncestry(bundle) {
+  const p=bundle.terminal?.reweight_provenance;
+  if (!p?.body_json || !Object.hasOwn(p.body_json,'ancestry_binding')) return null;
+  const b=p.body_json.ancestry_binding, projection=bundle.cognitive_projection;
+  const exact=(v,keys)=>v && typeof v==='object' && !Array.isArray(v)
+    && Object.keys(v).length===keys.length && keys.every(k=>Object.hasOwn(v,k));
+  const ref=(r,kinds,value,keys)=>exact(r,keys) && kinds.includes(r.kind)
+    && (value===null ? r.kind==='genesis' && r.commitment_hex===null
+      : r.kind!=='genesis' && typeof value==='string' && HEX32.test(value) && r.commitment_hex===value);
+  if (!Object.hasOwn(p,'prev_mutation_hash') || !exact(b,['schema','native_predecessor','projection_predecessor'])
+    || b.schema!=='hom.aimos.cognitive-ancestry-binding/v1'
+    || !ref(b.native_predecessor,['genesis','mutation_hash','occurrence_ref'],p.prev_mutation_hash,['kind','commitment_hex','provenance_id'])
+    || (p.prev_mutation_hash===null ? b.native_predecessor.provenance_id!==null
+      : !UUID.test(String(b.native_predecessor.provenance_id||'')))
+    || !ref(b.projection_predecessor,['genesis','projection_hash'],projection.prev_projection_hash,['kind','commitment_hex']))
+    fail('MUTATION_ANCESTRY_BINDING_INVALID');
+  return b;
+}
+
+function verifyAncestryParent(parent, binding, bundle, trustContext, housekeeper) {
+  const ref=binding.native_predecessor;
+  if(ref.kind==='genesis') { if(parent!=null) fail('MUTATION_ANCESTRY_PARENT_INVALID'); return 0; }
+  try {
+    if(!parent || parent.provenance_id!==ref.provenance_id || parent.memory_id!==bundle.outcome_evidence.memory_id
+      || parent.provenance_id===bundle.terminal.reweight_provenance.provenance_id
+      || parent.body_json_encoding!=='hom-aimos/canonical-json/v1' || Object.hasOwn(parent,'body_json'))
+      throw new Error('parent_binding');
+    const cert=decodeCertificate(parent.signer_certificate).body;
+    const fingerprint=sha256Hex(Buffer.from(parent.signer_certificate));
+    const epoch=new Date(parent.agent_valid_from).getTime();
+    const trust=trustContext.objects.find(o=>o.kind==='trust_anchor')?.body;
+    const self=cert.issuer==='housekeeper' && parent.signer_certificate===housekeeper.certificate;
+    if(!trust || (!self && !['aimos-master',trustContext.expected_master_fingerprint].includes(cert.issuer))
+      || cert.agent_id!==parent.agent_id || fingerprint!==parent.cert_fingerprint
+      || !Number.isSafeInteger(epoch) || epoch!==cert.valid_from*1000
+      || new Date(epoch).toISOString()!==parent.agent_valid_from
+      || !verifyCertificate({certificate:parent.signer_certificate,
+        authorityPublicKey:self?housekeeper.public_key_b64u:trust.master_public_key_b64u,
+        expectedAgentId:parent.agent_id,expectedSubjectPublicKey:cert.pubkey,atUnixSeconds:parent.ts_signed}).valid)
+      throw new Error('parent_certificate');
+    if(!Array.isArray(parent.revocation_events) || !Object.hasOwn(parent,'identity_revoked_at')) throw new Error('parent_revocation');
+    if(parent.identity_revoked_at!==null) {
+      const revoked=new Date(parent.identity_revoked_at).getTime();
+      if(!Number.isSafeInteger(revoked) || new Date(revoked).toISOString()!==parent.identity_revoked_at
+        || revoked<=parent.ts_signed*1000) throw new Error('parent_revocation');
+    }
+    for(const rev of parent.revocation_events) {
+      const b=rev.signed_body;
+      const prior=sha256Hex(canonicalBytes({agent_id:parent.agent_id,agent_valid_from:parent.agent_valid_from,target_cert_hash:fingerprint}));
+      if(!b || b.schema!=='hom.aimos.agent-revocation/v1' || b.event_type!=='REVOKE_AGENT_IDENTITY'
+        || b.agent_id!==parent.agent_id || b.agent_valid_from!==parent.agent_valid_from
+        || b.target_cert_hash!==fingerprint || b.prior_identity_hash!==prior
+        || b.master_fingerprint!==trustContext.expected_master_fingerprint
+        || rev.content_hash!==sha256Hex(canonicalBytes(b))
+        || !Number.isSafeInteger(rev.ts_signed) || Math.floor(new Date(b.revoked_at).getTime()/1000)!==rev.ts_signed
+        || rev.ts_signed<=parent.ts_signed
+        || !verifyPayloadSignature({publicKey:trust.master_public_key_b64u,body:b,nonce:rev.nonce,
+          signedTs:rev.ts_signed,signature:rev.signature_b64u})
+        || rev.mutation_hash!==sha256Hex(Buffer.concat([Buffer.from('aimos-agent-revocation-v1\0'),
+          exactHashBytes(prior),exactHashBytes(rev.content_hash),exactBase64url(rev.signature_b64u)])))
+        throw new Error('parent_revocation');
+    }
+    let body,message,commitment;
+    if(parent.sig_form_version===3) {
+      const wire=exactBase64url(parent.body_json_bytes_b64u);
+      body=parseJsonWire(new TextDecoder('utf-8',{fatal:true}).decode(wire));
+      commitment=occurrenceCommitmentV3(body);message=occurrenceSignatureMessageV3(commitment);
+      if(commitment!==parent.mutation_hash || body.company_id!==bundle.company_id || body.memory_id!==parent.memory_id
+        || body.occurrence_event_id!==parent.provenance_id || body.agent_id!==parent.agent_id
+        || body.signer_valid_from_unix_ms!==epoch || body.cert_fingerprint_hex!==fingerprint
+        || body.ts_signed_unix_seconds!==parent.ts_signed || body.request_body_hash_hex!==parent.content_hash
+        || body.event_type!==parent.event_type || body.identity_tier!==parent.identity_tier || body.nonce_hex!==parent.nonce
+        || typeof parent.is_genesis!=='boolean' || parent.is_genesis!==(parent.prev_mutation_hash===null)
+        || (body.predecessor_present===1?body.predecessor_commitment_hex:null)!==parent.prev_mutation_hash)
+        throw new Error('parent_occurrence');
+    } else {
+      const decoded=retainedProvenanceMessage(parent);body=decoded.body;message=decoded.message;
+      commitment=ref.kind==='mutation_hash'?parent.mutation_hash:legacyOccurrenceReference(parent,bundle.company_id);
+      if(body.memory_id!=null && body.memory_id!==parent.memory_id) throw new Error('parent_scope');
+      if(body.company_id!=null && body.company_id!==bundle.company_id) throw new Error('parent_scope');
+    }
+    if(ref.kind==='mutation_hash') commitment=parent.mutation_hash;
+    if(commitment!==ref.commitment_hex || !verifyEd25519(cert.pubkey,message,parent.signature_b64u)) throw new Error('parent_signature');
+    return 2+parent.revocation_events.length;
+  } catch { fail('MUTATION_ANCESTRY_PARENT_INVALID'); }
+}
+
+function verifyAncestryBridge(bundle,witness,trustContext,housekeeper,binding) {
+  const event=witness.ancestry_event, p=bundle.cognitive_projection, native=bundle.terminal.reweight_provenance;
+  let metadata,eventBody;
+  try { eventBody=eventPayloadBody(event);metadata=eventBody?.metadata; } catch { fail('MUTATION_ANCESTRY_BRIDGE_INVALID'); }
+  if(!event || !verifyFullEvent(event,{event_id:event.event_id,operation:'cognitive_ancestry_bound',
+      parent_event_id:null,mutation_hash:event.mutation_hash,metadata},housekeeper)
+    || event.key!==p.provenance_mutation_hash || event.authority_kind!=='housekeeper_autonomous'
+    || eventBody.actor_agent_id!==null || eventBody.actor_valid_from!==null || eventBody.request_envelope_digest!==null
+    || event.subject_agent_id!=='housekeeper' || metadata?.schema!=='hom.aimos.cognitive-ancestry-bridge/v1'
+    || metadata.company_id!==bundle.company_id || metadata.memory_id!==p.memory_id
+    || metadata.native_mutation_hash!==p.provenance_mutation_hash || metadata.projection_hash!==p.projection_hash
+    || canonicalJson(metadata.ancestry_binding)!==canonicalJson(binding)
+    || metadata.old_weight_milli!==p.old_weight_milli || metadata.new_weight_milli!==p.new_weight_milli
+    || metadata.signer_agent_id!==housekeeper.agent_id || metadata.signer_valid_from!==housekeeper.valid_from
+    || metadata.cert_fingerprint!==housekeeper.cert_fingerprint
+    || metadata.attestation_kind!=='atomic_transition' || metadata.historical_origin_claimed!==false
+    || witness.terminal_proof.provenance.prev_mutation_hash!==native.prev_mutation_hash)
+    fail('MUTATION_ANCESTRY_BRIDGE_INVALID');
+  return 1+verifyAncestryParent(witness.native_predecessor,binding,bundle,trustContext,housekeeper);
+}
+
 function verifyWitness(bundle, witness, trustContext, expectedMasterFingerprint) {
   if (!witness || !trustContext) fail('MUTATION_CRYPTOGRAPHIC_WITNESS_REQUIRED');
   const { witness_sha256: claimed, ...body } = witness;
@@ -229,8 +396,11 @@ function verifyWitness(bundle, witness, trustContext, expectedMasterFingerprint)
   if (witness.mutation_bundle_sha256 !== bundle.bundle_sha256
       || witness.trust_context_bundle_sha256 !== trustResult.bundle_sha256
       || witness.expected_master_fingerprint !== expectedMasterFingerprint
-      || !housekeeper) fail('MUTATION_CRYPTOGRAPHIC_WITNESS_SCOPE_INVALID');
+      || !housekeeper || housekeeper.company_id !== bundle.company_id) fail('MUTATION_CRYPTOGRAPHIC_WITNESS_SCOPE_INVALID');
   if (!verifyFullEvent(witness.outcome_event, bundle.outcome_event, housekeeper)) {
+    fail('MUTATION_OUTCOME_EVENT_SIGNATURE_INVALID');
+  }
+  if (witness.outcome_event.company_id !== bundle.company_id) {
     fail('MUTATION_OUTCOME_EVENT_SIGNATURE_INVALID');
   }
   if (!verifyValenceProof(
@@ -239,6 +409,11 @@ function verifyWitness(bundle, witness, trustContext, expectedMasterFingerprint)
     bundle,
     housekeeper,
   )) fail('MUTATION_VALENCE_SIGNATURE_INVALID');
+  const outcomeMetadata = eventPayloadBody(witness.outcome_event).metadata;
+  if (Object.hasOwn(outcomeMetadata, 'reward_sign')
+      && outcomeMetadata.reward_sign !== witness.valence_evidence.body_json.reward_sign) {
+    fail('MUTATION_VALENCE_BINDING_INVALID');
+  }
   let signatureCount = 2;
   if (bundle.terminal.kind === 'authorized_transition') {
     if (witness.terminal_proof?.kind !== 'reweight_provenance'
@@ -255,6 +430,7 @@ function verifyWitness(bundle, witness, trustContext, expectedMasterFingerprint)
     signatureCount += 2;
   } else {
     if (witness.terminal_proof?.kind !== 'terminal_event'
+        || witness.terminal_proof.event?.company_id !== bundle.company_id
         || !verifyFullEvent(
           witness.terminal_proof.event,
           bundle.terminal.event,
@@ -262,7 +438,9 @@ function verifyWitness(bundle, witness, trustContext, expectedMasterFingerprint)
         )) fail('MUTATION_TERMINAL_SIGNATURE_INVALID');
     signatureCount += 1;
   }
-  return { signatureCount, trustResult };
+  const ancestry=validateAncestry(bundle);
+  if(ancestry) signatureCount+=verifyAncestryBridge(bundle,witness,trustContext,housekeeper,ancestry);
+  return { signatureCount, trustResult, ancestryAuthenticated:Boolean(ancestry) };
 }
 
 function validateOutcome(bundle) {
@@ -299,13 +477,20 @@ function validateOutcomeEvent(bundle, outcome) {
       || event.metadata?.memory_id !== outcome.memory_id
       || event.metadata?.live_content_hash !== outcome.live_content_hash
       || event.metadata?.occurrence_ref !== outcome.occurrence_ref) fail('MUTATION_OUTCOME_EVENT_INVALID');
+  if (!sameRepeatedFields(event.metadata, outcome, [
+    'outcome_id', 'recall_event_id', 'recall_event_mutation_hash',
+    'recall_merkle_root', 'security_closure_sha256',
+  ])) fail('MUTATION_OUTCOME_EVENT_INVALID');
   return event;
 }
 
 function validateValence(bundle, outcome, outcomeEvent) {
   const valence = bundle.valence_evidence;
   const body = valence?.body_json;
-  if (!HEX32.test(String(valence?.row_hash || '')) || ![-1, 1].includes(Number(valence?.reward_sign))
+  if (!HEX32.test(String(valence?.row_hash || '')) || ![-1, 1].includes(valence?.reward_sign)
+      || (Object.hasOwn(outcomeEvent.metadata || {}, 'reward_sign')
+        && outcomeEvent.metadata.reward_sign !== valence.reward_sign)
+      || (Object.hasOwn(body || {}, 'reward_sign') && body.reward_sign !== valence.reward_sign)
       || body?.evidence_schema !== 'hom.aimos.mutation-outcome-evidence/v2'
       || body.target_scope !== outcome.target_scope || body.memory_id !== outcome.memory_id
       || body.target_live_content_hash !== outcome.live_content_hash
@@ -325,6 +510,15 @@ function validateValence(bundle, outcome, outcomeEvent) {
 function validateTerminal(bundle, outcome, outcomeEvent, valence) {
   const terminal = bundle.terminal;
   if (!TERMINALS.includes(terminal?.kind)) fail('MUTATION_TERMINAL_KIND_INVALID');
+  const terminalMetadata = terminal.event?.metadata || {};
+  if (Object.hasOwn(terminalMetadata, 'reward_sign')
+      && terminalMetadata.reward_sign !== valence.reward_sign) {
+    fail('MUTATION_VALENCE_BINDING_INVALID');
+  }
+  if (Object.hasOwn(terminalMetadata, 'context_hash')
+      && terminalMetadata.context_hash !== valence.body_json.context_hash) {
+    fail('MUTATION_VALENCE_BINDING_INVALID');
+  }
   if (terminal.kind === 'occurrence_observation') {
     if (outcome.target_scope !== 'occurrence_observation' || bundle.cognitive_projection !== null
         || terminal.event?.operation !== 'mutation_occurrence_observation_retained'
@@ -376,6 +570,7 @@ export function verifyMutationBundle(bundle, {
   trustContext = null,
   expectedMasterFingerprint = null,
   verifyCryptography = false,
+  requireAncestry = false,
 } = {}) {
   const { bundle_sha256: claimed, ...body } = bundle || {};
   if (bundle?.format?.schema !== 'hom.aimos.mutmem-portable-mutation-evidence/v2'
@@ -390,6 +585,8 @@ export function verifyMutationBundle(bundle, {
   const outcomeEvent = validateOutcomeEvent(bundle, outcome);
   const valence = validateValence(bundle, outcome, outcomeEvent);
   validateTerminal(bundle, outcome, outcomeEvent, valence);
+  const ancestry=validateAncestry(bundle);
+  if(requireAncestry && (!ancestry || !verifyCryptography)) fail('MUTATION_ANCESTRY_REQUIRED');
   const crypto = verifyCryptography
     ? verifyWitness(bundle, witness, trustContext, expectedMasterFingerprint)
     : null;
@@ -403,6 +600,8 @@ export function verifyMutationBundle(bundle, {
     external_trust_established: Boolean(crypto),
     verified_signature_count: crypto?.signatureCount || 0,
     witness_required: true,
+    ancestry_binding_authenticated:crypto?.ancestryAuthenticated || false,
+    historical_evidence_only:!ancestry,
   });
 }
 

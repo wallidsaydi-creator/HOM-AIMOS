@@ -150,6 +150,7 @@ function refreshEvent(bodies) {
     authority_mutation_hash: bodies.native_recall_receipt.authority_mutation_hash,
     request_receipt_id: bodies.native_recall_receipt.request_receipt_id,
     request_receipt_mutation_hash: bodies.native_recall_receipt.request_receipt_mutation_hash,
+    merkle_schema: bodies.native_recall_receipt.merkle_schema,
     merkle_root: bodies.native_recall_receipt.merkle_root,
     result_count: bodies.native_recall_receipt.result_count,
     evidence: bodies.native_recall_receipt.evidence,

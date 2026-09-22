@@ -8,6 +8,12 @@ from typing import Any
 from crypto_kernel import (
     canonical_bytes,
     canonical_json,
+    decode_certificate,
+    retained_provenance_message,
+    legacy_occurrence_reference,
+    verify_ed25519,
+    event_payload_commitment,
+    event_payload_body,
     exact_base64url,
     exact_hash_bytes,
     framed_utf8,
@@ -20,6 +26,7 @@ from crypto_kernel import (
     verify_certificate,
     verify_occurrence_signature_v3,
     verify_payload_signature,
+    verify_event_payload_signature,
     verify_request_context_signature,
 )
 
@@ -92,6 +99,23 @@ RETURN_PATHS = {
     "adaptive_early_exit", "normal_recall",
 }
 OBJECT_DOMAIN = b"hom.aimos.mutmem-portable-object/v2\x00"
+ORIGIN_PROFILE_HASH = "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24"
+CURRENT_RECEIPT_SCHEMA = "hom-aimos/recall-merkle/v4-origin-family-disclosure"
+PROVENANCE_FAILURE_CODES = (
+    "PROVENANCE_BYTES_INVALID", "PROVENANCE_CONTEXT_INVALID", "PROVENANCE_COMMITMENT_INVALID",
+    "PROVENANCE_CERTIFICATE_INVALID", "PROVENANCE_REVOCATION_INVALID",
+    "PROVENANCE_SIGNATURE_INVALID", "PROVENANCE_CHAIN_INVALID", "PROVENANCE_SAVE_BINDING_INVALID",
+)
+CURRENT_OBJECT_SCHEMAS = {**SCHEMAS,
+    "native_recall_receipt": "hom.aimos.mutmem-native-recall-receipt/v3",
+    "receipt_evidence": "hom.aimos.mutmem-recall-evidence-entry/v3",
+    "provenance_chain": "hom.aimos.mutmem-provenance-chain/v3",
+    "occurrence": "hom.aimos.mutmem-occurrence-evidence/v3",
+}
+ORIGIN_DISCLOSURE_FAILURE_CODES = (
+    "ORIGIN_FAMILY_PROFILE_INVALID", "ORIGIN_DISCLOSURE_LABEL_INVALID",
+    "ORIGIN_DISCLOSURE_ROOT_INVALID", "ORIGIN_DISCLOSURE_EVENT_BINDING_INVALID",
+)
 BUNDLE_DOMAIN = b"hom.aimos.mutmem-portable-evidence/v2\x00"
 RECALL_AUTHORIZATION_DOMAIN = b"aimos-recall-authorization-v1\x00"
 REQUEST_RECEIPT_DOMAIN = b"aimos-request-receipt-v1\x00"
@@ -105,7 +129,7 @@ class MutMemRecallVerificationError(ValueError):
 
 
 def fail(reason: str) -> None:
-    if reason not in STRUCTURAL_FAILURE_CODES and reason not in CRYPTOGRAPHIC_FAILURE_CODES:
+    if reason not in STRUCTURAL_FAILURE_CODES and reason not in CRYPTOGRAPHIC_FAILURE_CODES and reason not in ORIGIN_DISCLOSURE_FAILURE_CODES and reason not in PROVENANCE_FAILURE_CODES:
         raise MutMemRecallVerificationError("UNDECLARED_FAILURE_CODE")
     raise MutMemRecallVerificationError(reason)
 
@@ -271,20 +295,23 @@ def _reconstruct_envelope(envelope: dict) -> dict:
         fingerprint = _string(envelope.get("expected_master_fingerprint")).lower()
         if HEX32.fullmatch(fingerprint) is None:
             fail("ENVELOPE_COMMITMENT_INVALID")
+        current = (envelope.get("format") or {}).get("schema") == "hom.aimos.mutmem-portable-evidence/v3"
         bundle_hash = sha256_hex(
-            BUNDLE_DOMAIN + framed_utf8(envelope.get("bundle_id"))
+            (b"hom.aimos.mutmem-portable-evidence/v3\x00" if current else BUNDLE_DOMAIN) + framed_utf8(envelope.get("bundle_id"))
             + framed_utf8(envelope.get("company_id")) + bytes.fromhex(fingerprint)
             + u64(result_count) + bytes.fromhex(root)
         )
         fmt = envelope.get("format") or {}
         if (
-            fmt.get("schema") != "hom.aimos.mutmem-portable-evidence/v2"
-            or fmt.get("version") != 2 or fmt.get("profile") != "recall_disclosure"
+            set(fmt) != {"schema", "version", "profile", "canonicalization", "hash", "signature", "trust_anchor_mode", "native_receipt_schema"}
+            or fmt.get("schema") != f"hom.aimos.mutmem-portable-evidence/v{3 if current else 2}"
+            or type(fmt.get("version")) is not int or fmt.get("version") != (3 if current else 2)
+            or fmt.get("profile") != "recall_disclosure"
             or fmt.get("canonicalization") != "hom-aimos/canonical-json/v1"
             or fmt.get("hash") != "sha256" or fmt.get("signature") != "ed25519"
             or fmt.get("trust_anchor_mode") != "external_expected_master_fingerprint_required"
             or fmt.get("native_receipt_schema")
-                != "hom-aimos/recall-merkle/v3-epistemic-and-security-closure"
+                != (CURRENT_RECEIPT_SCHEMA if current else "hom-aimos/recall-merkle/v3-epistemic-and-security-closure")
             or envelope.get("object_root_sha256") != root
             or envelope.get("bundle_sha256") != bundle_hash
         ):
@@ -300,8 +327,10 @@ def _reconstruct_envelope(envelope: dict) -> dict:
 
 
 def _require_schemas(state: dict) -> None:
+    schemas = CURRENT_OBJECT_SCHEMAS if state["envelope"]["format"]["version"] == 3 else SCHEMAS
     for obj in state["envelope"]["objects"]:
-        if obj["schema"] != SCHEMAS.get(obj["kind"]) or obj["body"].get("schema") != obj["schema"]:
+        retained_shape = state["envelope"]["format"]["version"] == 3 and obj["kind"] in ("provenance_chain", "occurrence") and obj["schema"] == SCHEMAS.get(obj["kind"])
+        if (not retained_shape and obj["schema"] != schemas.get(obj["kind"])) or obj["body"].get("schema") != obj["schema"]:
             fail("OBJECT_SCHEMA_INVALID")
 
 
@@ -447,8 +476,9 @@ def _validate_authority(state: dict) -> dict:
     else:
         fail("GRANT_COMMITMENT_INVALID")
     if (
-        request.get("request_sig_form") != 3 or request.get("signed_method") != "POST"
-        or request.get("signed_path") != "/aimos/recall" or not _string(request.get("nonce"))
+        request.get("request_sig_form") not in (3, 5) or request.get("signed_method") != "POST"
+        or str(request.get("signed_path") or "").split("?", 1)[0] != "/aimos/recall"
+        or (request.get("request_sig_form") == 3 and "?" in request["signed_path"]) or not _string(request.get("nonce"))
         or not isinstance(request.get("request_body"), dict)
     ):
         fail("REQUEST_CONTEXT_INVALID")
@@ -560,7 +590,7 @@ def _validate_decisions(state: dict, native: dict) -> dict:
 def _validate_results(state: dict, decisions: dict, native: dict) -> dict:
     count = state["envelope"]["result_count"]
     if (
-        native.get("merkle_schema") != "hom-aimos/recall-merkle/v3-epistemic-and-security-closure"
+        native.get("merkle_schema") != state["envelope"]["format"]["native_receipt_schema"]
         or native.get("result_count") != count or not isinstance(native.get("evidence"), list)
         or len(native["evidence"]) != count
         or decisions["projection"].get("projected_output_count") != count
@@ -574,6 +604,8 @@ def _validate_results(state: dict, decisions: dict, native: dict) -> dict:
         memory = group["memory_state"]["body"]
         provenance = group["provenance_chain"]["body"]
         occurrence = group["occurrence"]["body"]
+        if provenance["schema"].endswith("/v3") != occurrence["schema"].endswith("/v3"):
+            fail("OBJECT_SCHEMA_INVALID")
         epistemic = group["epistemic_projection"]["body"]
         receipt = group["receipt_evidence"]["body"]
         memory_id = _string(memory.get("memory_id")).lower()
@@ -666,7 +698,10 @@ def _validate_event(authority: dict, decisions: dict, evidence: list[dict]) -> d
     if native.get("merkle_root") != root:
         fail("MERKLE_ROOT_MISMATCH")
     event = native.get("event_receipt") or {}
-    body = event.get("signed_body") or {}
+    try:
+        body = event_payload_body(event) or {}
+    except (ValueError, TypeError):
+        fail("EVENT_RECEIPT_COMMITMENT_INVALID")
     metadata = body.get("metadata") or {}
     identity = authority["identity"]
     if (
@@ -680,6 +715,7 @@ def _validate_event(authority: dict, decisions: dict, evidence: list[dict]) -> d
         or metadata.get("authority_mutation_hash") != native.get("authority_mutation_hash")
         or metadata.get("request_receipt_id") != native.get("request_receipt_id")
         or metadata.get("request_receipt_mutation_hash") != native.get("request_receipt_mutation_hash")
+        or metadata.get("merkle_schema") != native.get("merkle_schema")
         or metadata.get("merkle_root") != root or metadata.get("result_count") != len(evidence)
         or not _equal(metadata.get("evidence"), evidence)
         or not _equal(metadata.get("return_projection"), native.get("return_projection"))
@@ -695,7 +731,10 @@ def _validate_event(authority: dict, decisions: dict, evidence: list[dict]) -> d
         or sha256_hex(_string(event.get("signer_certificate")).encode()) != hk.get("cert_fingerprint")
     ):
         fail("HOUSEKEEPER_IDENTITY_INVALID")
-    content_hash = _canonical_sha(body)
+    try:
+        content_hash = event_payload_commitment(event).hex()
+    except (ValueError, TypeError, KeyError, OverflowError):
+        fail("EVENT_RECEIPT_COMMITMENT_INVALID")
     mutation_hash = _event_mutation_hash(
         event.get("prev_mutation_hash"), content_hash, event.get("nonce"), event.get("ts_signed")
     )
@@ -714,6 +753,129 @@ def _validate_event(authority: dict, decisions: dict, evidence: list[dict]) -> d
     ):
         fail("REVOCATION_EVENT_BINDING_INVALID")
     return {"event": event, "root": root}
+
+
+def _validate_legacy_occurrence(state: dict, authority: dict, occurrence: dict, ordinal: int) -> int:
+    try:
+        if state["envelope"]["format"]["version"] != 3 or occurrence["schema"] != CURRENT_OBJECT_SCHEMAS["occurrence"]:
+            fail("HOUSEKEEPER_OCCURRENCE_SIGNATURE_INVALID")
+        group = state["results"][ordinal]
+        memory, provenance = group["memory_state"]["body"], group["provenance_chain"]["body"]
+        rows = provenance.get("rows")
+        if not isinstance(rows, list) or not rows:
+            fail("PROVENANCE_CHAIN_INVALID")
+        by_hash, successors, decoded, certificates = {}, {}, {}, {}
+        genesis = None
+        for row in rows:
+            if not isinstance(row, dict) or row.get("memory_id") != memory["memory_id"] or UUID.fullmatch(_string(row.get("provenance_id"))) is None or row.get("mutation_hash") in by_hash:
+                fail("PROVENANCE_CHAIN_INVALID")
+            payload = retained_provenance_message(row)
+            cert = decode_certificate(row["signer_certificate"])["body"]
+            fingerprint = sha256_hex(row["signer_certificate"].encode("utf-8"))
+            if (row.get("cert_fingerprint") != fingerprint or cert.get("agent_id") != row.get("agent_id")
+                or _iso(row.get("agent_valid_from"), "PROVENANCE_CERTIFICATE_INVALID") != row.get("agent_valid_from")
+                or _iso(row.get("agent_valid_from"), "PROVENANCE_CERTIFICATE_INVALID") != datetime.fromtimestamp(cert.get("valid_from"), tz=timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+                or (row["identity_tier"] == "T3" and (row.get("signed_claims") or {}).get("device_fp") != cert.get("device_fp"))):
+                fail("PROVENANCE_CERTIFICATE_INVALID")
+            self_hk = cert.get("issuer") == "housekeeper" and row["signer_certificate"] == authority["housekeeper_identity"]["certificate"]
+            if not self_hk and cert.get("issuer") not in ("aimos-master", state["envelope"]["expected_master_fingerprint"]):
+                fail("PROVENANCE_CERTIFICATE_INVALID")
+            if fingerprint not in certificates:
+                check = verify_certificate(certificate=row["signer_certificate"],
+                    authority_public_key=authority["housekeeper_identity"]["public_key_b64u"] if self_hk else authority["trust"]["master_public_key_b64u"],
+                    expected_agent_id=row["agent_id"], expected_subject_public_key=cert["pubkey"], at_unix_seconds=int(row["ts_signed"]))
+                if not check["valid"]:
+                    fail("PROVENANCE_CERTIFICATE_INVALID")
+                certificates[fingerprint] = cert
+            if row["ts_signed"] < cert["valid_from"] or row["ts_signed"] > cert["valid_until"]:
+                fail("PROVENANCE_CERTIFICATE_INVALID")
+            if not isinstance(row.get("revocation_events"), list) or "identity_revoked_at" not in row:
+                fail("PROVENANCE_REVOCATION_INVALID")
+            if row.get("identity_revoked_at") is not None:
+                normalized_revocation = _iso(row["identity_revoked_at"], "PROVENANCE_REVOCATION_INVALID")
+                if normalized_revocation != row["identity_revoked_at"] or datetime.fromisoformat(normalized_revocation.replace("Z", "+00:00")).timestamp() <= row["ts_signed"]:
+                    fail("PROVENANCE_REVOCATION_INVALID")
+            for revocation in row["revocation_events"]:
+                if (not isinstance(revocation, dict)
+                    or any(key not in revocation for key in ("signed_body", "agent_id", "agent_valid_from", "master_fingerprint", "target_cert_hash", "prior_identity_hash", "content_hash", "mutation_hash", "ts_signed", "nonce", "signature_b64u"))
+                    or not isinstance(revocation["signed_body"], dict)):
+                    fail("PROVENANCE_REVOCATION_INVALID")
+                body = revocation["signed_body"]
+                prior = _canonical_sha({"agent_id": row["agent_id"], "agent_valid_from": _iso(row["agent_valid_from"], "PROVENANCE_REVOCATION_INVALID"), "target_cert_hash": fingerprint})
+                content = _canonical_sha(body)
+                ts = revocation.get("ts_signed")
+                if (body.get("schema") != "hom.aimos.agent-revocation/v1" or body.get("event_type") != "REVOKE_AGENT_IDENTITY"
+                    or body.get("agent_id") != row["agent_id"] or _iso(body.get("agent_valid_from"), "PROVENANCE_REVOCATION_INVALID") != _iso(row["agent_valid_from"], "PROVENANCE_REVOCATION_INVALID")
+                    or revocation.get("agent_id") != row["agent_id"] or _iso(revocation.get("agent_valid_from"), "PROVENANCE_REVOCATION_INVALID") != _iso(row["agent_valid_from"], "PROVENANCE_REVOCATION_INVALID")
+                    or body.get("target_cert_hash") != fingerprint or revocation.get("target_cert_hash") != fingerprint
+                    or body.get("prior_identity_hash") != prior or revocation.get("prior_identity_hash") != prior
+                    or body.get("master_fingerprint") != state["envelope"]["expected_master_fingerprint"] or revocation.get("master_fingerprint") != body["master_fingerprint"]
+                    or content != revocation.get("content_hash") or isinstance(ts, bool) or not isinstance(ts, (int, float)) or ts != int(ts) or abs(ts) > 9007199254740991
+                    or _unix_seconds(body.get("revoked_at"), "PROVENANCE_REVOCATION_INVALID") != ts
+                    or revocation.get("mutation_hash") != sha256_hex(b"aimos-agent-revocation-v1\x00" + exact_hash_bytes(prior) + exact_hash_bytes(content) + exact_base64url(revocation["signature_b64u"]))
+                    or not verify_payload_signature(authority["trust"]["master_public_key_b64u"], body, revocation["nonce"], int(ts), revocation["signature_b64u"])
+                    or ts <= row["ts_signed"]):
+                    fail("PROVENANCE_REVOCATION_INVALID")
+            if not verify_ed25519(cert["pubkey"], payload["message"], row["signature_b64u"]):
+                fail("PROVENANCE_SIGNATURE_INVALID")
+            body = payload["body"]
+            if isinstance(body, dict) and ((body.get("memory_id") is not None and body["memory_id"] != memory["memory_id"])
+                or (body.get("company_id") is not None and body["company_id"] != state["envelope"]["company_id"])):
+                fail("PROVENANCE_SAVE_BINDING_INVALID")
+            by_hash[row["mutation_hash"]], decoded[row["mutation_hash"]] = row, body
+            if row["prev_mutation_hash"] is None:
+                if genesis is not None:
+                    fail("PROVENANCE_CHAIN_INVALID")
+                genesis = row
+            else:
+                if row["prev_mutation_hash"] in successors:
+                    fail("PROVENANCE_CHAIN_INVALID")
+                successors[row["prev_mutation_hash"]] = row
+        visited, cursor = set(), genesis
+        while cursor is not None:
+            if cursor["mutation_hash"] in visited:
+                fail("PROVENANCE_CHAIN_INVALID")
+            visited.add(cursor["mutation_hash"])
+            cursor = successors.get(cursor["mutation_hash"])
+        if len(visited) != len(rows):
+            fail("PROVENANCE_CHAIN_INVALID")
+        selected = by_hash.get((occurrence.get("native_body") or {}).get("mutation_hash"))
+        if (selected is None or not _equal(selected, occurrence["native_body"]) or occurrence.get("signature_b64u") != selected["signature_b64u"]
+            or occurrence.get("signer_certificate") != selected["signer_certificate"]
+            or legacy_occurrence_reference(selected, state["envelope"]["company_id"]) != occurrence["occurrence_ref"]):
+            fail("PROVENANCE_SAVE_BINDING_INVALID")
+        binding, save = by_hash.get(provenance["binding_mutation_hash"]), by_hash.get(provenance["save_mutation_hash"])
+        bind_body = decoded.get(provenance["binding_mutation_hash"])
+        if (binding is None or binding.get("event_type") != "BIND" or binding.get("agent_id") != "housekeeper"
+            or not isinstance(bind_body, dict) or bind_body.get("binding_schema_version") not in (3, 4)
+            or bind_body.get("memory_id") != memory["memory_id"] or bind_body.get("company_id") != state["envelope"]["company_id"]
+            or bind_body.get("key") != memory["key"] or bind_body.get("live_content_hash") != memory["live_content_hash"]
+            or binding.get("live_content_hash") != memory["live_content_hash"]):
+            fail("PROVENANCE_SAVE_BINDING_INVALID")
+        fields = ("key", "value", "scope", "memory_type", "clearance_level", "data_class", "source")
+        clearance = memory.get("clearance_level")
+        if (any(key not in memory for key in fields)
+            or any(memory.get(key) is not None and not isinstance(memory[key], str) for key in fields if key != "clearance_level")
+            or isinstance(clearance, bool) or not isinstance(clearance, (int, float)) or not 0 <= clearance <= 12 or clearance != int(clearance)):
+            fail("PROVENANCE_SAVE_BINDING_INVALID")
+        live_fields = {key: "" if memory.get(key) is None else _string(memory[key]) for key in fields}
+        live_fields["clearance_level"] = str(int(clearance))
+        if _canonical_sha(live_fields) != memory["live_content_hash"]:
+            fail("PROVENANCE_SAVE_BINDING_INVALID")
+        if save is not None:
+            if (save.get("event_type") != "SAVE" or bind_body.get("request_mutation_hash") != save["mutation_hash"]
+                or bind_body.get("request_content_hash") != save["content_hash"] or bind_body.get("request_signature_hash") != sha256_hex(exact_base64url(save["signature_b64u"]))
+                or bind_body.get("request_signer_agent_id") != save["agent_id"]
+                or _iso(bind_body.get("request_signer_valid_from"), "PROVENANCE_SAVE_BINDING_INVALID") != _iso(save["agent_valid_from"], "PROVENANCE_SAVE_BINDING_INVALID")
+                or binding["prev_mutation_hash"] != save["mutation_hash"]):
+                fail("PROVENANCE_SAVE_BINDING_INVALID")
+        elif selected["event_type"] == "SAVE":
+            fail("PROVENANCE_SAVE_BINDING_INVALID")
+        return len(rows) + len(certificates) + sum(len(row["revocation_events"]) for row in rows)
+    except MutMemRecallVerificationError:
+        raise
+    except Exception as error:
+        fail(error.reason if getattr(error, "reason", None) in PROVENANCE_FAILURE_CODES else "PROVENANCE_CONTEXT_INVALID")
 
 
 def _validate_cryptography(
@@ -775,16 +937,17 @@ def _validate_cryptography(
         identity["public_key_b64u"], request["request_body"], request["signed_method"],
         request["signed_path"], request["nonce"], request["ts_signed"],
         request["signature_b64u"],
+        request_form=request["request_sig_form"], claims=authority["request_receipt"]["signed_claims"],
     ):
         fail("ACTOR_REQUEST_SIGNATURE_INVALID")
     count += 1
-    if not verify_payload_signature(
-        hk["public_key_b64u"], event["signed_body"], event["nonce"],
-        event["ts_signed"], event["signature_b64u"],
-    ):
+    if not verify_event_payload_signature(event, hk["public_key_b64u"]):
         fail("HOUSEKEEPER_EVENT_SIGNATURE_INVALID")
     count += 1
-    for occurrence in occurrences:
+    for ordinal, occurrence in enumerate(occurrences):
+        if occurrence.get("occurrence_form") == "legacy_v1" and occurrence.get("schema") == CURRENT_OBJECT_SCHEMAS["occurrence"]:
+            count += _validate_legacy_occurrence(state, authority, occurrence, ordinal)
+            continue
         if (
             occurrence.get("occurrence_form") != "v3"
             or occurrence.get("signer_certificate") != hk["certificate"]
@@ -795,6 +958,81 @@ def _validate_cryptography(
             fail("HOUSEKEEPER_OCCURRENCE_SIGNATURE_INVALID")
         count += 1
     return count
+
+
+def _validate_origin_disclosure(state: dict, receipt: dict, evidence: list, event: dict) -> None:
+    """Check the signed disclosure, not origin ancestry or permission to act."""
+    if state["envelope"]["format"]["version"] == 2:
+        if any(key in receipt for key in ("origin_family_profile", "disclosure_labels", "disclosure_label_root_sha256")) or any("origin_disclosure" in entry for entry in evidence):
+            fail("OBJECT_SCHEMA_INVALID")
+        return
+    profile = receipt.get("origin_family_profile")
+    try:
+        raw = canonical_bytes(profile)
+        if profile.get("schema") != "hom.aimos.origin-family-profile/v1" or sha256_hex(b"hom.aimos.origin-family-profile/v1\x00" + u32(len(raw)) + raw) != ORIGIN_PROFILE_HASH:
+            fail("ORIGIN_FAMILY_PROFILE_INVALID")
+    except Exception:
+        fail("ORIGIN_FAMILY_PROFILE_INVALID")
+    families = {entry["id"]: entry for entry in profile["families"]}
+    keys = set(("schema", "memory_id", "live_content_hash", "family_profile_sha256",
+        "family_ids", "family_set_root_sha256", "origin_binding_sha256s", "origin_ledger_hashes",
+        "origin_event_ids", "origin_event_mutation_sha256s", "confidentiality", "integrity",
+        "effective_action_class", "legacy_unbound", "unclassified", "disclosure_label_sha256"))
+    labels = []
+    for ordinal, entry in enumerate(evidence):
+        try:
+            label = entry["origin_disclosure"]
+            memory = state["results"][ordinal]["memory_state"]["body"]
+            if (not isinstance(label, dict) or set(label) != keys
+                or label["schema"] != "hom.aimos.native-recall-origin-disclosure/v1"
+                or label["memory_id"] != memory["memory_id"] or label["live_content_hash"] != memory["live_content_hash"]
+                or label["family_profile_sha256"] != ORIGIN_PROFILE_HASH
+                or not isinstance(label["family_ids"], list) or not label["family_ids"]
+                or len(label["family_ids"]) > profile["maximum_family_count"]
+                or label["confidentiality"] not in profile["confidentiality_order"]
+                or memory["data_class"] not in profile["confidentiality_order"]
+                or profile["confidentiality_order"].index(label["confidentiality"]) < profile["confidentiality_order"].index(memory["data_class"])
+                or label["integrity"] not in profile["integrity_order"]
+                or label["effective_action_class"] not in profile["action_class_order"]
+                or type(label["legacy_unbound"]) is not bool or type(label["unclassified"]) is not bool
+                or label["unclassified"] != label["legacy_unbound"]):
+                fail("ORIGIN_DISCLOSURE_LABEL_INVALID")
+            ids = label["family_ids"]
+            selected = set(ids)
+            for index, family_id in enumerate(ids):
+                family = families.get(family_id)
+                if family is None or (index > 0 and ids[index - 1] >= family_id) or (family["parent_id"] is not None and family["parent_id"] not in selected):
+                    fail("ORIGIN_DISCLOSURE_LABEL_INVALID")
+            if label["family_set_root_sha256"] != recall_merkle_root([{"ordinal": index, "family_id": family_id} for index, family_id in enumerate(ids)]).hex():
+                fail("ORIGIN_DISCLOSURE_LABEL_INVALID")
+            for key in ("origin_binding_sha256s", "origin_ledger_hashes", "origin_event_ids", "origin_event_mutation_sha256s"):
+                refs = label[key]
+                pattern = UUID if key == "origin_event_ids" else HEX32
+                if not isinstance(refs, list) or (len(refs) != 0 if label["legacy_unbound"] else len(refs) == 0):
+                    fail("ORIGIN_DISCLOSURE_LABEL_INVALID")
+                if any(not isinstance(ref, str) or ref != ref.lower() or pattern.fullmatch(ref) is None or (index > 0 and refs[index - 1] >= ref) for index, ref in enumerate(refs)):
+                    fail("ORIGIN_DISCLOSURE_LABEL_INVALID")
+            if label["legacy_unbound"] and (ids != ["unknown_protected"] or label["confidentiality"] != "restricted" or label["integrity"] != "untrusted" or label["effective_action_class"] != "none"):
+                fail("ORIGIN_DISCLOSURE_LABEL_INVALID")
+            body = {key: value for key, value in label.items() if key != "disclosure_label_sha256"}
+            raw = canonical_bytes(body)
+            if label["disclosure_label_sha256"] != sha256_hex(b"hom.aimos.native-recall-origin-disclosure/v1\x00" + u32(len(raw)) + raw):
+                fail("ORIGIN_DISCLOSURE_LABEL_INVALID")
+            labels.append(label)
+        except Exception:
+            fail("ORIGIN_DISCLOSURE_LABEL_INVALID")
+    root = recall_merkle_root([{
+        "ordinal": ordinal, "memory_id": label["memory_id"], "live_content_hash": label["live_content_hash"],
+        "disclosure_label_sha256": label["disclosure_label_sha256"],
+    } for ordinal, label in enumerate(labels)]).hex()
+    if not isinstance(receipt.get("disclosure_labels"), list) or root != receipt.get("disclosure_label_root_sha256") or not _equal(labels, receipt.get("disclosure_labels")):
+        fail("ORIGIN_DISCLOSURE_ROOT_INVALID")
+    try:
+        metadata = (event_payload_body(event) or {}).get("metadata") or {}
+    except (ValueError, TypeError):
+        fail("EVENT_RECEIPT_COMMITMENT_INVALID")
+    if metadata.get("disclosure_label_root_sha256") != root or not isinstance(metadata.get("disclosure_labels"), list) or not _equal(labels, metadata.get("disclosure_labels")):
+        fail("ORIGIN_DISCLOSURE_EVENT_BINDING_INVALID")
 
 
 def verify_recall_envelope(
@@ -808,6 +1046,7 @@ def verify_recall_envelope(
     authority = _validate_authority(state)
     decisions = _validate_decisions(state, authority["native_receipt"])
     results = _validate_results(state, decisions, authority["native_receipt"])
+    _validate_origin_disclosure(state, authority["native_receipt"], results["evidence"], authority["native_receipt"]["event_receipt"])
     terminal = _validate_event(authority, decisions, results["evidence"])
     signature_count = (
         _validate_cryptography(
@@ -817,15 +1056,21 @@ def verify_recall_envelope(
         if verify_cryptography else 0
     )
     return {
-        "schema": "hom.aimos.mutmem-independent-recall-result/v2",
+        "schema": f"hom.aimos.mutmem-independent-recall-result/v{state['envelope']['format']['version']}",
         "valid": True,
         "bundle_sha256": state["bundle_hash"],
         "object_root_sha256": state["object_root"],
         "result_count": state["envelope"]["result_count"],
-        "structural_predicate_count": len(STRUCTURAL_FAILURE_CODES),
+        "structural_predicate_count": len(STRUCTURAL_FAILURE_CODES) + (len(ORIGIN_DISCLOSURE_FAILURE_CODES) if state["envelope"]["format"]["version"] == 3 else 0),
         "cryptographic_signatures_verified": bool(verify_cryptography),
         "external_trust_established": bool(verify_cryptography),
         "verified_signature_count": signature_count,
+        **({
+            "origin_family_disclosure_verified": bool(verify_cryptography),
+            "origin_ancestry_verified": False,
+            "independent_corroboration_verified": False,
+            "action_authority_granted": False,
+        } if state["envelope"]["format"]["version"] == 3 else {}),
     }
 
 

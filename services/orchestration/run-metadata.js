@@ -8,10 +8,9 @@ import { createHash } from 'node:crypto';
 import { withTransaction } from '../../db/connection.js';
 import { publishRunEvent } from './run-events.js';
 import { canonicalJson } from '../security/agent-identity.js';
-import { logEvent, readVerifiedEventById, readVerifiedEventHistory } from '../observe/event-ledger.js';
+import { logEvent, readVerifiedEventById, readVerifiedEventHistory, prepareEventMetadata } from '../observe/event-ledger.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
-const MAX_RECOVERY_EVENTS = 100_000;
 
 function normalizeQueueWaitMs(value, fallback = null) {
   if (typeof value === 'number' && Number.isFinite(value)) {
@@ -42,7 +41,7 @@ function eventMutationHash(event) {
 }
 
 export function reconstructRunTraces(events = []) {
-  if (!Array.isArray(events) || events.length > MAX_RECOVERY_EVENTS) throw new Error('agent_run_recovery_limit');
+  if (!Array.isArray(events)) throw new Error('agent_run_recovery_input_invalid');
   const runs = new Map();
   for (const event of events) {
     if (!['agent_run_started', 'agent_run_awaiting_approval', 'agent_run_terminal'].includes(event?.operation)) continue;
@@ -225,8 +224,8 @@ export async function getIdempotentResponse({ companyId = COMPANY, agentId, idem
 }
 
 export async function saveIdempotentResponse({ companyId = COMPANY, agentId, idempotencyKey, response, authority = null }) {
-  if (!idempotencyKey) return;
-  const normalized = response || {};
+  if (!idempotencyKey) return response;
+  const normalized = prepareEventMetadata(response || {});
   const key = `${agentId}:${idempotencyKey}`;
   const terminal = normalized.runId
     ? await readRunEvent(companyId, 'agent_run_terminal', normalized.runId, agentId)
@@ -252,6 +251,7 @@ export async function saveIdempotentResponse({ companyId = COMPANY, agentId, ide
     const existing = await getIdempotentResponse({ companyId, agentId, idempotencyKey });
     if (projectionHash(existing || {}) !== projectionHash(normalized)) throw new Error('run_idempotency_conflict');
   }
+  return normalized;
 }
 
 export async function markRunStarted({

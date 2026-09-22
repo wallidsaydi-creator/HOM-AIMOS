@@ -24,8 +24,10 @@ import { agents } from './agent-store.js';
 import { getEmbedding } from '../core/embeddings.js';
 import { query } from '../../db/connection.js';
 import { buildHomConstitutionSection } from '../core/hom-constitution.js';
-import { getRecencyAlpha, getSemanticAlpha, getMemoryCount, getEventWindowHours } from '../shared/scale-baseline.js';
+import { getMemoryCount, getEventWindowHours } from '../shared/scale-baseline.js';
 import { getOperatorAgentId, isOperatorAgentId } from '../security/system-config-store.js';
+import { recordToolContextInput } from './tool-action-ledger.js';
+import { nativeRecallDisclosureLabelRoot } from '../retrieval/native-recall.js';
 
 const BRAIN_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RULES_ROOT = path.join(BRAIN_ROOT, 'rules');
@@ -98,6 +100,37 @@ export function buildEmptyContextPack() {
   };
 }
 
+function exactCanonicalRecallBody(value) {
+  const body = value?.body && Array.isArray(value.body.memories) ? value.body : value;
+  if (!body || !Array.isArray(body.memories) || !body.recall_receipt) {
+    throw new Error('canonical_model_context_recall_required');
+  }
+  const receipt = body.recall_receipt;
+  if (!Array.isArray(receipt.evidence)
+      || !Array.isArray(receipt.disclosure_labels)
+      || receipt.evidence.length !== body.memories.length
+      || receipt.disclosure_labels.length !== body.memories.length
+      || nativeRecallDisclosureLabelRoot(receipt.disclosure_labels)
+        !== receipt.disclosure_label_root_sha256) {
+    throw new Error('canonical_model_context_receipt_invalid');
+  }
+  for (let ordinal = 0; ordinal < body.memories.length; ordinal += 1) {
+    const memory = body.memories[ordinal];
+    const evidence = receipt.evidence[ordinal];
+    const label = receipt.disclosure_labels[ordinal];
+    if (Number(evidence?.ordinal) !== ordinal
+        || String(evidence?.memory_id || '') !== String(memory?.id || '')
+        || String(label?.memory_id || '') !== String(memory?.id || '')
+        || evidence?.origin_disclosure?.disclosure_label_sha256
+          !== label?.disclosure_label_sha256
+        || memory?.origin_disclosure?.disclosure_label_sha256
+          !== label?.disclosure_label_sha256) {
+      throw new Error('canonical_model_context_evidence_order_invalid');
+    }
+  }
+  return body;
+}
+
 /**
  * Partition memories by tier (MemGPT 3-tier architecture).
  * Working = current session, Recall = recent conversations, Archival = long-term knowledge.
@@ -123,39 +156,26 @@ function partitionByTier(rows) {
   return { working, recall, archival };
 }
 
-export async function loadRecentAimosContext(sourceAgentId, runtimeAgentId, limit = 8) {
+export async function loadRecentAimosContext(sourceAgentId, runtimeAgentId, limit = 8, canonicalRecall = null) {
   const emptyPack = buildEmptyContextPack();
+  const sourceId = String(sourceAgentId || '').trim();
+  const runtimeId = String(runtimeAgentId || '').trim();
+  const ids = Array.from(new Set([sourceId, runtimeId].filter(Boolean)));
+  if (!ids.length) return emptyPack;
 
-  try {
-    const sourceId = String(sourceAgentId || '').trim();
-    const runtimeId = String(runtimeAgentId || '').trim();
-    const ids = Array.from(new Set([sourceId, runtimeId].filter(Boolean)));
-    if (!ids.length) return emptyPack;
-
-    // Fetch more than limit to allow tier budget allocation
-    const fetchLimit = Math.max(1, Number(limit || 8)) * 3;
-    const result = await query(
-      `SELECT agent_id, value, memory_tier, memory_type
-       FROM aimos_memories
-       WHERE company_id = $1
-         AND (
-           agent_id = ANY($2::text[])
-           OR scope = 'global'
-         )
-       ORDER BY created_at DESC
-       LIMIT $3`,
-      [COMPANY, ids, fetchLimit]
-    );
-
-    const prepared = result.rows
+  const recalled = exactCanonicalRecallBody(canonicalRecall);
+  const prepared = recalled.memories
       .map((row) => ({
+        id: row.id,
+        key: row.key,
         agentId: String(row.agent_id || 'unknown').trim(),
         rawValue: String(row.value || '').trim(),
         memory_tier: row.memory_tier || 'long-term',
-        memory_type: row.memory_type || 'unknown'
+        memory_type: row.memory_type || 'unknown',
+        provenance_proof: row.provenance_proof,
+        origin_disclosure: row.origin_disclosure,
       }))
       .filter((row) => row.rawValue.length > 0)
-      .filter((row) => !isInternalMemoryText(row.rawValue))
       .map((row) => ({ ...row, rawValue: redactSecrets(row.rawValue) }));
 
     // Fix #3: Tier partitioning with budget allocation
@@ -190,143 +210,37 @@ export async function loadRecentAimosContext(sourceAgentId, runtimeAgentId, limi
     addTierSection('ARCHIVAL', archival, archivalBudget);
 
     const ratio = rawChars > 0 ? Math.max(0, Math.min(1, compactedChars / rawChars)) : 1;
-    return {
-      text: lines.join('\n'),
-      memories: prepared, // Return raw memories for quantization
-      contextCompaction: {
-        compacted: compactedChars < rawChars || lines.length < prepared.length,
-        rawChars,
-        compactedChars,
-        ratio,
-        keptItems: lines.length,
-        totalItems: prepared.length,
-        tiers: { working: working.length, recall: recall.length, archival: archival.length }
-      }
-    };
-  } catch {
-    return emptyPack;
-  }
+  return {
+    text: lines.join('\n'),
+    memories: prepared,
+    recallReceipt: recalled.recall_receipt,
+    contextCompaction: {
+      compacted: compactedChars < rawChars || lines.length < prepared.length,
+      rawChars,
+      compactedChars,
+      ratio,
+      keptItems: lines.length,
+      totalItems: prepared.length,
+      tiers: { working: working.length, recall: recall.length, archival: archival.length }
+    }
+  };
 }
 
-// ─── HYBRID RECALL: Semantic-aware context injection (Gap 1) ──────────────────
-// Replaces pure chronological ranking with composite recency+semantic scoring.
-// Falls back to loadRecentAimosContext on embedding failure.
-// Aladdin: only affects recall ordering, never deletes or suppresses memories.
+// ─── CANONICAL RECALL: origin-aware context formatting ────────────────────────
+// Ranking, admission and disclosure are already complete when this formatter
+// receives the signed native recall result. It cannot query or rerank memory.
 
-const K_RECENCY = 60; // RRF constant for recency rank scoring
-
-export async function loadHybridAimosContext(sourceAgentId, runtimeAgentId, userPrompt, limit = 8) {
-  const emptyPack = buildEmptyContextPack();
-
+export async function loadHybridAimosContext(sourceAgentId, runtimeAgentId, userPrompt, limit = 8, canonicalRecall = null) {
   try {
-    const sourceId = String(sourceAgentId || '').trim();
     const runtimeId = String(runtimeAgentId || '').trim();
-    const ids = Array.from(new Set([sourceId, runtimeId].filter(Boolean)));
-    if (!ids.length || !userPrompt) return emptyPack;
-
-    // Compute query embedding for semantic similarity
-    let queryEmbedding;
-    try {
-      queryEmbedding = await getEmbedding(String(userPrompt));
-    } catch (embErr) {
-      // Fallback to pure recency on embedding failure
-      console.warn('[hybrid-recall] Embedding failed, falling back to pure recency:', embErr.message);
-      return loadRecentAimosContext(sourceAgentId, runtimeAgentId, limit);
-    }
-    if (!queryEmbedding || !Array.isArray(queryEmbedding) || queryEmbedding.length === 0) {
-      return loadRecentAimosContext(sourceAgentId, runtimeAgentId, limit);
-    }
-
-    // Phase 1: Fetch candidate pool (3x over budget for re-ranking)
-    const fetchLimit = Math.max(1, Number(limit || 8)) * 3;
-    const result = await query(
-      `SELECT m.id, m.agent_id, m.value, m.memory_tier, m.memory_type,
-              m.created_at,
-              (m.embedding <=> $4::vector) AS semantic_distance
-       FROM aimos_memories m
-       WHERE m.company_id = $1
-         AND (m.agent_id = ANY($2::text[]) OR m.scope = 'global')
-         AND m.embedding IS NOT NULL
-       ORDER BY (m.embedding <=> $4::vector) ASC
-       LIMIT $3`,
-      [COMPANY, ids, fetchLimit, JSON.stringify(queryEmbedding)]
+    const pack = await loadRecentAimosContext(
+      sourceAgentId,
+      runtimeAgentId,
+      limit,
+      canonicalRecall,
     );
-
-    if (!result.rows || result.rows.length === 0) {
-      // No candidates with embeddings — fall back to recency
-      return loadRecentAimosContext(sourceAgentId, runtimeAgentId, limit);
-    }
-
-    // Phase 2: JavaScript re-ranking with composite score
     const memoryCount = await getMemoryCount(COMPANY);
-    const alphaRecency = getRecencyAlpha(memoryCount);
-    const alphaSemantic = getSemanticAlpha(memoryCount);
-
-    // Build recency ranking by created_at
-    const byCreatedAt = [...result.rows].sort((a, b) =>
-      new Date(b.created_at) - new Date(a.created_at)
-    );
-    const recencyRankMap = new Map();
-    byCreatedAt.forEach((row, idx) => {
-      recencyRankMap.set(row.id, idx + 1);
-    });
-
-    // Compute composite scores
-    for (const row of result.rows) {
-      const recencyRank = recencyRankMap.get(row.id) || byCreatedAt.length;
-      const recencyScore = K_RECENCY / (K_RECENCY + recencyRank);
-      const semanticScore = 1 - (parseFloat(row.semantic_distance) || 1);
-      row.compositeScore = alphaRecency * recencyScore + alphaSemantic * semanticScore;
-    }
-
-    // Sort by composite score descending
-    const ranked = result.rows.sort((a, b) => b.compositeScore - a.compositeScore);
-
-    const prepared = ranked
-      .map((row) => ({
-        agentId: String(row.agent_id || 'unknown').trim(),
-        rawValue: String(row.value || '').trim(),
-        memory_tier: row.memory_tier || 'long-term',
-        memory_type: row.memory_type || 'unknown',
-        compositeScore: row.compositeScore,
-      }))
-      .filter((row) => row.rawValue.length > 0)
-      .filter((row) => !isInternalMemoryText(row.rawValue))
-      .map((row) => ({ ...row, rawValue: redactSecrets(row.rawValue) }));
-
-    // Tier budget allocation (same 50/30/20 as recency path)
-    const { working, recall, archival } = partitionByTier(prepared);
-    const effectiveLimit = Math.max(1, Number(limit || 8));
-    const workingBudget = Math.max(1, Math.ceil(effectiveLimit * 0.5));
-    const recallBudget = Math.max(1, Math.ceil(effectiveLimit * 0.3));
-    const archivalBudget = Math.max(1, effectiveLimit - workingBudget - recallBudget);
-
-    const rawChars = prepared.reduce((sum, row) => sum + row.rawValue.length, 0);
-    const lines = [];
-    let compactedChars = 0;
-
-    function addTierSection(tierName, items, budget) {
-      if (!items.length) return;
-      lines.push(`**[${tierName}]**`);
-      let count = 0;
-      for (const row of items) {
-        if (count >= budget) break;
-        const compacted = compactText(row.rawValue, MEMORY_CONTEXT_ITEM_CHAR_LIMIT);
-        const line = `- [${row.agentId}] ${compacted}`;
-        const nextChars = compactedChars + line.length;
-        if (nextChars > MEMORY_CONTEXT_TOTAL_CHAR_BUDGET) break;
-        lines.push(line);
-        compactedChars = nextChars;
-        count++;
-      }
-    }
-
-    addTierSection('WORKING', working, workingBudget);
-    addTierSection('RECALL', recall, recallBudget);
-    addTierSection('ARCHIVAL', archival, archivalBudget);
-
-    // ─── Gap 2: Aimos Events Bridge — inject recent save actions ────────────────
-    let recentActionsText = '';
+    const lines = pack.text ? [pack.text] : [];
     let recentActionsEvents = [];
     try {
       const eventWindow = getEventWindowHours(memoryCount);
@@ -335,31 +249,23 @@ export async function loadHybridAimosContext(sourceAgentId, runtimeAgentId, user
         lines.push('');
         lines.push('**[RECENT ACTIONS]**');
         lines.push(recentActions.text);
-        recentActionsText = recentActions.text;
         recentActionsEvents = recentActions.events;
       }
     } catch (evtErr) {
       console.warn('[hybrid-recall] Events bridge failed (non-fatal):', evtErr.message);
     }
 
-    const ratio = rawChars > 0 ? Math.max(0, Math.min(1, compactedChars / rawChars)) : 1;
     return {
       text: lines.join('\n'),
-      memories: prepared,
+      memories: pack.memories,
       recentSaveEvents: recentActionsEvents,
+      recallReceipt: pack.recallReceipt,
       contextCompaction: {
-        compacted: compactedChars < rawChars || lines.length < prepared.length,
-        rawChars,
-        compactedChars,
-        ratio,
-        keptItems: lines.length,
-        totalItems: prepared.length,
-        tiers: { working: working.length, recall: recall.length, archival: archival.length },
+        ...pack.contextCompaction,
         hybridRecall: {
-          alphaRecency: Number(alphaRecency.toFixed(6)),
-          alphaSemantic: Number(alphaSemantic.toFixed(6)),
+          owner: 'services/retrieval/native-recall-pipeline.js#executeCanonicalRecall',
           memoryCount,
-          candidatePool: result.rows.length,
+          candidatePool: pack.memories.length,
         },
         eventsBridge: {
           eventCount: recentActionsEvents.length,
@@ -368,8 +274,7 @@ export async function loadHybridAimosContext(sourceAgentId, runtimeAgentId, user
       },
     };
   } catch (err) {
-    console.warn('[hybrid-recall] Failed, falling back to pure recency:', err.message);
-    return loadRecentAimosContext(sourceAgentId, runtimeAgentId, limit);
+    throw new Error('canonical_model_context_projection_failed', { cause: err });
   }
 }
 
@@ -410,7 +315,7 @@ export async function loadRecentSaveEvents(agentId, limit = 5, windowHours = 24)
     if (!aid) return { text: '', events: [] };
 
     const result = await query(
-      `SELECT agent_id, operation, key, metadata, ts
+      `SELECT id, encode(mutation_hash, 'hex') AS mutation_sha256, agent_id, operation, key, metadata, ts
        FROM aimos_events
        WHERE company_id = $1
          AND agent_id = $2
@@ -426,6 +331,8 @@ export async function loadRecentSaveEvents(agentId, limit = 5, windowHours = 24)
     }
 
     const events = result.rows.map((row) => ({
+      id: row.id,
+      mutation_sha256: row.mutation_sha256,
       operation: String(row.operation || 'unknown'),
       key: String(row.key || ''),
       summary: extractEventSummary(row.metadata),
@@ -453,29 +360,21 @@ export async function loadRecentSaveEvents(agentId, limit = 5, windowHours = 24)
 }
 
 // ─── PROCEDURAL MEMORY: Skill recall (VOYAGER + CoALA 4th memory type) ──────
-export async function loadProceduralSkills(agentId, userPrompt) {
+export async function loadProceduralSkills(agentId, userPrompt, canonicalRecall = null) {
   try {
-    // ─── VOYAGER-STYLE: Try embedding-indexed retrieval first, fall back to regex ──
     let matched = [];
-    let usedEmbedding = false;
     try {
-      const promptEmbedding = await getEmbedding(userPrompt);
-      const nativeResult = await query(
-        `SELECT id, key, value, (embedding <=> $3::vector) AS distance
-           FROM aimos_memories
-          WHERE company_id = $1 AND (agent_id = $2 OR agent_id = 'system')
-            AND memory_type = 'procedural' AND embedding IS NOT NULL
-          ORDER BY embedding <=> $3::vector ASC LIMIT 5`,
-        [COMPANY, agentId, JSON.stringify(promptEmbedding)]
-      );
-      matched = nativeResult.rows
-        .filter((row) => parseFloat(row.distance) < 0.7)
+      const nativeResult = exactCanonicalRecallBody(canonicalRecall);
+      matched = nativeResult.memories
+        .filter((row) => row.memory_type === 'procedural')
         .map((row) => {
           let value = {};
           try { value = JSON.parse(row.value); } catch { value = { skill_name: row.key, steps: [], expected_outcome: row.value }; }
-          return { id: row.id, success_count: 0, fail_count: 0, ...value, distance: row.distance };
+          return { id: row.id, success_count: 0, fail_count: 0, ...value,
+            sourceMemoryId: row.id, originDisclosure: row.origin_disclosure };
         });
       if (!matched.length) {
+        const promptEmbedding = await getEmbedding(userPrompt);
         const embResult = await query(
           `SELECT id, skill_name, trigger_pattern, steps, expected_outcome, success_count, fail_count, tags,
                   (skill_embedding <=> $3::vector) as distance
@@ -489,12 +388,10 @@ export async function loadProceduralSkills(agentId, userPrompt) {
         );
         matched = embResult.rows.filter(r => parseFloat(r.distance) < 0.7);
       }
-      // Only use embedding matches with distance < 0.7 (reasonably similar)
-      if (matched.length > 0) usedEmbedding = true;
     } catch { /* embedding retrieval failed — fall back to regex */ }
 
     // Fallback: regex/text matching if no embedding matches
-    if (!usedEmbedding || matched.length === 0) {
+    if (matched.length === 0) {
       const result = await query(
         `SELECT id, skill_name, trigger_pattern, steps, expected_outcome, success_count, fail_count, tags
          FROM procedural_skills
@@ -530,7 +427,15 @@ export async function loadProceduralSkills(agentId, userPrompt) {
 
     return {
       text: `\n### PROCEDURAL SKILLS (learned patterns — follow these when relevant):\n${lines.join('\n')}`,
-      skillIds: matched.map(s => s.id)
+      skillIds: matched.map(s => s.id),
+      sourceMemoryIds: matched.map(s => s.sourceMemoryId).filter(Boolean),
+      sourceInputs: matched.map(s => ({
+        kind: s.sourceMemoryId ? 'memory' : 'record',
+        owner: 'services/orchestration/agent-prompts.js#loadProceduralSkills',
+        ref: `${s.sourceMemoryId ? 'aimos_memories' : 'procedural_skills'}:${s.sourceMemoryId || s.id}`,
+        memoryIds: s.sourceMemoryId ? [s.sourceMemoryId] : [],
+        value: s,
+      })),
     };
   } catch {
     return { text: '', skillIds: [] };
@@ -728,9 +633,17 @@ function detectTaskDomain(userPrompt = '') {
   return '';
 }
 
-function loadDomainRules(userPrompt = '') {
+function loadDomainRules(userPrompt = '', nativeToolInputs = null) {
   const sections = [];
-  const commonRules = readRuleFile(path.join(RULES_ROOT, 'common', 'always.md'));
+  const readRules = (file) => {
+    const text = readRuleFile(file);
+    if (text && nativeToolInputs) recordToolContextInput(nativeToolInputs, {
+      kind: 'file', owner: 'services/orchestration/agent-prompts.js#loadDomainRules',
+      ref: path.relative(path.resolve(BRAIN_ROOT, '..'), file), value: text,
+    });
+    return text;
+  };
+  const commonRules = readRules(path.join(RULES_ROOT, 'common', 'always.md'));
   if (commonRules) sections.push(commonRules);
 
   const detectedDomain = detectTaskDomain(userPrompt);
@@ -746,7 +659,7 @@ function loadDomainRules(userPrompt = '') {
   const domainSections = fs.readdirSync(domainDir)
     .filter((file) => file.endsWith('.md'))
     .sort()
-    .map((file) => readRuleFile(path.join(domainDir, file)))
+    .map((file) => readRules(path.join(domainDir, file)))
     .filter(Boolean);
 
   sections.push(...domainSections);
@@ -855,7 +768,15 @@ export function buildSystemPrompt(agent, toolDefs, recentAimosContext = '', opti
     estimatedPromptChars: options.estimatedPromptChars || 0,
     promptPressureRatio: options.promptPressureRatio || 0,
   });
-  const domainRules = loadDomainRules(options.userPrompt || '');
+  const domainRules = loadDomainRules(options.userPrompt || '', options.nativeToolInputs);
+  const contextSections = options.contextSections || [{ origin: 'derived_context', content: recentAimosContext || '' }];
+  if (contextSections.map(section => section.content).join('') !== (recentAimosContext || '')) {
+    throw new Error('native_prompt_context_section_parity_invalid');
+  }
+  if (options.nativeToolInputs) recordToolContextInput(options.nativeToolInputs, {
+    kind: 'derived', owner: 'services/core/hom-constitution.js#buildHomConstitutionSection',
+    ref: 'operating-law', value: constitutionSection,
+  });
 
   // Capability boundary and cognitive-load management.
   const clearanceLevel = agent.clearanceLevel || 1;
@@ -905,7 +826,12 @@ ${isOperatorAgentId(agent?.id) ? '- You may autonomously chain multiple tool cal
 - If uncertain (confidence < 0.5), retrieve more context before acting.
 - If a tool is blocked by clearance, explain and escalate — never retry.\n`;
 
-  return `You are ${agent.name}, an integral node of the H.O.M (Home of the Machine) hivemind.
+  // Preserve boundaries while constructing the prompt; never recover origin
+  // later by matching headings that supplied content can also contain.
+  return [
+    { origin: 'native_policy', content: 'You are ' },
+    { origin: 'identity_profile', content: String(agent.name) },
+    { origin: 'native_policy', content: `, an integral node of the H.O.M (Home of the Machine) hivemind.
 
 ### MACHINE PROTOCOLS:
 1. **UNIFIED CONSCIOUSNESS**: You are not a silo. You are part of a high-bandwidth collective.
@@ -919,21 +845,18 @@ ${isOperatorAgentId(agent?.id) ? '- You may autonomously chain multiple tool cal
 4. **FAIL FAST**: If a tool fails or a model is unresponsive, explain the technical blocker and propose an alternative path immediately.
 
 ### IDENTITY:
-${agent.persona}
-${constitutionSection}
-${capabilityBoundary}
-${recentAimosContext.includes('complexity:simple') ? '' : reactPrompt}
-${toolInventory}
-${domainRules.text ? `\n### DOMAIN RULES${domainRules.detectedDomain ? ` (${domainRules.detectedDomain})` : ''}:\n${domainRules.text}\n` : ''}
-${isExecutive ? `\n${EXECUTIVE_SPECIALIST_ROSTER}` : ''}
-${isExecutive ? `\n${EXECUTIVE_DELEGATION_TOOL_ENFORCEMENT}` : ''}
-
-${recentAimosContext ? `### RECENT MEMORY SNAPSHOT:
-${recentAimosContext}` : ''}
-${options.reasoningQuanta ? `### LONG-RANGE REASONING TRACE (3-bit compressed):
-[${options.reasoningQuanta}]
-(0x1:Bootstrap, 0x3:Logic, 0x4:Conflict, 0x6:Decision, 0x7:Authority)\n` : ''}
-${(() => {
+` },
+    { origin: 'identity_profile', content: String(agent.persona) },
+    { origin: 'native_policy', content: `\n${constitutionSection}\n${capabilityBoundary}\n${recentAimosContext.includes('complexity:simple') ? '' : reactPrompt}\n${toolInventory}\n` },
+    { origin: 'native_framing', content: domainRules.text ? `\n### DOMAIN RULES${domainRules.detectedDomain ? ` (${domainRules.detectedDomain})` : ''}:\n` : '' },
+    { origin: 'file_context', content: domainRules.text ? `${domainRules.text}\n` : '' },
+    { origin: 'native_policy', content: `\n${isExecutive ? `\n${EXECUTIVE_SPECIALIST_ROSTER}` : ''}\n${isExecutive ? `\n${EXECUTIVE_DELEGATION_TOOL_ENFORCEMENT}` : ''}\n\n` },
+    { origin: 'native_framing', content: recentAimosContext ? '### RECENT MEMORY SNAPSHOT:\n' : '' },
+    ...contextSections,
+    { origin: 'native_framing', content: `\n${options.reasoningQuanta ? '### LONG-RANGE REASONING TRACE (3-bit compressed):\n[' : ''}` },
+    { origin: 'derived_context', content: options.reasoningQuanta || '' },
+    { origin: 'native_framing', content: options.reasoningQuanta ? ']\n(0x1:Bootstrap, 0x3:Logic, 0x4:Conflict, 0x6:Decision, 0x7:Authority)\n' : '' },
+    { origin: 'native_policy', content: `\n${(() => {
   // Fix #2: Memory pressure injection — agent knows its context state
   const ratio = options.promptPressureRatio || 0;
   const pct = Math.round(ratio * 100);
@@ -941,5 +864,6 @@ ${(() => {
   if (ratio >= 0.6) return `\n[MEMORY PRESSURE: WARNING] Context usage at ${pct}%. Prioritize essential information. Consider summarizing verbose outputs.\n`;
   return '';
 })()}
-Always be direct, precise, and actionable. You are the Machine.`;
+Always be direct, precise, and actionable. You are the Machine.` },
+  ];
 }

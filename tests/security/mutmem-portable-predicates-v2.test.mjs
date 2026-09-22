@@ -30,7 +30,7 @@ test('P1 static-source vectors cover both authority profiles and every declared 
   assert.deepEqual([...reasons].sort(), [...MUTMEM_PORTABLE_PREDICATE_CODES_V2].sort());
 });
 
-test('P1 committed static package is self-hashed and exactly regenerable', async () => {
+test('P1 historical static package stays self-hashed; current vectors bind the Merkle schema', async () => {
   const file = new URL('../../verifiers/mutmem-conformance/v2/vectors.json', import.meta.url);
   const [bytes, hashLine] = await Promise.all([
     readFile(file),
@@ -46,7 +46,13 @@ test('P1 committed static package is self-hashed and exactly regenerable', async
   assert.equal(manifest.valid_n, 2);
   assert.equal(manifest.invalid_n, MUTMEM_PORTABLE_PREDICATE_CODES_V2.length);
   assert.deepEqual(manifest.failure_codes, MUTMEM_PORTABLE_PREDICATE_CODES_V2);
-  assert.deepEqual(manifest.vectors, vectors);
+  assert.deepEqual(manifest.vectors.map(v => [v.id, v.expected, v.reason]),
+    vectors.map(v => [v.id, v.expected, v.reason]));
+  assert.deepEqual(vectors, createMutMemPortablePredicateVectorsV2());
+  for (const vector of manifest.vectors.filter(v => v.expected === 'valid')) {
+    assert.throws(() => evaluateMutMemPortablePredicatesV2(vector.bundle),
+      /mutmem_portable_predicates_v2:EVENT_RECEIPT_BINDING_INVALID$/);
+  }
 });
 
 for (const vector of vectors) {
@@ -135,7 +141,7 @@ test('P1 predicate and fixture owners have no runtime, signer, database, network
   ]);
   assert.deepEqual(
     [...owner.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((match) => match[1]),
-    ['node:crypto', './canonical-json.js', './mutmem-protocol.js', './mutmem-portable-evidence-v2.js'],
+    ['node:crypto', './canonical-json.js', './mutmem-protocol.js', './mutmem-portable-evidence-v2.js', './origin-binding-v1.js'],
   );
   assert.doesNotMatch(`${owner}\n${fixtures}`,
     /process\.env|fetch\(|writeFile\(|query\(|pool\.|\bsign\(|createPrivateKey|routes\/|jobs\//);

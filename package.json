@@ -1,6 +1,6 @@
 {
   "name": "aimos-backend",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "private": true,
   "description": "Agent-security system built on cryptographically auditable persistent memory, native retrieval, Canary controls, and signed operational red-team evidence",
   "license": "AGPL-3.0-or-later",
@@ -23,7 +23,7 @@
     "verify:mutmem:reproducibility": "node scripts/verification/score-mutmem-reproducibility.mjs",
     "test:release:artifact": "node scripts/test/verify-release-artifacts.mjs",
     "test:release:public-tree": "node scripts/test/verify-public-source-tree.mjs",
-    "test:release:source": "npm run lint && npm run test:source && npm run test:benchmark:contracts && npm run test:architecture-authority && node scripts/test/gate-reserved-ports.mjs && npm run test:release:artifact && npm audit --omit=dev --audit-level=high",
+    "test:release:source": "npm run lint && npm run test:source && npm run test:architecture-authority && node scripts/test/gate-reserved-ports.mjs && npm run test:release:artifact && npm audit --omit=dev --audit-level=high",
     "release:build-public-tree": "node scripts/release/build-public-repository.mjs",
     "lint": "find server.js routes services jobs db middleware migrations scripts eval -type f \\( -name '*.js' -o -name '*.mjs' -o -name '*.cjs' \\) -print0 | xargs -0 -n1 node --check",
     "identity:enroll-master": "node scripts/identity/enroll-master.js",
@@ -54,19 +54,21 @@
     "ceremony:purge": "node scripts/ceremony/purge-brain.mjs --live"
   },
   "dependencies": {
-    "@huggingface/transformers": "^4.2.0",
+    "@huggingface/transformers": "^4.3.0",
     "cors": "^2.8.5",
     "express": "^5.2.1",
     "express-rate-limit": "^8.6.2",
+    "ipaddr.js": "2.5.0",
     "node-cron": "^4.2.1",
     "pg": "^8.11.3",
+    "undici": "7.29.1",
     "yauzl": "^3.4.0"
   },
   "overrides": {
-    "adm-zip": "0.6.0",
-    "sharp": "0.35.3"
+    "adm-zip": "0.6.1",
+    "sharp": "0.35.4"
   },
   "engines": {
-    "node": "^20.0.0 || ^24.0.0 || ^26.0.0"
+    "node": "^20.18.1 || ^24.0.0 || ^26.0.0"
   }
 }

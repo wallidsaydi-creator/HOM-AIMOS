@@ -304,7 +304,7 @@ export function scanCr7EffectCensus() {
 
 function main() {
   const result = scanCr7EffectCensus();
-  if (result.source_file_count !== 357) throw new Error(`cr7_runtime_source_census_changed:${result.source_file_count}`);
+  if (result.source_file_count !== 365) throw new Error(`cr7_runtime_source_census_changed:${result.source_file_count}`);
   if (result.unclassified_effect_site_count !== 0) throw new Error('cr7_unclassified_effect_site');
   if (process.argv.includes('--json')) console.log(JSON.stringify(result, null, 2));
   else console.log(JSON.stringify({

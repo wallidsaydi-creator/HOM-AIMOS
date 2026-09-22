@@ -28,13 +28,15 @@ test('housekeeper dream reads do not exclude retained memory lifecycle states', 
   }
 });
 
-test('SPICED retained-memory reads remain tenant-bound', async () => {
+test('SPICED retained-memory reads remain company-bound inside their native transaction', async () => {
   const text = await source('services/dream/spiced-consolidator.js');
-
+  const governor = await source('services/governance/cohen-grossberg-energy-governor.js');
   assert.match(
-    text,
-    /SELECT id,retrieval_weight FROM aimos_memories WHERE company_id=\$1 AND id=ANY\(\$2::uuid\[\]\)/,
+    governor,
+    /FROM aimos_memories\s+WHERE company_id=\$2 AND id = ANY\(\$1::uuid\[\]\)/,
   );
+  assert.match(text, /readEnergyWindowSnapshot\(orderedMemoryIds, \{ client \}\)/);
+  assert.match(text, /enforceEnergyBound\(orderedMemoryIds, \{ client, before: energyBefore \}\)/);
   assert.match(
     text,
     /FROM aimos_memories\s+WHERE company_id=\$1 AND id=ANY\(\$2::uuid\[\]\)\s+AND retrieval_weight >= \$3 AND retrieval_weight < \$4/,
@@ -49,7 +51,7 @@ test('SPICED retained-memory reads remain tenant-bound', async () => {
   assert.doesNotMatch(text, /FROM aimos_memories[\s\S]{0,160}FOR SHARE/);
   assert.match(
     text,
-    /FROM aimos_memories\s+WHERE company_id = \$1 AND id = ANY\(\$4\)/,
+    /FROM aimos_memories\s+WHERE company_id = \$1\s+AND id = ANY\(\$4::uuid\[\]\)/,
   );
   assert.doesNotMatch(
     text,
@@ -63,7 +65,10 @@ test('SPICED Eq. 5 amplification constants and signed transaction path are uncha
 
   assert.match(text, /const CONSOLIDATION_GAMMA = 1\.3;/);
   assert.match(text, /const CONSOLIDATION_CAP = 3\.0;/);
-  assert.match(text, /retrieval_weight \* \$2/);
+  assert.match(text, /Math\.max\(oldWeight, Math\.min\(CONSOLIDATION_CAP, oldWeight \* effectiveGamma\)\)/);
+  assert.match(text, /controlCertifiedMutationProposal/);
+  assert.match(text, /apply_signed_cognitive_reweight/);
+  assert.doesNotMatch(text, /async function computeCycleDelta/);
   assert.match(text, /logEvent\(COMPANY, 'housekeeper', 'spiced_consolidation_amplified'/);
   assert.match(text, /\{ restricted: true, client_id: COMPANY, agent_id: 'housekeeper' \}/);
 });

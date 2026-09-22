@@ -30,7 +30,8 @@ const FAMILY_CONTRACTS = Object.freeze({
   },
   'services/observe/event-ledger.js': {
     family: 'universal_event_ledger',
-    require: [/eventMutationHash\(/, /signPayload\(/, sqlInsert('aimos_events'), /options\.client \|\| await agentPool\.connect\(\)/, /if \(ownsTransaction\) await client\.query\('COMMIT'\)/],
+    require: [/const bodyBytes = Buffer\.from\(canonicalJson\(body\), 'utf8'\);\s*const contentHash = signedJsonBytesCommitmentV1\(EVENT_EXACT_PAYLOAD_SCHEMA, bodyBytes\);\s*const mutationHash = eventMutationHash\(prevMutationHash, contentHash, nonce, signedTs\);\s*const sig = signRaw\(privkey, contentHash\);/,
+      new RegExp(`${sqlInsert('aimos_events').source}[\\s\\S]*signed_body_bytes\\)[\\s\\S]*contentHash, mutationHash, prevMutationHash, signedTs, nonce, sig,\\s*bodyBytes,`), sqlInsert('aimos_events'), /options\.client \|\| await agentPool\.connect\(\)/, /if \(ownsTransaction\) await client\.query\('COMMIT'\)/],
     tests: ['tests/security/event-ledger-proof.test.mjs', 'tests/security/event-ledger-db.test.mjs'],
   },
   'services/retrieval/concept-ppr-native.js': {

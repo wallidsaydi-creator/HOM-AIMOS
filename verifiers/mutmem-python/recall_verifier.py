@@ -20,6 +20,8 @@ from mutmem_verifier import (
     VerificationError,
     _b64u_decode,
     _reject_duplicates,
+    _event_payload_content,
+    _event_body,
     canonical_json,
 )
 
@@ -256,17 +258,22 @@ def _verify_event(bundle: dict[str, Any], receipt: dict[str, Any], expected: dic
     event = receipt.get("event_receipt")
     if event is None:
         return {"verdict": "indeterminate", "primary_reason": "recall_mandatory_evidence_missing"}
-    _exact_object(event, {
+    event_fields = {
         "event_id", "proof_required", "ledger_version", "ledger_seq", "signed_body",
         "content_hash", "mutation_hash", "prev_mutation_hash", "signer_agent_id",
         "signer_valid_from", "cert_fingerprint", "signer_certificate", "identity_tier",
         "ts_signed", "nonce", "signature",
-    }, "recall_event_receipt_schema_invalid")
+    }
+    if "signed_body_bytes_b64u" in event:
+        event_fields.add("signed_body_bytes_b64u")
+        if "signed_body" not in event:
+            event_fields.remove("signed_body")
+    _exact_object(event, event_fields, "recall_event_receipt_schema_invalid")
     cert, cert_sha = _trusted_certificate(bundle, event["signer_certificate"], event["ts_signed"])
-    body = event["signed_body"]
+    body = _event_body(event)
     if not isinstance(body, dict):
         raise VerificationError("recall_event_body_invalid")
-    content = _canonical_sha(body)
+    content = _event_payload_content(event)
     previous = _hex32(event["prev_mutation_hash"], "recall_event_previous_hash_invalid")
     mutation = _sha256(EVENT_LINK_DOMAIN + previous + content + str(event["nonce"]).encode("utf-8")
                        + str(event["ts_signed"]).encode("utf-8"))
@@ -289,8 +296,8 @@ def _verify_event(bundle: dict[str, Any], receipt: dict[str, Any], expected: dic
     )
     if not exact:
         raise VerificationError("recall_event_binding_invalid")
-    message = (canonical_json(body) + "\n" + str(event["nonce"]) + "\n"
-               + str(event["ts_signed"])).encode("utf-8")
+    message = content if body.get("payload_schema") == "hom.aimos.event/v2" else (
+        canonical_json(body) + "\n" + str(event["nonce"]) + "\n" + str(event["ts_signed"])).encode("utf-8")
     if not _verify_raw(cert["pubkey"], message, _b64u_decode(event["signature"], "recall_event_signature_invalid")):
         raise VerificationError("recall_event_signature_invalid")
     return None

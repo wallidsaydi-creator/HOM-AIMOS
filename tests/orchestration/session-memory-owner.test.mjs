@@ -41,6 +41,7 @@ function makeHarness({ quarantinePredicate = () => false } = {}) {
     persistCalls: 0,
     events: [],
     requestAuthorities: [],
+    signedFinalizationOperationIds: [],
     housekeeperCalls: 0,
   };
   const client = {
@@ -140,6 +141,13 @@ function makeHarness({ quarantinePredicate = () => false } = {}) {
     executeCanonicalSave: async (spec) => {
       assert.ok(spec.mutation_authority, 'verified request/tool path requires exact authority');
       state.requestAuthorities.push(spec.mutation_authority);
+      if (['session_exchange', 'session_manifest'].includes(spec.memory_type)) {
+        const operationId = spec.save_operation_id ?? spec.mutation_authority.requestReceiptId;
+        assert.match(operationId, /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+        assert(!state.signedFinalizationOperationIds.includes(operationId),
+          'one signed finalization cannot reuse a canonical SAVE operation for distinct memories');
+        state.signedFinalizationOperationIds.push(operationId);
+      }
       return persistMemory(spec);
     },
     executeHousekeeperCanonicalSave: async (spec) => {
@@ -156,7 +164,8 @@ function makeHarness({ quarantinePredicate = () => false } = {}) {
 test('signed session authority is preserved through turns, exchange, and final manifest', async () => {
   const harness = makeHarness();
   const owner = harness.createOwner();
-  const authority = Object.freeze({ kind: 'verified_request', fixture: 'exact-session-request' });
+  const authority = Object.freeze({ kind: 'verified_request', fixture: 'exact-session-request',
+    requestReceiptId: '11111111-1111-4111-8111-111111111111' });
   const context = {
     companyId: 'hom',
     agentId: 'fixture-agent',
@@ -178,12 +187,21 @@ test('signed session authority is preserved through turns, exchange, and final m
     observed_at: '2026-08-27T10:01:00.000Z',
     source: 'signed-session-test',
   }, context);
+  const expectedTurnIdHashesSha256 = digest(JSON.stringify([
+    digest('signed:user').toString('hex'),
+    digest('signed:assistant').toString('hex'),
+  ])).toString('hex');
   await owner.finalizeSession({
     session_id: 'signed_authority_session',
     source: 'signed-session-test',
+    expected_turn_count: 2,
+    expected_turn_id_hashes_sha256: expectedTurnIdHashesSha256,
   }, context);
   assert.equal(harness.state.requestAuthorities.length, 4);
   assert.ok(harness.state.requestAuthorities.every((candidate) => candidate === authority));
+  assert.equal(harness.state.signedFinalizationOperationIds.length, 2);
+  assert.notEqual(harness.state.signedFinalizationOperationIds[0],
+    harness.state.signedFinalizationOperationIds[1]);
   assert.equal(harness.state.housekeeperCalls, 0);
 });
 

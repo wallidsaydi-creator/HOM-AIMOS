@@ -6,7 +6,7 @@
  *
  * SERVICE CONNECTION GUIDE:
  * 1. ← Triggered by: agent-runner.js (Pre-run step 6)
- * 2. → Pulls from: services/db/connection.js (Meta-state trajectory)
+ * 2. → Consumes: canonical recall results (Meta-state trajectory)
  * 3. ↔ Interacts with: recall-calibrator.js (Error adaptation)
  * 4. ↔ Interacts with: services/orchestration/symbolic-reasoner.js (Pre/Post checks)
  * 5. → Affects: agent-runner.js (Resolves APPLY_SKILL vs REASON_AND_PLAN)
@@ -55,14 +55,12 @@
  */
 // ─── PIPELINE CONNECTIONS ────────────────────────────────────────────────────
 // ← Called by: agent-runner.js (pre-run step 6)
-// → Calls: services/db/connection.js (meta-state read/write)
+// → Consumes: origin-labelled canonical recall results
 // Pipeline: AGENT_RUN_PIPELINE
 // Position: meta-state evaluation
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
-import { query } from '../../db/connection.js';
-import { getEmbedding } from '../core/embeddings.js';
 import { symbolicPreCheck, symbolicPostCheck } from './symbolic-reasoner.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
@@ -323,99 +321,70 @@ export function buildSpeculativeVerificationContract({ metaState = {}, decision 
 /**
  * Compute task novelty by measuring cosine distance from the nearest known skill.
  */
-export async function computeTaskNovelty(taskPrompt, companyId = COMPANY) {
-  try {
-    const embedding = await getEmbedding(taskPrompt);
-    if (!embedding || embedding._degraded) {
-      return { novelty: 0.7, nearestSkillKey: null, nearestDistance: 1.0 };
-    }
-
-    const result = await query(
-       `SELECT key, (embedding <=> $1::vector) as distance
-       FROM aimos_memories
-       WHERE company_id = $2
-         AND memory_type = 'procedural'
-       ORDER BY embedding <=> $1::vector ASC
-       LIMIT 1`,
-      [JSON.stringify(embedding), companyId]
-    );
-
-    if (result.rows.length === 0) {
-      return { novelty: 1.0, nearestSkillKey: null, nearestDistance: 1.0 };
-    }
-
-    const distance = parseFloat(result.rows[0].distance);
-    const novelty = 1 / (1 + Math.exp(-5 * (distance - 0.4)));
-
-    return {
-      novelty: Math.max(0, Math.min(1, novelty)),
-      nearestSkillKey: result.rows[0].key,
-      nearestDistance: distance
-    };
-  } catch (err) {
-    console.warn('[meta-controller] novelty computation failed:', err.message);
-    return { novelty: 0.5, nearestSkillKey: null, nearestDistance: 0.5 };
-  }
+export async function computeTaskNovelty(taskPrompt, companyId = COMPANY, recalledMemories = []) {
+  void taskPrompt;
+  void companyId;
+  const skills = recalledMemories
+    .filter((memory) => ['procedural', 'skill'].includes(String(memory?.memory_type || '')))
+    .map((memory) => ({
+      memory,
+      score: [memory?.recall_confidence, memory?.rerank_score, memory?.confidence?.overall]
+        .map(Number)
+        .find(Number.isFinite),
+    }))
+    .filter((entry) => Number.isFinite(entry.score))
+    .sort((left, right) => right.score - left.score
+      || String(left.memory?.id || '').localeCompare(String(right.memory?.id || '')));
+  if (!skills.length) return { novelty: 1.0, nearestSkillKey: null, nearestDistance: 1.0, sourceMemoryIds: [] };
+  const nearest = skills[0];
+  const distance = Math.max(0, Math.min(1, 1 - nearest.score));
+  const novelty = 1 / (1 + Math.exp(-5 * (distance - 0.4)));
+  return {
+    novelty: Math.max(0, Math.min(1, novelty)),
+    nearestSkillKey: nearest.memory.key,
+    sourceMemoryIds: [nearest.memory.id],
+    nearestDistance: distance,
+  };
 }
 
 /**
  * Compute mastery level for a task domain based on past success history.
  */
-export async function computeMastery(agentId, taskDomain, companyId = COMPANY) {
-  try {
-    const result = await query(
-      `SELECT
-         COUNT(*) as total,
-         COUNT(*) FILTER (WHERE value LIKE '%result: success%' OR value LIKE '%result: partial%') as successes
-       FROM aimos_memories
-       WHERE company_id = $1
-         AND agent_id = $2
-         AND memory_type = 'event_log'
-         AND LOWER(value) LIKE $3`,
-      [companyId, agentId, `%${taskDomain.toLowerCase()}%`]
-    );
-
-    const total = parseInt(result.rows[0]?.total || '0', 10);
-    const successes = parseInt(result.rows[0]?.successes || '0', 10);
-
-    if (total === 0) return { mastery: 0.1, totalRuns: 0, successRate: 0 };
-
-    const successRate = successes / total;
-    const volumeFactor = Math.min(1, total / 20);
-    const mastery = successRate * 0.7 + volumeFactor * 0.3;
-
-    return {
-      mastery: Math.max(0, Math.min(1, mastery)),
-      totalRuns: total,
-      successRate
-    };
-  } catch {
-    return { mastery: 0.3, totalRuns: 0, successRate: 0 };
-  }
+export async function computeMastery(agentId, taskDomain, companyId = COMPANY, recalledMemories = []) {
+  void companyId;
+  const domain = String(taskDomain || '').toLowerCase();
+  const rows = recalledMemories.filter((memory) => memory?.agent_id === agentId
+    && memory?.memory_type === 'event_log'
+    && String(memory?.value || '').toLowerCase().includes(domain));
+  const total = rows.length;
+  const successes = rows.filter((memory) => /result:\s*(success|partial)/i.test(String(memory.value || ''))).length;
+  if (total === 0) return { mastery: 0.1, totalRuns: 0, successRate: 0, sourceMemoryIds: [] };
+  const successRate = successes / total;
+  const volumeFactor = Math.min(1, total / 20);
+  const mastery = successRate * 0.7 + volumeFactor * 0.3;
+  return {
+    mastery: Math.max(0, Math.min(1, mastery)),
+    totalRuns: total,
+    sourceMemoryIds: rows.map((memory) => memory.id).sort(),
+    successRate,
+  };
 }
 
 /**
  * Detect failure recurrence — how many times has this error pattern appeared?
  */
-export async function detectFailureRecurrence(errorSignature, agentId, companyId = COMPANY) {
-  try {
-    const sig = String(errorSignature || '').toLowerCase().slice(0, 200);
-    if (!sig) return { recurrenceCount: 0, isRecurring: false };
-
-    const result = await query(
-      `SELECT COUNT(*) as count FROM aimos_memories
-       WHERE company_id = $1
-         AND agent_id = $2
-         AND memory_type = 'event_log'
-         AND LOWER(value) LIKE $3`,
-      [companyId, agentId, `%${sig.slice(0, 80)}%`]
-    );
-
-    const count = parseInt(result.rows[0]?.count || '0', 10);
-    return { recurrenceCount: count, isRecurring: count >= 3 };
-  } catch {
-    return { recurrenceCount: 0, isRecurring: false };
-  }
+export async function detectFailureRecurrence(errorSignature, agentId, companyId = COMPANY, recalledMemories = []) {
+  void companyId;
+  const sig = String(errorSignature || '').toLowerCase().slice(0, 80);
+  if (!sig) return { recurrenceCount: 0, isRecurring: false, sourceMemoryIds: [] };
+  const rows = recalledMemories.filter((memory) => memory?.agent_id === agentId
+    && memory?.memory_type === 'event_log'
+    && String(memory?.value || '').toLowerCase().includes(sig));
+  return {
+    recurrenceCount: rows.length,
+    isRecurring: rows.length >= 3,
+    sourceMemoryIds: rows.map((memory) => memory.id).sort(),
+  };
 }
 
 /**
@@ -1243,12 +1212,14 @@ export function totSearch(metaState, maxDepth = TOT_MAX_DEPTH) {
  */
 export async function evaluateMetaState(taskPrompt, agentId, taskDomain, runContext = {}) {
   const companyId = COMPANY;
+  const recalledMemories = runContext.canonicalMemories;
+  if (!Array.isArray(recalledMemories)) throw new Error('canonical_meta_recall_required');
 
   const [noveltyResult, masteryResult, recurrenceResult] = await Promise.all([
-    computeTaskNovelty(taskPrompt, companyId),
-    computeMastery(agentId, taskDomain, companyId),
+    computeTaskNovelty(taskPrompt, companyId, recalledMemories),
+    computeMastery(agentId, taskDomain, companyId, recalledMemories),
     runContext.errorSignature
-      ? detectFailureRecurrence(runContext.errorSignature, agentId, companyId)
+      ? detectFailureRecurrence(runContext.errorSignature, agentId, companyId, recalledMemories)
       : Promise.resolve({ recurrenceCount: 0, isRecurring: false })
   ]);
 
@@ -1321,6 +1292,10 @@ export async function evaluateMetaState(taskPrompt, agentId, taskDomain, runCont
 
   return {
     action: decision.action,
+    sourceInputs: [noveltyResult, masteryResult, recurrenceResult].map((value, index) => ({
+      kind: 'derived', owner: 'services/orchestration/meta-controller.js#evaluateMetaState',
+      ref: ['novelty', 'mastery', 'recurrence'][index], value, memoryIds: value.sourceMemoryIds || [],
+    })),
     speed: decision.speed,
     reasoning: decision.reasoning,
     expectedValue: decision.expectedValue,

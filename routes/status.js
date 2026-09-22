@@ -6,7 +6,6 @@ import { ensureGovernanceReady, getGovernanceStats } from '../services/orchestra
 import { getSessionRunnerStats } from '../services/orchestration/session-runner.js';
 import { getModelContextWindow, normalizeModelId } from '../services/orchestration/model-context.js';
 import { subscribeRunEvents, getRunEventsSince } from '../services/orchestration/run-events.js';
-import { fetchWithTimeout } from '../services/orchestration/http.js';
 import { getOperatorAgentId, isOperatorAgentId } from '../services/security/system-config-store.js';
 import { peekCachedCredential } from '../services/security/credential-cache.js';
 import { systemConfigStore } from '../services/security/system-config-store.js';

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import sys
+from crypto_kernel import parse_json_wire
 
 from mutation_verifier import MutMemMutationVerificationError, verify_mutation_bundle
 from recall_verifier import (
@@ -32,6 +33,7 @@ def _terminal(profile: str, request: dict) -> dict:
                 trust_context=request.get("trust_context"),
                 expected_master_fingerprint=request.get("expected_master_fingerprint"),
                 verify_cryptography=request.get("verify_cryptography", False),
+                require_ancestry=request.get("require_ancestry", False),
             )
         else:
             raise ValueError("profile_invalid")
@@ -45,7 +47,7 @@ def main() -> int:
         raw = sys.stdin.buffer.read(MAXIMUM_INPUT_BYTES + 1)
         if len(raw) > MAXIMUM_INPUT_BYTES:
             raise ValueError("input_size_invalid")
-        request = json.loads(raw)
+        request = parse_json_wire(raw)
         if request.get("operation") == "byte_parity":
             recall = request["recall_authorization"]
             receipt = request["request_receipt"]

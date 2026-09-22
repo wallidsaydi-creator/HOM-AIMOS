@@ -181,9 +181,9 @@ async function proveCr5Restart(databaseName) {
   };
 }
 
-function run(command, args) {
+function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: ROOT, stdio: 'inherit' });
+    const child = spawn(command, args, { cwd: ROOT, stdio: 'inherit', ...options });
     child.once('error', reject);
     child.once('exit', (code, signal) => {
       if (code === 0) resolve();
@@ -292,6 +292,84 @@ async function dropScratchDatabase(databaseName) {
 }
 
 async function main() {
+  const schemaAudit = process.argv.includes('--audit-002-only') ? '002'
+    : process.argv.includes('--audit-r5-only') ? 'r5'
+    : process.argv.includes('--audit-r4-only') ? 'r4'
+    : process.argv.includes('--audit-003-only') ? '003'
+    : process.argv.includes('--audit-023-only') ? '023'
+    : process.argv.includes('--audit-r3-only') || process.argv.includes('--audit-r3-projection-only') ? 'r3' : null;
+  if (schemaAudit) {
+    const databaseName = `aimos_test_security_aud${schemaAudit}_${Date.now()}_${randomBytes(3).toString('hex')}`;
+    const pgBin = process.argv.find(arg => arg.startsWith('--pg-bin='))?.slice('--pg-bin='.length);
+    if (!pgBin || !path.isAbsolute(pgBin)) throw new Error('explicit_postgres_binary_directory_required');
+    const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), `aimos-aud${schemaAudit}-schema-`));
+    const schemaFile = path.join(temporaryDirectory, 'schema.sql');
+    const pgEnvironment = name => {
+      const url = new URL(databaseUrl(name));
+      return { ...process.env, PGDATABASE:name, PGHOST:url.hostname, PGPORT:url.port || '5432',
+        PGUSER:decodeURIComponent(url.username), PGPASSWORD:decodeURIComponent(url.password),
+        PGOPTIONS:'-c pgsodium.enable_event_trigger=on' };
+    };
+    let created = false;
+    try {
+      // Schema only: no memories, identity rows, credentials or runtime state.
+      await run(path.join(pgBin, 'pg_dump'), ['--schema-only', '--file', schemaFile],
+        { env: pgEnvironment('aimos') });
+      fs.chmodSync(schemaFile, 0o600);
+      await withPool('postgres', pool => pool.query(`CREATE DATABASE "${databaseName}" TEMPLATE template0`));
+      created = true;
+      await run(path.join(pgBin, 'psql'), ['-X', '-v', 'ON_ERROR_STOP=1', '-f', schemaFile],
+        { env: pgEnvironment(databaseName), stdio: ['ignore','ignore','inherit'] });
+      const selectedTests = schemaAudit === 'r5'
+        ? ['tests/security/audit-018-remediation-db.test.mjs','tests/security/audit-018-event-bytes-db.test.mjs','tests/security/audit-018-request-bytes-db.test.mjs']
+        : schemaAudit === 'r4'
+        ? ['tests/security/audit-009-remediation-db.test.mjs', 'tests/security/audit-004-remediation-db.test.mjs']
+        : schemaAudit === 'r3'
+        ? process.argv.includes('--audit-r3-projection-only')
+          ? ['tests/security/audit-006-remediation-db.test.mjs','tests/security/audit-005-projection-db.test.mjs']
+          : ['tests/security/audit-006-remediation-db.test.mjs',
+          'tests/security/audit-014-remediation-db.test.mjs',
+          'tests/security/audit-005-remediation-db.test.mjs',
+          'tests/security/audit-005-projection-db.test.mjs']
+        : [schemaAudit === '002' ? 'tests/security/audit-002-remediation-db.test.mjs'
+          : schemaAudit === '003' ? 'tests/security/audit-003-remediation-db.test.mjs'
+          : 'tests/security/audit-023-remediation-db.test.mjs'];
+      for (const selectedTest of selectedTests) {
+        await run(process.execPath, [
+          ...(selectedTest.endsWith('audit-005-remediation-db.test.mjs') ? ['--expose-gc'] : []),
+          selectedTest, '--live-fire', '--aimos-db', databaseName,
+        ]);
+      }
+    } finally {
+      try { if (created) await dropScratchDatabase(databaseName); }
+      finally { fs.rmSync(temporaryDirectory, { recursive: true }); }
+    }
+    return;
+  }
+  // Database-mechanism qualification uses no Genesis, service listener,
+  // identity, credential, certificate cache, or architecture-authority writes.
+  if (process.argv.includes('--audit-015-only')) {
+    const databaseName = `aimos_test_security_aud015_${Date.now()}_${randomBytes(3).toString('hex')}`;
+    const baselineDatabaseName = `${databaseName}_baseline`;
+    let created = false;
+    let baselineCreated = false;
+    try {
+      await withPool('postgres', async (pool) => {
+        await pool.query(`CREATE DATABASE "${databaseName}" TEMPLATE template0`);
+      });
+      created = true;
+      await withPool('postgres', pool => pool.query(`CREATE DATABASE "${baselineDatabaseName}" TEMPLATE template0`));
+      baselineCreated = true;
+      await run(process.execPath, [
+        'tests/security/audit-015-remediation-db.test.mjs', '--live-fire', '--aimos-db', databaseName,
+        '--baseline-db', baselineDatabaseName,
+      ]);
+    } finally {
+      try { if (baselineCreated) await dropScratchDatabase(baselineDatabaseName); }
+      finally { if (created) await dropScratchDatabase(databaseName); }
+    }
+    return;
+  }
   const runId = `${Date.now()}_${randomBytes(3).toString('hex')}`;
   const databaseName = `aimos_test_security_${runId}`;
   const keepScratch = process.argv.includes('--keep-scratch-db');

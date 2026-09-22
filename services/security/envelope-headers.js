@@ -11,31 +11,22 @@ import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { AIMOS_AGENT_KEY_ROOT } from '../core/runtime-config.js';
 import {
-  signPayload,
-  signPayloadWithContext,
-  signPayloadWithEnvelopeClaims,
+  signPayloadWithRequestTarget,
   loadAgentPrivkey,
   getAgentCert
 } from './agent-identity.js';
 
-// Stage of the H10 sig-form rollout that outbound signers emit (X-Aimos-Sig-Form).
-//   1 → JCS(body)+nonce+ts.                     ← current (stage N)
-//   3 → JCS(body)+METHOD+PATH+nonce+ts.         ← flip at stage N+1
-// The verifier (auth-tier.js) already accepts BOTH. Do NOT set this to 3 until
-// every signer (JS + Python) can emit form 3 in lockstep. This constant is the
-// single switch for the coordinated flip.
-//
-// ⚠ Form 2 is RESERVED — it belongs to the provenance ledger's sig_form_version
-// DB column (a different subsystem), NOT to request envelopes. Never set this
-// to 2. Request envelopes use only forms 1 and 3.
-export const OUTBOUND_SIG_FORM = 3;
+// Current native request profile. Form 5 authenticates the exact target and
+// optional chain/device claims. Historical forms 3/4 remain verifier-only here;
+// form 2 belongs to the separate provenance signature namespace.
+export const OUTBOUND_SIG_FORM = 5;
 
 /**
  * Build the cryptographic envelope headers for an outbound signed request.
  *
  * @param {string} agentId  the signing agent (its private key must be on disk)
  * @param {string} method   HTTP method the request will use (bound in sig-form 3)
- * @param {string} requestPath request pathname, query stripped (bound in sig-form 3)
+ * @param {string} requestPath exact origin-form request target, including query
  * @param {object} body     the JSON body that will be sent (signed)
  * @returns {Promise<Record<string,string>>} header map incl. X-Aimos-Sig-Form
  */
@@ -48,7 +39,7 @@ export async function buildEnvelopeHeaders(agentId, method, requestPath, body, c
   const nonce = randomBytes(16).toString('base64url');
   const ts = Math.floor(Date.now() / 1000);
 
-  const normPath = String(requestPath || '').split('?')[0];
+  const normPath = String(requestPath || '');
   const prevChainHash = claims.prevChainHash ?? claims.prev_chain_hash ?? null;
   const deviceFp = claims.deviceFp ?? claims.device_fp ?? null;
   if (deviceFp && !prevChainHash) {
@@ -60,20 +51,9 @@ export async function buildEnvelopeHeaders(agentId, method, requestPath, body, c
       throw new Error('buildEnvelopeHeaders: prev_chain_hash must be canonical base64url for 32 bytes');
     }
   }
-  const sigForm = prevChainHash ? 4 : OUTBOUND_SIG_FORM;
-  const sig = sigForm === 4
-    ? signPayloadWithEnvelopeClaims(
-        privkey,
-        payload,
-        method,
-        normPath,
-        { prevChainHash: String(prevChainHash), deviceFp: deviceFp ? String(deviceFp) : null },
-        nonce,
-        ts,
-      )
-    : (OUTBOUND_SIG_FORM === 3
-        ? signPayloadWithContext(privkey, payload, method, normPath, nonce, ts)
-        : signPayload(privkey, payload, nonce, ts));
+  const sigForm = OUTBOUND_SIG_FORM;
+  const sig = signPayloadWithRequestTarget(privkey, payload, method, normPath,
+    { prev_chain_hash: prevChainHash === null ? null : String(prevChainHash), device_fp: deviceFp === null ? null : String(deviceFp) }, nonce, ts);
 
   const headers = {
     'Aimos-Agent-Cert': cert,

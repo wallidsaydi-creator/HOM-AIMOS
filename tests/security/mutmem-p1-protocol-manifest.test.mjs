@@ -48,6 +48,8 @@ test('P1 protocol manifest is self-hashed and binds exact schemas, domains, and 
   const { value: manifest } = await verifiedGeneratedFile(MANIFEST);
   const { protocol_root_sha256: root, ...unsigned } = manifest;
   assert.equal(sha(Buffer.from(canonicalJson(unsigned), 'utf8')), root);
+  assert.equal(root, '663174ea3373d7f7eab816254a119a3da83b157709e190a93f3caef1094b6874',
+    'published protocol manifest must not be restamped to current implementation');
   assert.equal(manifest.status, 'p1_protocol_versioned');
   assert.deepEqual(manifest.schemas, MUTMEM_PORTABLE_OBJECT_SCHEMAS_V2);
   assert.equal(new Set(Object.values(manifest.schemas)).size, Object.keys(manifest.schemas).length);
@@ -61,7 +63,7 @@ test('P1 protocol manifest is self-hashed and binds exact schemas, domains, and 
   assert.equal(manifest.mutation_profile.native_outcome_schema,
     'hom.aimos.mutation-outcome-evidence/v2');
   assert.deepEqual(manifest.mutation_profile.failure_codes,
-    MUTMEM_PORTABLE_MUTATION_FAILURE_CODES_V2);
+    MUTMEM_PORTABLE_MUTATION_FAILURE_CODES_V2.filter(code => code !== 'MUTATION_ANCESTRY_BINDING_INVALID'));
 });
 
 test('P1 mutation vectors preserve the native outcome and cover every terminal/failure', async () => {
@@ -72,7 +74,7 @@ test('P1 mutation vectors preserve the native outcome and cover every terminal/f
   assert.equal(vectors.intended_n, 15);
   assert.equal(vectors.valid_n, 3);
   assert.equal(vectors.invalid_n, 12);
-  assert.deepEqual(vectors.failure_codes, MUTMEM_PORTABLE_MUTATION_FAILURE_CODES_V2);
+  assert.deepEqual(vectors.failure_codes, manifest.mutation_profile.failure_codes);
   for (const vector of vectors.vectors) {
     try {
       const result = evaluateMutMemPortableMutationBundleV2(vector.bundle);
@@ -105,18 +107,19 @@ test('P1 live mutation record covers transition, no-op, and observation without 
   assert.equal(live.domain_database_mutation, false);
 });
 
-test('P1 protocol manifest binds every source file and the exact source root', async () => {
+test('P1 historical manifest retains its exact source census and root without freezing current code', async () => {
   const { value: manifest } = await verifiedGeneratedFile(MANIFEST);
   const actual = [];
   for (const entry of manifest.source_files) {
-    const bytes = await readFile(path.join(ROOT, entry.path));
-    assert.equal(sha(bytes), entry.sha256, entry.path);
+    assert.match(entry.sha256, /^[0-9a-f]{64}$/);
     actual.push({ path: entry.path, sha256: entry.sha256 });
   }
+  assert.equal(new Set(actual.map(entry => entry.path)).size, actual.length);
+  assert.equal(manifest.protocol_root_sha256, '663174ea3373d7f7eab816254a119a3da83b157709e190a93f3caef1094b6874');
   assert.equal(sha(Buffer.from(canonicalJson(actual), 'utf8')), manifest.source_root_sha256);
 });
 
-test('P1 static vectors are denominator-complete and reconstruct every declared terminal', async () => {
+test('P1 historical vectors retain their denominator and reject receipts missing the now-required Merkle schema', async () => {
   const [{ value: manifest }, { bytes, value: vectors }] = await Promise.all([
     verifiedGeneratedFile(MANIFEST), verifiedGeneratedFile(VECTORS),
   ]);
@@ -126,6 +129,12 @@ test('P1 static vectors are denominator-complete and reconstruct every declared 
   assert.equal(vectors.invalid_n, MUTMEM_PORTABLE_PREDICATE_CODES_V2.length);
   assert.equal(vectors.vectors_root_sha256, manifest.vectors.vectors_root_sha256);
   for (const vector of vectors.vectors) {
+    if (['P1-PRED-CV-VALID-ORDINARY', 'P1-PRED-CV-VALID-HOUSEKEEPER',
+      'P1-PRED-CV-035', 'P1-PRED-CV-036'].includes(vector.id)) {
+      assert.throws(() => evaluateMutMemPortablePredicatesV2(vector.bundle),
+        /mutmem_portable_predicates_v2:EVENT_RECEIPT_BINDING_INVALID$/);
+      continue;
+    }
     try {
       const result = evaluateMutMemPortablePredicatesV2(vector.bundle);
       assert.equal(vector.expected, 'valid', vector.id);

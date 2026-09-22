@@ -5,16 +5,12 @@ import { readFile } from 'node:fs/promises';
 const ROOT = new URL('../../', import.meta.url);
 
 const OWNED_PATHS = [
-  'services/dream/dream-feedback.js',
   'services/learning/plasticity-controller.js',
   'services/learning/agent-learning.js',
   'services/learning/reflection-finetuner.js',
   'services/learning/batch-reflector.js',
   'services/learning/epistemic-vigilance.js',
-  'services/orchestration/agent-confidence-calibration.js',
   'services/orchestration/graph-designer.js',
-  'services/orchestration/meta-controller.js',
-  'services/orchestration/agent-prompts.js',
   'services/context/context-renewal.js',
   'services/context/persistent-identity-bootstrap.js',
   'services/write/sensible-screening.js',
@@ -43,6 +39,19 @@ test('learning and context memory reads retain every canonical lifecycle state',
       assert.match(sql, /\bcompany_id\s*=\s*\$\d+\b/i, `${relativePath} must remain tenant-bound`);
     }
   }
+
+  const meta = await source('services/orchestration/meta-controller.js');
+  assert.doesNotMatch(meta, /FROM\s+aimos_memories/i);
+  assert.match(meta, /canonical_meta_recall_required/);
+  assert.match(meta, /recalledMemories/);
+
+  const calibration = await source('services/orchestration/agent-confidence-calibration.js');
+  assert.equal(memoryQueries(calibration).length, 0);
+  assert.match(calibration, /recalledMemories/);
+
+  const dreamFeedback = await source('services/dream/dream-feedback.js');
+  assert.equal(memoryQueries(dreamFeedback).length, 0);
+  assert.match(dreamFeedback, /canonicalMemories/);
 });
 
 test('retention expansion preserves ownership and relevance boundaries', async () => {
@@ -51,9 +60,9 @@ test('retention expansion preserves ownership and relevance boundaries', async (
   assert.match(reflections, /memory_type = 'reflection_transaction'/);
 
   const prompts = await source('services/orchestration/agent-prompts.js');
-  assert.match(prompts, /agent_id = ANY\(\$2::text\[\]\)\s+OR scope = 'global'/);
-  assert.match(prompts, /m\.agent_id = ANY\(\$2::text\[\]\) OR m\.scope = 'global'/);
-  assert.match(prompts, /m\.embedding IS NOT NULL/);
+  assert.doesNotMatch(prompts, /FROM\s+aimos_memories/i);
+  assert.match(prompts, /canonical_model_context_recall_required/);
+  assert.match(prompts, /nativeRecallDisclosureLabelRoot/);
 
   const identity = await source('services/context/persistent-identity-bootstrap.js');
   assert.match(identity, /agent_id = \$2\s+OR agent_id IS NULL/);
@@ -66,9 +75,7 @@ test('retention expansion preserves ownership and relevance boundaries', async (
 
 test('append-only singleton reads resolve the latest retained projection', async () => {
   for (const relativePath of [
-    'services/dream/dream-feedback.js',
     'services/learning/agent-learning.js',
-    'services/orchestration/agent-confidence-calibration.js',
     'services/context/context-renewal.js',
   ]) {
     const body = await source(relativePath);

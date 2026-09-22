@@ -322,6 +322,7 @@ export async function appendIntegrationToken({
   clusterId = IDENTITY_VAULT_CLUSTER_ID,
   initiatingSubjectAgentId = 'housekeeper',
   credentialUseEvidence = [],
+  expectedCredentialHeads = null,
 }) {
   const normalizedProvider = normalizeProvider(provider);
   if (authType === 'oauth' && !accessToken) {
@@ -349,15 +350,45 @@ export async function appendIntegrationToken({
   let refresh = null;
   let client = null;
   try {
+    if (expectedCredentialHeads !== null) {
+      if (!expectedCredentialHeads || !['access', 'refresh'].every(kind =>
+        /^[0-9a-f]{64}$/.test(String(expectedCredentialHeads[kind] || '')))) {
+        throw new Error('identity_vault_expected_heads_invalid');
+      }
+      client = await agentPool.connect();
+      await client.query('BEGIN');
+      await client.query('SELECT set_config($1,$2,true)', ['app.current_client_id', companyId]);
+      await client.query('SELECT set_config($1,$2,true)', ['app.current_agent_id', 'housekeeper']);
+      await client.query("SET LOCAL lock_timeout = '5s'");
+      // Use the same lock order and keys as the existing token/lifecycle
+      // writers. Keep both heads stable through custody and atomic publication.
+      for (const kind of ['access', 'refresh']) {
+        const slot = credentialSlotId(tokenService(normalizedProvider, kind));
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+          [`identity-vault:${companyId}:${slot}`]);
+        await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1,0))',
+          [`${slot.length}:${slot}:credential-lifecycle`]);
+      }
+      for (const kind of ['access', 'refresh']) {
+        const current = await credentialLedger.readVerifiedSlotChain(
+          credentialSlotId(tokenService(normalizedProvider, kind)), client);
+        if (current.revoked || !current.effectiveStore
+            || Buffer.from(current.effectiveStore.mutation_hash).toString('hex') !== expectedCredentialHeads[kind]) {
+          throw new Error('identity_vault_source_head_changed');
+        }
+      }
+    }
     // Keychain succeeds before PostgreSQL by necessity. Version slots are
     // content-addressed, so retrying the same exchange is idempotent. Every
     // signed authority field is validated before either live pointer moves.
     access = await prepareToken(normalizedProvider, 'access', accessToken);
     refresh = await prepareToken(normalizedProvider, 'refresh', refreshToken);
-    client = await agentPool.connect();
-    await client.query('BEGIN');
-    await client.query('SELECT set_config($1,$2,true)', ['app.current_client_id', companyId]);
-    await client.query('SELECT set_config($1,$2,true)', ['app.current_agent_id', 'housekeeper']);
+    if (!client) {
+      client = await agentPool.connect();
+      await client.query('BEGIN');
+      await client.query('SELECT set_config($1,$2,true)', ['app.current_client_id', companyId]);
+      await client.query('SELECT set_config($1,$2,true)', ['app.current_agent_id', 'housekeeper']);
+    }
     const accessLifecycle = await commitTokenLifecycle(client, access, normalizedProvider, 'access', companyId, vaultBinding);
     const refreshLifecycle = await commitTokenLifecycle(client, refresh, normalizedProvider, 'refresh', companyId, vaultBinding);
     const custodyTerminals = [];

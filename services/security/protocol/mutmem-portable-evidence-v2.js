@@ -31,6 +31,16 @@ export const MUTMEM_PORTABLE_EVIDENCE_V2 = Object.freeze({
   maximum_object_body_bytes: 1024 * 1024,
 });
 
+// Current origin/family disclosure changes the bundle domain, not historical
+// object framing. Only the two changed object shapes receive new schemas.
+export const MUTMEM_PORTABLE_EVIDENCE_V3 = Object.freeze({
+  ...MUTMEM_PORTABLE_EVIDENCE_V2,
+  schema: 'hom.aimos.mutmem-portable-evidence/v3',
+  version: 3,
+  native_receipt_schema: 'hom-aimos/recall-merkle/v4-origin-family-disclosure',
+  bundle_domain: Buffer.from('hom.aimos.mutmem-portable-evidence/v3\0', 'utf8'),
+});
+
 export const MUTMEM_RECALL_SINGLETON_KINDS_V2 = Object.freeze([
   'trust_anchor',
   'actor_identity_epoch',
@@ -258,13 +268,13 @@ function objectRoot(objects) {
   })));
 }
 
-export function mutMemPortableEnvelopeHashV2({
+function portableEnvelopeHash({
   bundleId,
   companyId,
   expectedMasterFingerprint,
   resultCount,
   objectRootSha256,
-} = {}) {
+} = {}, profile) {
   const fingerprint = String(expectedMasterFingerprint || '').toLowerCase();
   const root = String(objectRootSha256 || '').toLowerCase();
   if (!HEX32.test(fingerprint)) fail('expected_master_fingerprint_invalid');
@@ -274,7 +284,7 @@ export function mutMemPortableEnvelopeHashV2({
     fail('result_count_invalid');
   }
   return sha256(Buffer.concat([
-    MUTMEM_PORTABLE_EVIDENCE_V2.bundle_domain,
+    profile.bundle_domain,
     framedUtf8(bundleId, 'bundle_id_invalid'),
     framedUtf8(companyId, 'company_id_invalid'),
     Buffer.from(fingerprint, 'hex'),
@@ -283,13 +293,17 @@ export function mutMemPortableEnvelopeHashV2({
   ]));
 }
 
-export function createMutMemPortableEvidenceEnvelopeV2({
+export function mutMemPortableEnvelopeHashV2(input = {}) {
+  return portableEnvelopeHash(input, MUTMEM_PORTABLE_EVIDENCE_V2);
+}
+
+function createPortableEvidenceEnvelope({
   bundleId,
   companyId,
   expectedMasterFingerprint,
   resultCount,
   objects,
-} = {}) {
+} = {}, profile) {
   const id = String(bundleId || '');
   const company = String(companyId || '');
   const fingerprint = String(expectedMasterFingerprint || '').toLowerCase();
@@ -304,14 +318,14 @@ export function createMutMemPortableEvidenceEnvelopeV2({
   const objectRootSha256 = objectRoot(orderedObjects).toString('hex');
   const body = Object.freeze({
     format: Object.freeze({
-      schema: MUTMEM_PORTABLE_EVIDENCE_V2.schema,
-      version: MUTMEM_PORTABLE_EVIDENCE_V2.version,
-      profile: MUTMEM_PORTABLE_EVIDENCE_V2.profile,
-      canonicalization: MUTMEM_PORTABLE_EVIDENCE_V2.canonicalization,
-      hash: MUTMEM_PORTABLE_EVIDENCE_V2.hash,
-      signature: MUTMEM_PORTABLE_EVIDENCE_V2.signature,
-      trust_anchor_mode: MUTMEM_PORTABLE_EVIDENCE_V2.trust_anchor_mode,
-      native_receipt_schema: MUTMEM_PORTABLE_EVIDENCE_V2.native_receipt_schema,
+      schema: profile.schema,
+      version: profile.version,
+      profile: profile.profile,
+      canonicalization: profile.canonicalization,
+      hash: profile.hash,
+      signature: profile.signature,
+      trust_anchor_mode: profile.trust_anchor_mode,
+      native_receipt_schema: profile.native_receipt_schema,
     }),
     bundle_id: id,
     company_id: company,
@@ -323,14 +337,22 @@ export function createMutMemPortableEvidenceEnvelopeV2({
   });
   return Object.freeze({
     ...body,
-    bundle_sha256: mutMemPortableEnvelopeHashV2({
+    bundle_sha256: portableEnvelopeHash({
       bundleId: id,
       companyId: company,
       expectedMasterFingerprint: fingerprint,
       resultCount,
       objectRootSha256,
-    }).toString('hex'),
+    }, profile).toString('hex'),
   });
+}
+
+export function createMutMemPortableEvidenceEnvelopeV2(input = {}) {
+  return createPortableEvidenceEnvelope(input, MUTMEM_PORTABLE_EVIDENCE_V2);
+}
+
+export function createMutMemPortableEvidenceEnvelopeV3(input = {}) {
+  return createPortableEvidenceEnvelope(input, MUTMEM_PORTABLE_EVIDENCE_V3);
 }
 
 export default {

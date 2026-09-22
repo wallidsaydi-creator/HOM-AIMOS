@@ -17,14 +17,23 @@ import cron from 'node-cron';
 import { createHash, randomUUID } from 'crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { agentPool, query, withTransaction } from '../../db/connection.js';
+import { agentPool, schedulerLockPool, query, withTransaction } from '../../db/connection.js';
 import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 import {
   logEvent,
   readVerifiedEventById,
   readVerifiedEventHistory,
+  readVerifiedRecoveryHistory,
+  iterateVerifiedEventHistory,
+  createVerifiedOpenEventReducer,
 } from '../observe/event-ledger.js';
-import { canonicalJson, verifyPayloadSigWithContext } from '../security/agent-identity.js';
+import {
+  canonicalJson,
+  verifyStoredPayloadSig,
+  verifyStoredPayloadSigWithContext,
+  verifyStoredPayloadSigWithEnvelopeClaims,
+  verifyStoredPayloadSigWithRequestTarget,
+} from '../security/agent-identity.js';
 import { contentHash } from '../security/identity-chain.js';
 import {
   verifyMutationHash,
@@ -35,10 +44,13 @@ import {
   genesisGuideRequestBody,
   verifyGenesisManifest,
 } from '../../scripts/verify-genesis-manifest.mjs';
+import { verifyToolActionAuthority } from './tool-action-ledger.js';
 
 const COMPANY = 'hom';
 const CRON_TIMEZONE = 'UTC';
 const scheduledJobs = new Map();
+const inFlightJobs = new Map();
+let schedulerAdmissionOpen = true;
 const SYSTEM_HEARTBEAT_JOB_ID = '__system_heartbeat__';
 const SYSTEM_HEARTBEAT_CRON = '*/30 * * * *';
 const BOTTLENECK_SCAN_JOB_ID = '__bottleneck_scan__';
@@ -54,7 +66,6 @@ const SCHEDULE_EVENT_SCHEMA = 'hom.aimos.schedule/v1';
 const SYSTEM_JOB_EVENT_SCHEMA = 'hom.aimos.system-job-run/v1';
 const SYSTEM_JOB_STARTED = 'system_job_started';
 const SYSTEM_JOB_TERMINAL = 'system_job_terminal';
-const MAX_SYSTEM_JOB_RECOVERY_EVENTS = 100_000;
 const REQUIRED_SYSTEM_JOBS = Object.freeze([
   [SYSTEM_HEARTBEAT_JOB_ID, SYSTEM_HEARTBEAT_CRON],
   [BOTTLENECK_SCAN_JOB_ID, BOTTLENECK_SCAN_CRON],
@@ -138,6 +149,8 @@ export async function verifySchedulerGenesisReadiness({
                 p.agent_id, p.agent_id AS provenance_agent_id,
                 p.agent_valid_from, p.cert_fingerprint, p.identity_tier,
                 p.event_type, p.sig_form_version,
+                p.request_sig_form, p.signed_method, p.signed_path,
+                p.signed_claims,
                 p.body_json, p.content_hash, p.content_hash AS prov_content_hash,
                 p.live_content_hash AS snapshot_live_content_hash,
                 p.mutation_hash, p.prev_mutation_hash, p.ts_signed, p.nonce, p.sig,
@@ -192,16 +205,22 @@ export async function verifySchedulerGenesisReadiness({
       const signedTs = Number(row.ts_signed);
       const storedSignature = Buffer.isBuffer(row.sig) ? row.sig.toString('base64url') : '';
       const computedContentHash = body ? contentHash(body) : null;
-      const signatureCheck = body
-        ? verifyPayloadSigWithContext(
-          housekeeperPubkey,
-          body,
-          'POST',
-          '/aimos/save',
-          String(row.nonce || ''),
-          signedTs,
-          storedSignature,
-          { skewSeconds: 0, nowFn: () => signedTs }
+      const requestSigForm = Number(row.request_sig_form || 1);
+      const signatureCheck = !body ? { valid: false }
+        : requestSigForm === 5 ? verifyStoredPayloadSigWithRequestTarget(
+          housekeeperPubkey, body, row.signed_method, row.signed_path,
+          row.signed_claims, String(row.nonce || ''), signedTs, storedSignature,
+        )
+        : requestSigForm === 4 ? verifyStoredPayloadSigWithEnvelopeClaims(
+          housekeeperPubkey, body, row.signed_method, row.signed_path,
+          row.signed_claims, String(row.nonce || ''), signedTs, storedSignature,
+        )
+        : requestSigForm === 3 ? verifyStoredPayloadSigWithContext(
+          housekeeperPubkey, body, row.signed_method, row.signed_path,
+          String(row.nonce || ''), signedTs, storedSignature,
+        )
+        : requestSigForm === 1 ? verifyStoredPayloadSig(
+          housekeeperPubkey, body, String(row.nonce || ''), signedTs, storedSignature,
         )
         : { valid: false };
       const direct = row.key === key
@@ -305,31 +324,83 @@ export async function verifySchedulerGenesisReadiness({
 }
 
 // ─── OVERLAP PROTECTION (defect 7) ────────────────────────────────────────────
-// Postgres session-level advisory lock. Survives process restarts and works
-// across replicas. If the previous run of the same jobKey is still in flight,
+// PostgreSQL session locks disappear when their connection dies. Retained
+// signed starts therefore also prevent a successor dispatch while an earlier
+// job has no terminal. Restart recovery remains the explicit orphan owner.
+// If the previous run of the same jobKey is still in flight,
 // pg_try_advisory_lock returns false and we skip with a warning rather than
 // re-entering concurrently. The lock is session-scoped, so we MUST unlock on the
 // same dedicated client before releasing it back to the pool — otherwise the
 // lock leaks into a pooled connection.
 async function withJobLock(jobKey, fn) {
+  const defer = async reason => {
+    const receipt = await logEvent(COMPANY, 'housekeeper', 'scheduler_admission_deferred', jobKey, {
+      job_key: jobKey, reason_code: reason, dispatched: false,
+      reasoning: 'The native scheduler did not reserve or dispatch this due job; its explicit admission disposition is retained.',
+    }, null, { returnReceipt: true });
+    return { skipped: true, reason, admissionEventId: receipt.event_id };
+  };
+  if (!schedulerAdmissionOpen) return defer('scheduler_draining');
+  if (inFlightJobs.has(jobKey)) return defer('scheduler_job_in_flight');
+  if (inFlightJobs.size >= 2) return defer('scheduler_capacity_busy');
+  const controller = new AbortController();
+  let finish;
+  const done = new Promise(resolve => { finish = resolve; });
+  inFlightJobs.set(jobKey, { controller, done });
   let client;
   let releaseError = null;
+  const lost = error => {
+    releaseError ||= error instanceof Error ? error : new Error('scheduler_lock_session_lost');
+    controller.abort(releaseError);
+  };
   try {
-    client = await agentPool.connect();
-  } catch (err) {
-    // Authority and overlap protection are unavailable. Running anyway could
-    // duplicate arbitrary autonomous side effects, so the housekeeper skips.
-    console.warn('[scheduler] advisory-lock authority unavailable; job skipped:', err?.message || String(err), { jobKey });
-    return { skipped: true, reason: 'scheduler_lock_authority_unavailable' };
-  }
-  try {
+    try { client = await schedulerLockPool.connect(); }
+    catch (error) { return await defer('scheduler_lock_authority_unavailable'); }
+    client.on('error', lost);
+    client.on('end', lost);
+    controller.signal.throwIfAborted();
     const { rows } = await client.query('SELECT pg_try_advisory_lock(hashtext($1)) AS got', [jobKey]);
     if (!rows[0]?.got) {
       console.warn('[scheduler] previous run still in flight — skipping', { jobKey });
-      return { skipped: true };
+      return await defer('scheduler_job_locked');
     }
     try {
-      return await fn();
+      return await fn({
+        signal: controller.signal,
+        // Only start reservation uses this restricted lock client, in a short
+        // transaction. No transaction spans provider or job work. Connection
+        // loss before commit cannot dispatch; committed open starts block peers.
+        async reserve(startFn) {
+          controller.signal.throwIfAborted();
+          await client.query('BEGIN');
+          try {
+            await client.query("SELECT set_config('app.current_client_id',$1,true),set_config('app.current_agent_id','housekeeper',true)", [COMPANY]);
+            const delegated = jobKey.startsWith('scheduled_task:');
+            const prior = await client.query(`SELECT e.id FROM aimos_events e
+              WHERE e.company_id=$1 AND e.operation=$2 AND e.metadata->>'schema'=$5
+                AND ${delegated ? 'e.key' : "e.metadata->>'job_id'"}=$3
+                AND NOT EXISTS (SELECT 1 FROM aimos_events t WHERE t.company_id=e.company_id
+                  AND t.parent_event_id=e.id AND t.operation=ANY($4::text[])
+                  AND t.metadata->>'schema'=e.metadata->>'schema'
+                  AND t.metadata->>'start_event_id'=e.id::text
+                  AND t.metadata->>'start_mutation_hash'=encode(e.mutation_hash,'hex')
+                  AND t.metadata->>'run_id'=e.metadata->>'run_id') LIMIT 1`,
+            [COMPANY, delegated ? 'schedule_run_reserved' : SYSTEM_JOB_STARTED,
+              delegated ? jobKey.slice('scheduled_task:'.length) : jobKey,
+              delegated ? ['schedule_run_completed','schedule_run_failed'] : [SYSTEM_JOB_TERMINAL],
+              delegated ? SCHEDULE_EVENT_SCHEMA : SYSTEM_JOB_EVENT_SCHEMA]);
+            if (prior.rows.length) throw new Error('scheduler_prior_run_unresolved');
+            const receipt = await startFn(client);
+            controller.signal.throwIfAborted();
+            await client.query('COMMIT');
+            controller.signal.throwIfAborted();
+            return receipt;
+          } catch (error) {
+            try { await client.query('ROLLBACK'); } catch (rollbackError) { lost(rollbackError); }
+            throw error;
+          }
+        },
+      });
     } finally {
       try {
         await client.query('SELECT pg_advisory_unlock(hashtext($1))', [jobKey]);
@@ -339,7 +410,13 @@ async function withJobLock(jobKey, fn) {
       }
     }
   } finally {
-    client.release(releaseError || undefined);
+    if (client) {
+      client.removeListener('error', lost);
+      client.removeListener('end', lost);
+      client.release(releaseError || undefined);
+    }
+    inFlightJobs.delete(jobKey);
+    finish();
   }
 }
 
@@ -359,9 +436,7 @@ function systemJobMutationHash(event) {
 }
 
 export function reconstructSystemJobRuns(events = []) {
-  if (!Array.isArray(events) || events.length > MAX_SYSTEM_JOB_RECOVERY_EVENTS) {
-    throw new Error('system_job_recovery_limit');
-  }
+  if (!Array.isArray(events)) throw new Error('system_job_recovery_input_invalid');
   const runs = new Map();
   for (const event of events) {
     if (![SYSTEM_JOB_STARTED, SYSTEM_JOB_TERMINAL].includes(event?.operation)) continue;
@@ -412,19 +487,22 @@ export async function executeSystemJob({
   runIdFn = randomUUID,
 } = {}) {
   if (!jobId || !cronExpression || typeof runFn !== 'function') throw new Error('system_job_definition_invalid');
-  return lockFn(jobId, async () => {
+  return lockFn(jobId, async (lockContext) => {
     const runId = runIdFn();
-    const start = await logEventFn(COMPANY, 'housekeeper', SYSTEM_JOB_STARTED, runId, {
+    const reserve = client => logEventFn(COMPANY, 'housekeeper', SYSTEM_JOB_STARTED, runId, {
       schema: SYSTEM_JOB_EVENT_SCHEMA,
       run_id: runId,
       job_id: jobId,
       cron_expression: cronExpression,
       actor_agent_id: 'housekeeper',
       reasoning: `Housekeeper reserved one exact autonomous ${jobId} execution after overlap protection succeeded.`,
-    }, null, { returnReceipt: true, exclusiveOperationKey: true });
+    }, null, { returnReceipt: true, exclusiveOperationKey: true, ...(client ? { client } : {}) });
+    const start = lockContext ? await lockContext.reserve(reserve) : await reserve();
     let result;
     try {
-      result = await runFn();
+      lockContext?.signal.throwIfAborted();
+      result = await runFn({ signal: lockContext?.signal });
+      lockContext?.signal.throwIfAborted();
     } catch (error) {
       await logEventFn(COMPANY, 'housekeeper', SYSTEM_JOB_TERMINAL, runId, {
         schema: SYSTEM_JOB_EVENT_SCHEMA,
@@ -735,7 +813,9 @@ async function runWeeklyAudit() {
 
     const memoryTypes = (memoryDist.rows || []).map(r => r.memory_type);
     const { reconstructSessionLaneTraces } = await import('./session-runner.js');
-    const sessionEvents = await readVerifiedEventHistory(COMPANY);
+    const sessionEvents = await readVerifiedEventHistory(COMPANY, {
+      operations: ['session_lane_started', 'session_lane_terminal'],
+    });
     const openSessionLanes = reconstructSessionLaneTraces(sessionEvents).open.length;
 
     const hasEventLog = parseInt(recentEvents.rows[0]?.cnt || 0, 10) > 0;
@@ -824,11 +904,11 @@ async function readScheduleProjections(client) {
   // every schedule event is still read and cryptographically verified below.
   if (projectionResult.rows.length === 0) return [];
 
-  const eventRows = await readVerifiedEventHistory(COMPANY, { client });
-
   const creationById = new Map();
   const statusById = new Map();
-  for (const event of eventRows) {
+  // Verify the entire chain by bounded pages; retain one creation and latest
+  // status per schedule, never its lifetime run history.
+  for await (const event of iterateVerifiedEventHistory(COMPANY, { client })) {
     if (!String(event.operation || '').startsWith('schedule_')) continue;
     const metadata = parseEventMetadata(event);
     if (metadata?.schema !== SCHEDULE_EVENT_SCHEMA) continue;
@@ -887,9 +967,7 @@ async function readScheduleProjections(client) {
 }
 
 export function reconstructDelegatedScheduleRuns(events = []) {
-  if (!Array.isArray(events) || events.length > MAX_SYSTEM_JOB_RECOVERY_EVENTS) {
-    throw new Error('schedule_run_recovery_limit');
-  }
+  if (!Array.isArray(events)) throw new Error('schedule_run_recovery_input_invalid');
   const runs = new Map();
   for (const event of events) {
     if (!['schedule_run_reserved', 'schedule_run_completed', 'schedule_run_failed'].includes(event?.operation)) continue;
@@ -982,6 +1060,7 @@ async function markScheduleStatus(schedule, {
   runId = null,
   parentEventId = null,
   startMutationHash = null,
+  client: ownedClient = null,
 } = {}) {
   const allowedOperations = new Set([
     'schedule_run_reserved',
@@ -996,7 +1075,7 @@ async function markScheduleStatus(schedule, {
     throw new Error('schedule_run_start_binding_required');
   }
   const occurredAt = new Date();
-  return withTransaction(async (client) => {
+  const apply = async (client) => {
     const verified = (await readScheduleProjections(client)).find((item) => item.id === schedule.id);
     if (!verified?.verified) throw new Error(verified?.proofError || 'schedule_not_verified');
     const updated = await client.query(
@@ -1024,18 +1103,23 @@ async function markScheduleStatus(schedule, {
       updated_at: occurredAt.toISOString(),
       reasoning: `housekeeper recorded ${operation} for retained schedule ${schedule.id}`,
     }, parentEventId, { client, returnReceipt: true });
-  }, { restricted: true, clientId: COMPANY, agentId: 'housekeeper' });
+  };
+  return ownedClient ? apply(ownedClient)
+    : withTransaction(apply, { restricted: true, clientId: COMPANY, agentId: 'housekeeper' });
 }
 
-async function executeScheduledTask(schedule) {
+async function executeScheduledTask(schedule, lockContext) {
   const runId = randomUUID();
-  const reservationReceipt = await markScheduleStatus(schedule, {
+  const reserve = client => markScheduleStatus(schedule, {
     operation: 'schedule_run_reserved',
     status: 'running',
     error: null,
     runId,
+    client,
   });
+  const reservationReceipt = await lockContext.reserve(reserve);
   try {
+    lockContext.signal.throwIfAborted();
     let result;
     if (schedule.label.startsWith('X ')) {
       const { runXAutoEngage, runXDailyPosts, runXDailySummary } = await import('../integrations/x-automation.js');
@@ -1049,8 +1133,10 @@ async function executeScheduledTask(schedule) {
         skipAimos: false,
         autonomous: true,
         securityParentEventId: reservationReceipt.event_id,
+        signal: lockContext.signal,
       });
     }
+    lockContext.signal.throwIfAborted();
     await markScheduleStatus(schedule, {
       operation: 'schedule_run_completed',
       status: 'success',
@@ -1082,11 +1168,12 @@ function unschedule(id) {
 }
 
 function scheduleInMemory(schedule) {
+  if (!schedulerAdmissionOpen) throw new Error('scheduler_draining');
   unschedule(schedule.id);
   const task = cron.schedule(
     schedule.cronExpression,
     () => {
-      void withJobLock(`scheduled_task:${schedule.id}`, () => executeScheduledTask(schedule))
+      void withJobLock(`scheduled_task:${schedule.id}`, lockContext => executeScheduledTask(schedule, lockContext))
         .catch(e => console.warn('[scheduler] scheduled task run failed', { id: schedule.id, err: e?.message }));
     },
     {
@@ -1097,6 +1184,7 @@ function scheduleInMemory(schedule) {
 }
 
 function registerSystemJob(jobId, cronExpression, runFn) {
+  if (!schedulerAdmissionOpen) throw new Error('scheduler_draining');
   if (scheduledJobs.has(jobId)) return;
   if (!cron.validate(cronExpression)) throw new Error(`system_job_cron_invalid:${jobId}`);
   const task = cron.schedule(
@@ -1161,6 +1249,7 @@ export function buildSchedulerRuntimeDiagnostics({
 }
 
 export async function startScheduler({ bootRecoveryComplete = false } = {}) {
+  if (!schedulerAdmissionOpen) throw new Error('scheduler_draining');
   schedulerReadiness = Object.freeze({ ready: false, state: 'starting', required_jobs: REQUIRED_SYSTEM_JOBS.length });
   try {
     if (bootRecoveryComplete !== true) throw new Error('scheduler_boot_recovery_incomplete');
@@ -1172,24 +1261,46 @@ export async function startScheduler({ bootRecoveryComplete = false } = {}) {
       throw error;
     }
     await ensureSchedulerSchema();
-    const recoveryEvents = await readVerifiedEventHistory(COMPANY, { signerAgentId: 'housekeeper' });
-    const systemJobSnapshot = reconstructSystemJobRuns(recoveryEvents);
-    const recovery = systemJobSnapshot.open.length
-      ? await reconcileOpenSystemJobs()
-      : Object.freeze({ scanned: recoveryEvents.length, reconciled: Object.freeze([]), remainingOpen: 0, jobsReplayed: 0 });
-    if (recovery.remainingOpen !== 0) throw new Error(`scheduler_orphan_recovery_incomplete:${recovery.remainingOpen}`);
+    const recoveryOperations = [
+      SYSTEM_JOB_STARTED, SYSTEM_JOB_TERMINAL,
+      'schedule_run_reserved', 'schedule_run_completed', 'schedule_run_failed',
+    ];
+    const createRecoveryReducer = () => createVerifiedOpenEventReducer([
+      {
+        name: 'system_job', startOperations: [SYSTEM_JOB_STARTED],
+        terminalOperations: [SYSTEM_JOB_TERMINAL],
+        startId: (event) => systemJobMetadata(event).schema === SYSTEM_JOB_EVENT_SCHEMA
+          ? systemJobMetadata(event).run_id || event.key : null,
+        terminalId: (event) => systemJobMetadata(event).schema === SYSTEM_JOB_EVENT_SCHEMA
+          ? systemJobMetadata(event).run_id || event.key : null,
+        validate: reconstructSystemJobRuns,
+      },
+      {
+        name: 'schedule_run', startOperations: ['schedule_run_reserved'],
+        terminalOperations: ['schedule_run_completed', 'schedule_run_failed'],
+        startId: (event) => parseEventMetadata(event)?.schema === SCHEDULE_EVENT_SCHEMA
+          ? parseEventMetadata(event).run_id || null : null,
+        terminalId: (event) => parseEventMetadata(event)?.schema === SCHEDULE_EVENT_SCHEMA
+          ? parseEventMetadata(event).run_id || null : null,
+        validate: reconstructDelegatedScheduleRuns,
+      },
+    ]);
     let schedules = await withTransaction(
       (client) => readScheduleProjections(client),
       { restricted: true, clientId: COMPANY, agentId: 'housekeeper' },
     );
-    const delegatedSnapshot = reconstructDelegatedScheduleRuns(recoveryEvents);
-    const delegatedRecovery = delegatedSnapshot.open.length
-      ? await reconcileOpenDelegatedSchedules({ schedules })
-      : Object.freeze({ scanned: recoveryEvents.length, reconciled: Object.freeze([]), remainingOpen: 0, jobsReplayed: 0 });
-    if (delegatedRecovery.remainingOpen !== 0) {
-      throw new Error(`scheduler_delegated_orphan_recovery_incomplete:${delegatedRecovery.remainingOpen}`);
-    }
-    if (delegatedRecovery.reconciled.length) {
+    let systemReconciled=0, delegatedReconciled=0;
+    await readVerifiedRecoveryHistory(COMPANY, {
+      signerAgentId:'housekeeper',operations:recoveryOperations,reducer:createRecoveryReducer(),
+      onOpenGroup:async (_rows,{family,readHistoryFn})=>{
+        const result=family==='system_job' ? await reconcileOpenSystemJobs({readHistoryFn})
+          : await reconcileOpenDelegatedSchedules({schedules,readHistoryFn});
+        if(result.remainingOpen!==0)throw new Error('scheduler_orphan_recovery_incomplete:'+result.remainingOpen);
+        if(family==='system_job')systemReconciled+=result.reconciled.length;
+        else delegatedReconciled+=result.reconciled.length;
+      },
+    });
+    if (delegatedReconciled) {
       schedules = await withTransaction(
         (client) => readScheduleProjections(client),
         { restricted: true, clientId: COMPANY, agentId: 'housekeeper' },
@@ -1224,6 +1335,7 @@ export async function startScheduler({ bootRecoveryComplete = false } = {}) {
       .map(([jobId]) => jobId)
       .filter((jobId) => !scheduledJobs.has(jobId));
     if (missingRequired.length) throw new Error(`scheduler_required_jobs_missing:${missingRequired.join(',')}`);
+    if (!schedulerAdmissionOpen) throw new Error('scheduler_draining');
     schedulerReadiness = Object.freeze({
       ready: true,
       state: 'ready',
@@ -1231,7 +1343,7 @@ export async function startScheduler({ bootRecoveryComplete = false } = {}) {
       registered_required_jobs: REQUIRED_SYSTEM_JOBS.length,
       delegated_jobs: delegatedRegistered,
       boot_recovery_complete: true,
-      orphan_reconciled: recovery.reconciled.length + delegatedRecovery.reconciled.length,
+      orphan_reconciled: systemReconciled + delegatedReconciled,
       genesis_manifest_version: genesisReadiness.manifestVersion,
       genesis_corpus_root: genesisReadiness.corpusRoot,
       local_model_required: false,
@@ -1252,11 +1364,26 @@ export async function startScheduler({ bootRecoveryComplete = false } = {}) {
 }
 
 export function stopScheduler() {
+  schedulerAdmissionOpen = false;
   for (const task of scheduledJobs.values()) {
     task.stop();
   }
   scheduledJobs.clear();
   schedulerReadiness = Object.freeze({ ready: false, state: 'stopped', required_jobs: REQUIRED_SYSTEM_JOBS.length });
+}
+
+export function getSchedulerWorkState() {
+  return { accepting: schedulerAdmissionOpen, activeJobs: inFlightJobs.size,
+    maxActiveJobs: 2, lockPool: schedulerLockPool.stats(), workPool: agentPool.stats() };
+}
+
+export async function drainScheduler() {
+  stopScheduler();
+  await Promise.all([...inFlightJobs.values()].map(job => job.done));
+}
+
+export function cancelSchedulerWork() {
+  for (const job of inFlightJobs.values()) job.controller.abort(new Error('scheduler_work_cancelled'));
 }
 
 export async function createScheduledTask({
@@ -1265,6 +1392,7 @@ export async function createScheduledTask({
   label,
   agentId,
   authority,
+  actionArguments,
 }) {
   const normalizedCron = normalizeText(cronExpression);
   const normalizedTask = normalizeText(taskDescription);
@@ -1276,15 +1404,24 @@ export async function createScheduledTask({
   if (!normalizedLabel) throw new Error('label is required');
   if (!normalizedAgentId) throw new Error('agent_id is required');
   if (!cron.validate(normalizedCron)) throw new Error(`Invalid cron expression: ${normalizedCron}`);
-  if (
-    authority?.kind !== 'verified_request'
-    || !authority.actorAgentId
-    || !authority.actorValidFromIso
-    || !authority.requestReceiptId
-    || !authority.requestReceiptMutationHash
-  ) {
-    throw new Error('schedule_verified_request_authority_required');
+  const authorizedArgs = actionArguments || {
+    cron_expression: normalizedCron,
+    task_description: normalizedTask,
+    agent_id: normalizedAgentId,
+    label: normalizedLabel,
+  };
+  if (authorizedArgs.cron_expression !== cronExpression
+      || authorizedArgs.task_description !== taskDescription
+      || authorizedArgs.label !== label
+      || (authorizedArgs.agent_id ?? normalizedAgentId) !== normalizedAgentId) {
+    throw new Error('schedule_action_argument_substitution');
   }
+  await verifyToolActionAuthority(authority, {
+    expectedCompanyId: COMPANY,
+    expectedTool: 'schedule_task',
+    expectedActorAgentId: authority?.actorAgentId,
+    expectedArguments: authorizedArgs,
+  });
 
   await ensureSchedulerSchema();
   const id = randomUUID();

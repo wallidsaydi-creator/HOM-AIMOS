@@ -1,5 +1,12 @@
 import express from 'express';
-import { ensureAgent, tasks } from '../services/orchestration/agent-store.js';
+import {
+  bindTaskOwnership,
+  ensureAgent,
+  taskDetailProjection,
+  taskListProjection,
+  taskOwnedByExecutionContext,
+  tasks,
+} from '../services/orchestration/agent-store.js';
 import { runProvider, providerStatus } from '../services/core/providers.js';
 import { searchWeb } from '../services/integrations/web-search.js';
 import { getPermissions } from '../services/core/permissions.js';
@@ -7,6 +14,7 @@ import { executeCanonicalSave } from '../services/write/canonical-save-owner.js'
 import { logEvent } from '../services/observe/event-ledger.js';
 import { AIMOS_COMPANY_ID } from '../services/core/runtime-config.js';
 import { verifiedRequestAuthorityFromRequest } from '../services/security/auth-gate.js';
+import { getAgentCert } from '../services/security/agent-identity.js';
 
 const router = express.Router();
 
@@ -16,11 +24,33 @@ function scheduleTaskCleanup(taskId, ttlMs = 5 * 60 * 1000) {
   }, ttlMs).unref?.();
 }
 
-router.get('/', (req, res) => {
+async function taskReadable(record, executionContext, permissionReads = new Map()) {
+  if (taskOwnedByExecutionContext(record, executionContext)) return true;
+  const owner = record?.ownership;
+  const delegation = owner?.delegation;
+  if (!delegation || !executionContext
+      || owner.companyId !== executionContext.companyId
+      || delegation.targetAgentId !== executionContext.actorAgentId
+      || delegation.targetValidFromIso !== executionContext.actorValidFromIso
+      || !owner.requestAdmissionEventId || !owner.requestReceiptMutationHash) return false;
+  const key = JSON.stringify([owner.companyId, owner.initiatingActorId, owner.initiatingActorValidFromIso]);
+  if (!permissionReads.has(key)) permissionReads.set(key, getPermissions(
+    owner.initiatingActorId, owner.companyId,
+    { subjectValidFromIso: owner.initiatingActorValidFromIso },
+  ));
+  const permissions = await permissionReads.get(key);
+  return permissions.delegate === true || permissions.admin_override === true;
+}
+
+router.get('/', async (req, res) => {
   const limit = Math.min(Math.max(parseInt(req.query.limit || '50', 10), 1), 500);
   const status = (req.query.status || '').toString().toLowerCase();
 
-  let records = Array.from(tasks.values());
+  const permissionReads = new Map();
+  let records = [];
+  for (const record of tasks.values()) {
+    if (await taskReadable(record, req.executionContext, permissionReads)) records.push(record);
+  }
   if (status) {
     records = records.filter(t => String(t.status || '').toLowerCase() === status);
   }
@@ -30,11 +60,7 @@ router.get('/', (req, res) => {
     const bTime = new Date(b.createdAt || 0).getTime();
     return bTime - aTime;
   });
-  const normalized = records.slice(0, limit).map(r => ({
-    ...r,
-    agent_id: r.agent_id || r.agentId || null,
-    created_at: r.created_at || r.createdAt || null
-  }));
+  const normalized = records.slice(0, limit).map(taskListProjection);
   res.json(normalized);
 });
 
@@ -49,7 +75,9 @@ router.post('/', async (req, res) => {
     return res.status(401).json({ success: false, error: 'envelope_actor_required' });
   }
 
-  const actorPermissions = await getPermissions(actorAgentId, AIMOS_COMPANY_ID);
+  const actorPermissions = await getPermissions(actorAgentId, AIMOS_COMPANY_ID, {
+    subjectValidFromIso: req.executionContext?.actorValidFromIso,
+  });
   if (agentId !== actorAgentId && actorPermissions.delegate !== true && actorPermissions.admin_override !== true) {
     return res.status(403).json({
       success: false,
@@ -58,6 +86,16 @@ router.post('/', async (req, res) => {
       target_agent_id: agentId,
       required_capability: 'delegate',
     });
+  }
+
+  let delegation = null;
+  if (agentId !== actorAgentId) {
+    const targetCert = await getAgentCert(agentId);
+    const target = JSON.parse(Buffer.from(targetCert, 'base64url').toString('utf8')).body;
+    delegation = {
+      targetAgentId: target.agent_id,
+      targetValidFromIso: new Date(target.valid_from * 1000).toISOString(),
+    };
   }
 
   let agent;
@@ -78,7 +116,7 @@ router.post('/', async (req, res) => {
   const perms = actorPermissions;
   const adminOverride = perms.admin_override === true;
 
-  const record = {
+  const record = bindTaskOwnership({
     id: taskId,
     agentId,
     task,
@@ -89,7 +127,7 @@ router.post('/', async (req, res) => {
     result: null,
     error: null,
     createdAt: new Date().toISOString()
-  };
+  }, req.executionContext, delegation);
 
   tasks.set(taskId, record);
 
@@ -164,10 +202,12 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.get('/:id', (req, res) => {
+router.get('/:id', async (req, res) => {
   const record = tasks.get(req.params.id);
-  if (!record) return res.status(404).json({ error: 'Task not found' });
-  res.json(record);
+  if (!record || !await taskReadable(record, req.executionContext)) {
+    return res.status(404).json({ error: 'Task not found' });
+  }
+  res.json(taskDetailProjection(record));
 });
 
 export default router;

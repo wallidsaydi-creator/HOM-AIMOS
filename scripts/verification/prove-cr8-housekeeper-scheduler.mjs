@@ -43,8 +43,11 @@ export function proveCr8HousekeeperScheduler() {
     /reconstructDelegatedScheduleRuns/,
     /reconcileOpenDelegatedSchedules/,
     /jobsReplayed: 0/,
-    /MAX_SYSTEM_JOB_RECOVERY_EVENTS = 100_000/,
+    /createVerifiedOpenEventReducer/,
+    /reducer:\s*createRecoveryReducer\(\)/,
+    /onOpenGroup/,
   ]) assert(pattern.test(scheduler), `system_job_contract:${pattern}`);
+  assert(!/MAX_SYSTEM_JOB_RECOVERY_EVENTS/.test(scheduler), 'obsolete_lifetime_recovery_cap_present');
   assert(/const REQUIRED_SYSTEM_JOBS = Object\.freeze\(\[/.test(scheduler), 'required_job_registry_missing');
   for (const job of ['__system_heartbeat__', '__bottleneck_scan__', '__nightly_dream__', '__weekly_assessment__', '__weekly_audit__']) {
     assert(scheduler.includes(job), `required_job_missing:${job}`);
@@ -61,7 +64,7 @@ export function proveCr8HousekeeperScheduler() {
   assert(/startScheduler\(\{ bootRecoveryComplete = false \}/.test(scheduler), 'boot_recovery_gate_missing');
   assert(/getSchedulerReadiness/.test(scheduler) && /local_model_required: false/.test(scheduler), 'truthful_scheduler_readiness_missing');
   assert(/schedulerStatus = await startScheduler\(\{ bootRecoveryComplete: cr7BootRecoveryComplete \}\)/.test(server), 'server_scheduler_readiness_wiring_missing');
-  assert(/ready: backgroundReady && schedulerStatus\.ready === true/.test(server), 'server_scheduler_ready_gate_missing');
+  assert(/ready: getServingWorkState\(\)\.phase === 'running' && backgroundReady && schedulerStatus\.ready === true/.test(server), 'server_scheduler_ready_gate_missing');
   assert(/scheduler: schedulerStatus/.test(server), 'server_scheduler_projection_missing');
   const schedulerWithoutExplicitDenial = scheduler.replace(/tenant_dependency:\s*false/g, '');
   assert(!/tenant|room-b|meeting-v4|tenant_routing/i.test(`${schedulerWithoutExplicitDenial}\n${heartbeat}\n${dream}`), 'tenant_scheduler_dependency');

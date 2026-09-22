@@ -61,6 +61,7 @@ import {
   AIMOS_COMPANY_ID,
   validateAimosHttpOrigin,
 } from '../core/runtime-config.js';
+import { validateOriginTrustRegistryConfig } from './protocol/origin-corroboration-v1.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 export const SYSTEM_CONFIG_MUTATION_SCOPE = 'offline_maintenance_only';
@@ -75,6 +76,10 @@ export const SYSTEM_CONFIG_DEFINITIONS = Object.freeze({
   // row means the optional cybersecurity workflow is not administratively
   // locked; a present value must be an exact signed boolean.
   SENTINEL_LOCKED: Object.freeze({ type: 'boolean', allowEmpty: false }),
+  // Provider-agnostic trusted-source authority. The master selects exact HTTPS
+  // origins, source principals, evidence markers and one bounded action tuple;
+  // agents and model providers cannot create or modify this registry.
+  ORIGIN_TRUST_REGISTRY: Object.freeze({ type: 'origin_trust_registry', allowEmpty: false }),
 
   // Provider selection and model routing are mutable operational authority.
   LLM_PROVIDER: Object.freeze({ type: 'provider_id', allowEmpty: true }),
@@ -578,6 +583,10 @@ export function validateSystemConfigValue(configKey, value) {
     return lower === 'true' || lower === 'false'
       ? { ok: true, value: lower }
       : { ok: false, reason: 'invalid_boolean' };
+  }
+
+  if (definition.type === 'origin_trust_registry') {
+    return validateOriginTrustRegistryConfig(normalized);
   }
 
   if (definition.type === 'provider_id') {

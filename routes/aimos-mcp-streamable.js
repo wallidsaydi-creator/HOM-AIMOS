@@ -12,7 +12,7 @@
  *
  * ARCHITECTURE:
  * This is a thin JSON-RPC 2.0 protocol translator. It maps MCP requests onto
- * the existing Aimos service layer (recall, save, status, QMD, etc.) which
+ * the existing Aimos service layer (recall, save, status, etc.) which
  * already enforces all gates (Quality Gate, Knowledge Gate, RPE Gate, Sudo Guard,
  * Aladdin Law, medallion layers, clearance ACLs). The MCP transport adds zero
  * bypasses — every call goes through the full save/recall pipeline.
@@ -43,6 +43,7 @@ import { randomUUID } from 'crypto';
 import { AIMOS_MCP_TOOLS, findAimosMcpTool } from '../services/orchestration/aimos-mcp-catalog.js';
 import { executeCanonicalSave } from '../services/write/canonical-save-owner.js';
 import { executeCanonicalRecall } from '../services/retrieval/native-recall-pipeline.js';
+import { agentRevocationCache } from '../services/security/agent-revocation-cache.js';
 import {
   AIMOS_API_BASE_URL,
   AIMOS_COMPANY_ID,
@@ -69,13 +70,12 @@ const AIMOS_BOOT_GUIDE = `## HOM Aimos MCP — First Contact Guide
 2. Paper-backed services before intuition changes
 3. Quality-gated save > ungated write
 
-### Available MCP Tools (6)
+### Available MCP Tools (5)
 1. aimos_status — server health, memory count, speed flags
 2. aimos_system_health — topology + pipeline validation
 3. aimos_recall — signed native semantic/BM25/PPR recall with provenance admission and receipt
 4. aimos_open_memory — exact-key/UUID alias through the same native recall boundary
-5. aimos_qmd_explain — parse QMD without disclosing memory rows
-6. aimos_save — quality-gated persistence (3 walls, requires key+value, min 20 chars)
+5. aimos_save — quality-gated persistence (3 walls, requires key+value, min 20 chars)
 
 ### Best Practices
 - Always send cryptographic envelope headers (Aimos-Agent-Cert, Aimos-Agent-Signature, Aimos-Agent-Nonce, Aimos-Agent-Timestamp).
@@ -115,7 +115,7 @@ If they disagree, Aimos wins.
 - If rejected 422: Quality Gate blocked — improve substance.
 
 === HOW TO RECALL (aimos_recall) ===
-- 16-stage pipeline: embedding → cache check → hybrid vector+BM25+temporal → entity recall → recursive graph walk → BM25 rescue → reranking → QMD activation → HyDE expansion → early-exit decision → dormancy evaluation → trust scoring → concept graph PPR → recall calibration → mnemonic encoding → confidence scoring.
+- Canonical recall includes its internal QMD candidate channel under the same signed authority, origin admission, and receipt.
 - The actor and exact identity epoch come from the verified certificate. A master-signed memory-read grant sets the maximum clearance; a request may only lower that cap.
 - Default mode: adaptive (multi-scale, smart routing).
 - Alternative mode: linear (deterministic, best for exact key matching).
@@ -272,7 +272,8 @@ const AIMOS_MCP_RESOURCES = Object.freeze([
 ]);
 
 // ─── In-memory session state (SSE connections) ────────────────────────────────
-// Key: sessionId, Value: { req, res, initialized, capabilities }
+// Key: sessionId. The logical session owner/token are immutable; only the
+// connection generation may change on a same-owner reconnect.
 const sessions = new Map();
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -417,22 +418,6 @@ async function executeAimosTool(name, args = {}, authContext = null, transportBi
       return recallResult.body;
     }
 
-    case 'aimos_qmd_explain': {
-      const { parseQMD, buildQueryPlan } = await import('../services/retrieval/qmd-parser.js').catch(() => ({
-        parseQMD: null, buildQueryPlan: null
-      }));
-      if (!parseQMD || !buildQueryPlan) {
-        throw Object.assign(new Error('QMD service not available'), { code: -32603 });
-      }
-      const rawQuery = String(args.query || '').trim();
-      if (!rawQuery) {
-        throw Object.assign(new Error('query is required'), { code: -32602 });
-      }
-      const ast = parseQMD(rawQuery);
-      const query_plan = buildQueryPlan(ast);
-      return { ast, query_plan, estimated_cost: query_plan.estimated_cost };
-    }
-
     case 'aimos_save': {
       const { key, value } = args;
       if (!key || !value) {
@@ -453,6 +438,9 @@ async function executeAimosTool(name, args = {}, authContext = null, transportBi
         clearance_level: Number(args.clearance_level || 1),
         memory_type: String(args.memory_type || 'declarative').trim(),
         source: args.source == null ? undefined : String(args.source).trim(),
+        source_memory_ids: args.source_memory_ids,
+        session_id: args.session_id,
+        save_operation_id: args.save_operation_id,
         mutation_authority: authContext.mutationAuthority
       });
       if (saved?.rejected) {
@@ -479,6 +467,8 @@ async function executeAimosTool(name, args = {}, authContext = null, transportBi
         terminal_event_id: saved?.terminal_receipt?.event_id || null,
         terminal_mutation_hash: saved?.terminal_receipt?.mutation_hash || null,
         stage_root_sha256: saved?.canonical_save_trace?.stage_root_sha256 || null,
+        save_operation_id: saved?.save_operation_id || null,
+        operation_replayed: saved?.operation_replayed === true,
       };
     }
 
@@ -492,14 +482,57 @@ async function executeAimosTool(name, args = {}, authContext = null, transportBi
 /**
  * Send an SSE event to a connected client.
  */
-function sendSSEEvent(sessionId, event, data) {
+function sessionOwnerFromRequest(req) {
+  const execution = req?.executionContext || null;
+  if (execution?.authSource === 'envelope'
+    && execution.actorAgentId && execution.actorValidFromIso && execution.companyId) {
+    return Object.freeze({
+      scopeMarker: `company:${String(execution.companyId)}`,
+      actorAgentId: String(execution.actorAgentId),
+      actorValidFromIso: new Date(execution.actorValidFromIso).toISOString(),
+    });
+  }
+  return null;
+}
+
+function sameSessionOwner(left, right) {
+  return Boolean(left && right
+    && left.scopeMarker === right.scopeMarker
+    && left.actorAgentId === right.actorAgentId
+    && left.actorValidFromIso === right.actorValidFromIso);
+}
+
+function removeSessionGeneration(sessionId, logicalToken, connectionGeneration) {
+  const current = sessions.get(sessionId);
+  if (current?.logicalToken === logicalToken
+    && current.connectionGeneration === connectionGeneration) sessions.delete(sessionId);
+}
+
+async function sessionDeliveryAuthorized(admittedBinding) {
+  if (!admittedBinding) return false;
+  // Work may outlive the request admission. Recheck the admitted epoch before
+  // disclosure and reacquire the connection after that await.
+  try {
+    const epoch = await agentRevocationCache.lookup(
+      admittedBinding.owner.actorAgentId, admittedBinding.owner.actorValidFromIso,
+    );
+    return epoch.found && !epoch.revoked && !epoch.proofInvalid
+      && Date.now() < admittedBinding.validUntilUnix * 1000;
+  } catch { return false; }
+}
+
+function sendSSEEvent(sessionId, event, data, admittedBinding) {
   const session = sessions.get(sessionId);
-  if (!session || !session.res) return;
+  if (!session?.res || session.res.writableEnded
+    || session.logicalToken !== admittedBinding.logicalToken
+    || !sameSessionOwner(session.owner, admittedBinding.owner)) return false;
   try {
     session.res.write(`event: ${event}\n`);
     session.res.write(`data: ${JSON.stringify(data)}\n\n`);
+    return true;
   } catch {
-    sessions.delete(sessionId);
+    removeSessionGeneration(sessionId, session.logicalToken, session.connectionGeneration);
+    return false;
   }
 }
 
@@ -777,6 +810,11 @@ async function dispatchRequest(sessionId, rpcRequest, authContext = null) {
     return jsonrpcResult(id, result);
 
   } catch (err) {
+    if (err.canonicalSaveOutcome) return jsonrpcError(id,-32000,'canonical_save_commit_resolution_required',{
+      commit_state:err.canonicalSaveOutcome.state,save_operation_id:err.canonicalSaveOutcome.operationId,
+      terminal_event_id:err.canonicalSaveOutcome.terminalEventId,
+      retry_policy:'reconcile_same_save_operation_id_no_new_operation',
+    });
     const code = err.code || -32603;
     return jsonrpcError(id, code, err.message);
   }
@@ -794,6 +832,14 @@ async function dispatchRequest(sessionId, rpcRequest, authContext = null) {
  */
 router.get('/', (req, res) => {
   const sessionId = String(req.query['sessionId'] || req.query['session_id'] || randomUUID()).trim();
+  const owner = sessionOwnerFromRequest(req);
+  if (!owner) {
+    return res.status(401).json(jsonrpcError(null, -32001, 'Verified session identity is required'));
+  }
+  const previous = sessions.get(sessionId) || null;
+  if (previous && !sameSessionOwner(previous.owner, owner)) {
+    return res.status(403).json(jsonrpcError(null, -32001, 'Session is owned by a different identity'));
+  }
 
   // Content negotiation: non-SSE clients get JSON handshake (LM Studio, Postman, curl)
   const accept = String(req.headers['accept'] || '');
@@ -814,12 +860,24 @@ router.get('/', (req, res) => {
   res.setHeader('X-Accel-Buffering', 'no');  // Disable nginx buffering
   res.flushHeaders();
 
-  // Register session — R1 Step 7: bind the session to the authenticated
-  // identity at creation. ownerAgentId is the verified cert identity (or the
-  // internal-service marker). Any later request presenting this sessionId under
-  // a different identity is rejected (see POST / below).
-  const ownerAgentId = req.agentId || (req.internalService ? `internal:${req.internalService}` : null);
-  sessions.set(sessionId, { req, res, initialized: false, capabilities: {}, ownerAgentId });
+  // A reconnect transfers the response stream only inside the same immutable
+  // owner/epoch/scope and preserves the logical token. Pending responses may
+  // follow the newest same-owner generation, but can never cross a logical
+  // session deletion/recreation boundary.
+  const connectionGeneration = Number(previous?.connectionGeneration || 0) + 1;
+  const logicalToken = previous?.logicalToken || randomUUID();
+  sessions.set(sessionId, {
+    req,
+    res,
+    initialized: previous?.initialized === true,
+    capabilities: previous?.capabilities || {},
+    owner,
+    logicalToken,
+    connectionGeneration,
+  });
+  if (previous?.res && previous.res !== res && !previous.res.writableEnded) {
+    previous.res.end();
+  }
 
   // Send initial connection confirmation
   res.write(`event: connected\n`);
@@ -831,20 +889,18 @@ router.get('/', (req, res) => {
       res.write(`: ping\n\n`);
     } catch {
       clearInterval(pingInterval);
-      sessions.delete(sessionId);
+      removeSessionGeneration(sessionId, logicalToken, connectionGeneration);
     }
   }, 30_000);
 
-  // Cleanup on close
-  req.on('close', () => {
+  // A stale socket is allowed to remove only its own connection generation.
+  const cleanup = () => {
     clearInterval(pingInterval);
-    sessions.delete(sessionId);
-  });
-
-  req.on('error', () => {
-    clearInterval(pingInterval);
-    sessions.delete(sessionId);
-  });
+    removeSessionGeneration(sessionId, logicalToken, connectionGeneration);
+  };
+  req.on('aborted', cleanup);
+  res.on('close', cleanup);
+  res.on('error', cleanup);
 });
 
 /**
@@ -857,6 +913,12 @@ router.get('/', (req, res) => {
  *
  * Body: JSON-RPC 2.0 request or array of requests
  */
+export function closeMcpStreamsForShutdown() {
+  for (const session of sessions.values()) {
+    if (!session.res.writableEnded) session.res.end();
+  }
+}
+
 router.post('/', async (req, res) => {
   const sessionId = String(req.query['sessionId'] || req.query['session_id'] || '').trim();
   const body = req.body;
@@ -864,7 +926,7 @@ router.post('/', async (req, res) => {
   // R1 Step 7: a client-supplied sessionId must belong to the caller. If the
   // session exists and was opened by a different identity, reject — a session
   // id is not a bearer credential and must not cross identity boundaries.
-  const callerAgentId = req.agentId || (req.internalService ? `internal:${req.internalService}` : null);
+  const callerOwner = sessionOwnerFromRequest(req);
   const mcpAuthContext = {
     agentId: req.executionContext?.actorAgentId || req.agentId || null,
     executionContext: req.executionContext || null,
@@ -890,11 +952,18 @@ router.post('/', async (req, res) => {
       requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash || null,
     } : null,
   };
+  let admittedSessionBinding = null;
   if (sessionId && sessions.has(sessionId)) {
-    const owner = sessions.get(sessionId)?.ownerAgentId ?? null;
-    if (owner !== callerAgentId) {
+    const session = sessions.get(sessionId);
+    if (!sameSessionOwner(session?.owner, callerOwner)) {
       return res.status(403).json(jsonrpcError(null, -32001, 'Session is owned by a different identity'));
     }
+    admittedSessionBinding = Object.freeze({
+      owner: session.owner,
+      logicalToken: session.logicalToken,
+      validUntilUnix: Number.isSafeInteger(req.identityCert?.valid_until)
+        ? req.identityCert.valid_until : 0,
+    });
   }
 
   // Validate JSON-RPC structure
@@ -915,6 +984,10 @@ router.post('/', async (req, res) => {
     const rpcReq = requests[0];
     const response = await dispatchRequest(sessionId, rpcReq, mcpAuthContext);
 
+    if (!await sessionDeliveryAuthorized(admittedSessionBinding)) {
+      return res.status(403).json(jsonrpcError(null, -32001, 'Session delivery authority is no longer valid'));
+    }
+
     if (response === null) {
       // Notification — no response needed, just acknowledge
       return res.status(202).end();
@@ -922,7 +995,7 @@ router.post('/', async (req, res) => {
 
     // For tools/call, stream via SSE and also return in response
     if (rpcReq.method === 'tools/call') {
-      sendSSEEvent(sessionId, 'response', response);
+      sendSSEEvent(sessionId, 'response', response, admittedSessionBinding);
       return res.status(200).json(response);
     }
 
@@ -931,6 +1004,9 @@ router.post('/', async (req, res) => {
 
   // Standard batch or non-streaming response
   const responses = await Promise.all(requests.map(rpcReq => dispatchRequest(sessionId, rpcReq, mcpAuthContext)));
+  if (admittedSessionBinding && !await sessionDeliveryAuthorized(admittedSessionBinding)) {
+    return res.status(403).json(jsonrpcError(null, -32001, 'Session delivery authority is no longer valid'));
+  }
   const validResponses = responses.filter(r => r !== null);
 
   if (validResponses.length === 0) {
@@ -942,6 +1018,18 @@ router.post('/', async (req, res) => {
   }
 
   return res.status(200).json(validResponses[0]);
+});
+
+router.delete('/', (req, res) => {
+  const sessionId = String(req.query['sessionId'] || req.query['session_id'] || '').trim();
+  const session = sessionId ? sessions.get(sessionId) : null;
+  if (!session) return res.status(404).json(jsonrpcError(null, -32004, 'Session not found'));
+  if (!sameSessionOwner(session.owner, sessionOwnerFromRequest(req))) {
+    return res.status(403).json(jsonrpcError(null, -32001, 'Session is owned by a different identity'));
+  }
+  sessions.delete(sessionId);
+  if (session.res && !session.res.writableEnded) session.res.end();
+  return res.status(204).end();
 });
 
 /**

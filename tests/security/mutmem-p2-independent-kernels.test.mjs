@@ -172,6 +172,8 @@ test('P2 kernels have no HOM-AIMOS runtime or I/O authority imports', async () =
     [...nodeSource.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((match) => match[1]),
     ['node:crypto'],
   );
-  assert.doesNotMatch(`${nodeSource}\n${pythonSource}`,
+  assert.match(pythonSource, /^from urllib\.parse import unquote_to_bytes$/m);
+  const authorityFreeSource = pythonSource.replace(/^from urllib\.parse import unquote_to_bytes\r?\n/m, '');
+  assert.doesNotMatch(`${nodeSource}\n${authorityFreeSource}`,
     /db\/|routes\/|services\/|jobs\/|fetch\(|requests\.|urllib|psycopg|child_process|subprocess/);
 });

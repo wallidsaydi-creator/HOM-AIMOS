@@ -8,7 +8,104 @@
 
 import { createHash } from 'node:crypto';
 
-import { canonicalJson } from './canonical-json.js';
+import { canonicalJson, assertSignedJsonBytesV1, parseJsonWire } from './canonical-json.js';
+
+export const SIGNED_JSON_BYTES_PROFILE_V1 = 'hom.aimos.signed-json-bytes/v1';
+
+// Request form 5 authenticates the exact origin-form target. Historical forms
+// 3/4 above retain their pathname-only preimages for stored evidence.
+export function validateRequestTargetV5(target) {
+  if (typeof target !== 'string' || !target.startsWith('/') || target.startsWith('//')
+      || /[^\x21-\x7e]|[#\\]/.test(target) || /%(?![0-9a-fA-F]{2})/.test(target)) {
+    throw new Error('request_target_invalid');
+  }
+  const queryAt = target.indexOf('?');
+  if (queryAt !== -1) {
+    const keys = new Set();
+    for (const field of target.slice(queryAt + 1).split('&')) {
+      if (!field) continue;
+      const rawKey = field.split('=', 1)[0];
+      let key;
+      try { key = decodeURIComponent(rawKey.replace(/\+/g, ' ')); }
+      catch { throw new Error('request_target_invalid'); }
+      if (key.includes('\0')) throw new Error('request_target_invalid');
+      if (keys.has(key)) throw new Error('request_query_duplicate');
+      keys.add(key);
+    }
+  }
+  return target;
+}
+
+export function requestClaimsV5(claims = null) {
+  if (claims !== null && (typeof claims !== 'object' || Array.isArray(claims)
+      || Object.keys(claims).sort().join(',') !== 'device_fp,prev_chain_hash')) throw new Error('request_claims_invalid');
+  const prev = claims?.prev_chain_hash ?? null;
+  const device = claims?.device_fp ?? null;
+  if (prev !== null && (typeof prev !== 'string' || Buffer.from(prev, 'base64url').length !== 32
+      || Buffer.from(prev, 'base64url').toString('base64url') !== prev)) throw new Error('request_claims_invalid');
+  if (device !== null && (typeof device !== 'string' || !device || prev === null)) throw new Error('request_claims_invalid');
+  return { prev_chain_hash: prev, device_fp: device };
+}
+
+export function buildSignedRequestMessageV5(body, method, target, claims, nonce, ts) {
+  const m = String(method || '').toUpperCase();
+  if (!/^[A-Z]+$/.test(m) || typeof nonce !== 'string' || !nonce
+      || !Number.isSafeInteger(ts) || ts <= 0) throw new Error('request_signature_input_invalid');
+  const fields = [canonicalJson(body), m, validateRequestTargetV5(target),
+    canonicalJson(requestClaimsV5(claims)), nonce, String(ts)];
+  return Buffer.concat([Buffer.from('hom.aimos.request-envelope/v5\0', 'utf8'), ...fields.flatMap(value => {
+    const bytes = Buffer.from(value, 'utf8');
+    const length = Buffer.alloc(4); length.writeUInt32BE(bytes.length);
+    return [length, bytes];
+  })]);
+}
+
+// Exact-byte commitment: D || u32(|schema|) || schema || u32(|wire|) || wire.
+// Length framing gives unique parsing; SHA-256 supplies collision resistance.
+// JSON equivalence is deliberately NOT byte equivalence in this new profile.
+export function signedJsonBytesCommitmentV1(schema, wire) {
+  if (typeof schema !== 'string' || !/^[a-z][a-z0-9._/-]*\/v[1-9][0-9]*$/.test(schema)
+      || schema.length > 200) throw new Error('signed_json_schema_invalid');
+  assertSignedJsonBytesV1(wire);
+  const type = Buffer.from(schema, 'ascii'), typeLength = Buffer.alloc(4), wireLength = Buffer.alloc(4);
+  typeLength.writeUInt32BE(type.length); wireLength.writeUInt32BE(wire.length);
+  return createHash('sha256').update(Buffer.from(SIGNED_JSON_BYTES_PROFILE_V1 + '\0'))
+    .update(typeLength).update(type).update(wireLength).update(wire).digest();
+}
+
+// Version dispatch belongs to the protocol, not an exporter. Exact-wire event
+// hashes are never reconstructed from JSONB. Legacy payload bytes are unchanged.
+export function eventPayloadBody(event) {
+  if (!Object.hasOwn(event ?? {}, 'signed_body_bytes_b64u')) return event?.signed_body;
+  const encoded = event.signed_body_bytes_b64u;
+  if (typeof encoded !== 'string' || !encoded.length) throw new Error('event_payload_bytes_invalid');
+  const wire = Buffer.from(encoded, 'base64url');
+  if (wire.toString('base64url') !== encoded) throw new Error('event_payload_bytes_invalid');
+  signedJsonBytesCommitmentV1('hom.aimos.event/v2', wire);
+  const body = parseJsonWire(wire.toString('utf8'));
+  if (!body || body.payload_schema !== 'hom.aimos.event/v2') throw new Error('event_payload_version_invalid');
+  if (Object.hasOwn(event, 'signed_body') && canonicalJson(event.signed_body) !== canonicalJson(body)) {
+    throw new Error('event_payload_projection_invalid');
+  }
+  return body;
+}
+
+export function eventPayloadCommitment(body, nonce, wire = null) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new Error('event_payload_invalid');
+  if (!Object.hasOwn(body, 'payload_schema')) {
+    if (wire != null) throw new Error('event_payload_version_invalid');
+    return createHash('sha256').update(canonicalJson(body)).digest();
+  }
+  if (body.payload_schema !== 'hom.aimos.event/v2') throw new Error('event_payload_version_invalid');
+  const hash = signedJsonBytesCommitmentV1(body.payload_schema, wire);
+  if (typeof nonce !== 'string' || !nonce.length || body.nonce !== nonce
+      || body.ledger_version !== 1 || !Number.isSafeInteger(body.ledger_seq) || body.ledger_seq < 1
+      || !Number.isSafeInteger(body.ts_signed) || body.ts_signed < 1
+      || canonicalJson(parseJsonWire(wire.toString('utf8'))) !== canonicalJson(body)) {
+    throw new Error('event_payload_projection_invalid');
+  }
+  return hash;
+}
 
 export const MUTMEM_PROTOCOL_CONSTANTS = Object.freeze({
   COGNITIVE_TRANSITION_DOMAIN: Buffer.from('aimos.cognitive-transition/v2\0', 'utf8'),
@@ -169,6 +266,38 @@ export function cognitiveProjectionHash({
     provenance,
     previous,
   ]));
+}
+
+export function cognitiveAncestryBinding({ nativePredecessorKind, nativePredecessorHash, nativePredecessorId, previousProjectionHash } = {}) {
+  const binding = {
+    schema: 'hom.aimos.cognitive-ancestry-binding/v1',
+    native_predecessor: { kind: nativePredecessorKind,
+      commitment_hex: nativePredecessorHash == null ? null : Buffer.from(nativePredecessorHash).toString('hex'),
+      provenance_id: nativePredecessorId ?? null },
+    projection_predecessor: { kind: previousProjectionHash == null ? 'genesis' : 'projection_hash',
+      commitment_hex: previousProjectionHash == null ? null : Buffer.from(previousProjectionHash).toString('hex') },
+  };
+  verifyCognitiveAncestryBinding(binding, { nativePredecessorHash, previousProjectionHash });
+  return Object.freeze(binding);
+}
+
+export function verifyCognitiveAncestryBinding(binding, { nativePredecessorHash, previousProjectionHash } = {}) {
+  const keys = (value, expected) => value && typeof value === 'object' && !Array.isArray(value)
+    && Object.keys(value).length === expected.length && expected.every(key => Object.hasOwn(value,key));
+  const reference = (value, kinds, expected, native=false) => keys(value,native?['kind','commitment_hex','provenance_id']:['kind','commitment_hex'])
+    && kinds.includes(value.kind)
+    && (expected == null ? value.kind === 'genesis' && value.commitment_hex === null
+      : value.kind !== 'genesis' && /^[0-9a-f]{64}$/.test(value.commitment_hex)
+        && value.commitment_hex === Buffer.from(expected).toString('hex'));
+  if (!keys(binding,['schema','native_predecessor','projection_predecessor'])
+      || binding.schema !== 'hom.aimos.cognitive-ancestry-binding/v1'
+      || !reference(binding.native_predecessor,['genesis','mutation_hash','occurrence_ref'],nativePredecessorHash,true)
+      || (nativePredecessorHash == null ? binding.native_predecessor.provenance_id !== null
+        : !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(binding.native_predecessor.provenance_id))
+      || !reference(binding.projection_predecessor,['genesis','projection_hash'],previousProjectionHash)) {
+    throw new Error('cognitive_ancestry_binding_invalid');
+  }
+  return true;
 }
 
 export function cognitiveCorpusRoot(proofRecords = []) {

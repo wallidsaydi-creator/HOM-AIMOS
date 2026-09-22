@@ -50,6 +50,7 @@ test('native recall admission session reuses principal binding and same-snapshot
         data_class: 'public',
         source: 'fixture',
         version_status: 'current',
+        live_content_hash: '11'.repeat(32),
       }]]),
     };
   };
@@ -83,6 +84,8 @@ test('native recall admission session reuses principal binding and same-snapshot
   assert.equal(second.evidence_cache.miss_count, 1);
   assert.equal(statements.filter((entry) => entry.text
     === 'BEGIN ISOLATION LEVEL REPEATABLE READ').length, 1);
+  assert.equal(statements.filter((entry) => entry.text
+    === 'SET TRANSACTION READ ONLY').length, 1);
   assert.equal(statements.filter((entry) => /^SELECT set_config/.test(entry.text)).length, 1);
   const principalBinding = statements.find((entry) => /^SELECT set_config/.test(entry.text));
   assert.deepEqual(principalBinding.params.slice(-2), ['plan_cache_mode', 'force_generic_plan']);
@@ -92,7 +95,7 @@ test('native recall admission session reuses principal binding and same-snapshot
   assert.equal(NATIVE_RECALL_SESSION_SCALE_CONTRACT.restricted_connections_per_request, 1);
   assert.equal(NATIVE_RECALL_SESSION_SCALE_CONTRACT.transaction_isolation, 'repeatable_read');
   assert.equal(NATIVE_RECALL_SESSION_SCALE_CONTRACT.transaction_access,
-    'read_interface_with_authority_row_lock');
+    'authority_rows_locked_then_database_enforced_read_only');
   assert.equal(NATIVE_RECALL_SESSION_SCALE_CONTRACT.verified_evidence_cache_scope,
     'request_local_repeatable_read_snapshot');
   assert.equal(statements.filter((entry) => /^WITH fixture/.test(entry.text)).length, 1);
@@ -148,6 +151,18 @@ test('native recall shared read interface rejects mutation statements before SQL
     /recall_admission_read_only_statement_required/,
   );
   assert.equal(statements.some((text) => /DELETE FROM aimos_memories/.test(text)), false);
+  await session.read("SELECT 'delete create update' AS harmless_vocabulary");
+  await session.read('SELECT "drop" FROM harmless_identifier');
+  await session.read('SELECT 1 /* nested /* update */ comment */');
+  await session.read('DECLARE verified_history NO SCROLL CURSOR WITHOUT HOLD FOR SELECT 1');
+  await session.read('FETCH FORWARD 16 FROM verified_history');
+  await session.read('CLOSE verified_history');
+  await assert.rejects(
+    session.read('DECLARE changed NO SCROLL CURSOR WITHOUT HOLD FOR DELETE FROM aimos_memories'),
+    /recall_admission_read_only_statement_required/,
+  );
+  await assert.rejects(session.read('SELECT 1; DELETE FROM aimos_memories'),
+    /recall_admission_read_only_statement_required/);
   await session.close({ commit: false });
 });
 
@@ -164,6 +179,7 @@ test('candidate admission is atomic: one unauthorized proposal rejects the compl
     company_id: 'hom', subject_agent_id: 'codex-auditor', scope: 'agent',
     cube_scope: 'private', memory_type: 'fact', clearance_level: clearanceLevel,
     data_class: 'confidential', source: 'fixture', version_status: 'current',
+    live_content_hash: '22'.repeat(32),
   });
 
   await assert.rejects(

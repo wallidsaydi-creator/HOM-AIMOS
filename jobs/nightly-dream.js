@@ -37,7 +37,8 @@ import { runSVDDMemoryIntegrityCheck } from '../services/observe/svdd-anomaly.js
 import { runTemporalFingerprintAudit } from '../services/temporal/temporal-fingerprinter.js';
 import { analyzeTopicCoverage, runTopicBudgetAudit } from '../services/temporal/topic-budget.js';
 import { runEmbeddingStabilityAudit } from '../services/retrieval/embedding-stability.js';
-import { runCalibrationUpdate } from '../services/retrieval/recall-calibrator.js';
+import { runCalibrationUpdate, readMemoryCreditsForRows } from '../services/retrieval/recall-calibrator.js';
+import { memoryCreditValue } from '../services/security/protocol/memory-credit.js';
 import { canonicalJson } from '../services/security/agent-identity.js';
 import { runHebbianConsensusBatch, HEBBIAN_CONSTANTS } from '../services/dream/hebbian-consensus.js';
 import { governorConfigLedger } from '../services/governance/governor-config-ledger.js';
@@ -84,6 +85,18 @@ async function pMap(items, worker, concurrency = 8) {
 // the most-recent DREAM_DAY_EVENT_LIMIT rows (default 10000) while preserving
 // chronological (ASC) order for downstream bullet rendering.
 const DAY_EVENT_LIMIT = 10_000;
+const DATA_CLASS_ORDER = Object.freeze(['public', 'internal', 'confidential', 'restricted']);
+
+function retainedInputFloor(records = []) {
+  const clearanceLevel = Math.max(5, ...records.map((record) => Number(record.clearance_level || 1)));
+  const dataClassRank = Math.max(0, ...records.map((record) => DATA_CLASS_ORDER.indexOf(
+    String(record.data_class || 'public').toLowerCase()
+  )));
+  return Object.freeze({
+    clearance_level: clearanceLevel,
+    data_class: DATA_CLASS_ORDER[dataClassRank],
+  });
+}
 
 async function insertDreamSummaryLayer({
   companyId,
@@ -138,17 +151,27 @@ async function insertDreamSummaryLayer({
 
 async function collectDayEvents(companyId, since) {
   const result = await query(
-    `SELECT key, value, created_at, memory_type FROM (
-       SELECT key, value, created_at, memory_type
+    `SELECT id, key, value, created_at, memory_type, agent_id, scope,
+            cube_scope, clearance_level, data_class FROM (
+       SELECT id, key, value, created_at, memory_type, agent_id, scope,
+              cube_scope, clearance_level, data_class
        FROM aimos_memories
        WHERE company_id = $1
          AND memory_type IN ('event_log', 'session_exchange', 'procedural', 'declarative', 'session_debrief')
          AND created_at >= $2
+         AND NOT (cube_scope = 'private' AND agent_id IS DISTINCT FROM 'housekeeper')
+         AND (
+           scope IN ('global', 'executive', 'system')
+           OR (scope IN ('private', 'agent', 'project') AND agent_id = 'housekeeper')
+           OR (scope = agent_id AND agent_id = 'housekeeper')
+           OR ((scope = 'quarantine' OR memory_type = 'quarantine')
+             AND (agent_id = 'housekeeper' OR $4 = 'housekeeper'))
+         )
        ORDER BY created_at DESC
        LIMIT $3
      ) sub
      ORDER BY created_at ASC`,
-    [companyId, since, DAY_EVENT_LIMIT]
+    [companyId, since, DAY_EVENT_LIMIT, 'housekeeper']
   );
   return result.rows;
 }
@@ -623,6 +646,7 @@ async function runHierarchicalSummarization(companyId, events, dreamDate) {
       // Aladdin law: append a new retained version; the prior version remains
       // addressable through the explicit supersession topology.
       const patternKey = `dream_pattern:${dreamDate}`;
+      const patternFloor = retainedInputFloor(events);
       await executeHousekeeperCanonicalSave({
         company_id: companyId,
         agent_id: 'housekeeper',
@@ -630,8 +654,9 @@ async function runHierarchicalSummarization(companyId, events, dreamDate) {
         value: metaSummary,
         scope: 'system',
         memory_type: 'dream_pattern',
-        clearance_level: 5,
+        ...patternFloor,
         source: 'nightly-dream',
+        source_memory_ids: events.map((event) => event.id),
       });
     }
 
@@ -737,14 +762,15 @@ async function runAccessPatternAnalysis(companyId) {
     const maxDW = parseFloat(maxAccess.rows[0]?.max_dw || '2');
     const maxRefs = 10; // reasonable cap
     const diagnostics = [];
-    for (const row of untrusted.rows) {
+    for (const row of await readMemoryCreditsForRows(companyId, untrusted.rows)) {
       const accessFreq = Math.min(1, (Number(row.access_count) || 0) / Math.max(maxDW, 1));
       const crossRefs = Math.min(1, (parseInt(row.cross_ref_count, 10) || 0) / maxRefs);
-      const credit = Math.min(1, (parseFloat(row.credit_score) || 1.0) / 2);
+      const credit = memoryCreditValue(row) ?? 0;
 
       const trustScore = 0.45 * accessFreq + 0.30 * crossRefs + 0.25 * credit;
 
-      diagnostics.push({ memory_id: row.id, trust_score: Number(trustScore.toFixed(6)) });
+      diagnostics.push({ memory_id: row.id, trust_score: Number(trustScore.toFixed(6)),
+        memory_credit: row.memory_credit });
       trustScored++;
     }
     if (diagnostics.length) {
@@ -889,9 +915,10 @@ export async function runNightlyDream(companyId = AIMOS_COMPANY_ID) {
   // --- Stage 8: Delta Writer ---
   let deltaWriterResult = { added: 0, deduped: 0, deltasGenerated: 0 };
   try {
-    const generatorOutput = { usedMemoryIds: [], helpful: [], harmful: [] };
-    const reflectorOutput = events
-      .filter(e => String(e.value || '').length > 50)
+    const reflectionEvents = events
+      .filter(e => String(e.value || '').length > 50);
+    const generatorOutput = { usedMemoryIds: reflectionEvents.map((event) => event.id), helpful: [], harmful: [] };
+    const reflectorOutput = reflectionEvents
       .map(e => `[insight] - ${String(e.value || '').slice(0, 200)}`)
       .join('\n');
     const result = await runDeltaPipeline(generatorOutput, reflectorOutput, companyId);
@@ -1073,6 +1100,8 @@ export async function runNightlyDream(companyId = AIMOS_COMPANY_ID) {
   const consolidationResult = await runDreamConsolidation();
 
   const key = `dream:${now.toISOString().slice(0, 10)}`;
+  const eventSourceMemoryIds = events.map((event) => event.id);
+  const eventSourceFloor = retainedInputFloor(events);
   const embedding = await getEmbedding(value);
   // Aladdin-compliant: persistMemory appends a same-key retained version and
   // records the explicit predecessor/successor relation atomically.
@@ -1082,22 +1111,34 @@ export async function runNightlyDream(companyId = AIMOS_COMPANY_ID) {
     key,
     value,
     scope: 'system',
-    clearance_level: 5,
+    ...eventSourceFloor,
     memory_type: 'dream_summary',
     source: 'nightly-dream',
+    source_memory_ids: eventSourceMemoryIds,
   });
 
   let topConsolidatedMemories = [];
+  let topConsolidatedSourceRows = [];
   try {
     const topResult = await query(
-      `SELECT id, key, memory_type, retrieval_weight, created_at
+      `SELECT id, key, memory_type, retrieval_weight, created_at,
+              agent_id, scope, cube_scope, clearance_level, data_class
        FROM aimos_memories
        WHERE company_id = $1
          AND created_at >= $2
+         AND NOT (cube_scope = 'private' AND agent_id IS DISTINCT FROM 'housekeeper')
+         AND (
+           scope IN ('global', 'executive', 'system')
+           OR (scope IN ('private', 'agent', 'project') AND agent_id = 'housekeeper')
+           OR (scope = agent_id AND agent_id = 'housekeeper')
+           OR ((scope = 'quarantine' OR memory_type = 'quarantine')
+             AND agent_id = 'housekeeper')
+         )
        ORDER BY retrieval_weight DESC NULLS LAST, created_at DESC
        LIMIT 5`,
       [companyId, since.toISOString()]
     );
+    topConsolidatedSourceRows = topResult.rows;
     topConsolidatedMemories = topResult.rows.map((row) => ({
       id: row.id,
       key: row.key,
@@ -1139,15 +1180,21 @@ export async function runNightlyDream(companyId = AIMOS_COMPANY_ID) {
 
   const artifactKey = `dream_artifact:${dreamDate}`;
   const artifactValue = JSON.stringify(dreamArtifact);
+  const artifactSourceMemoryIds = [...new Set([
+    ...eventSourceMemoryIds,
+    ...topConsolidatedMemories.map((memory) => memory.id),
+  ])];
+  const artifactSourceFloor = retainedInputFloor([...events, ...topConsolidatedSourceRows]);
   await executeHousekeeperCanonicalSave({
     company_id: companyId,
     agent_id: 'housekeeper',
     key: artifactKey,
     value: artifactValue,
     scope: 'system',
-    clearance_level: 5,
+    ...artifactSourceFloor,
     memory_type: 'dream_artifact',
     source: 'nightly-dream',
+    source_memory_ids: artifactSourceMemoryIds,
   });
 
   await logEvent(companyId, 'housekeeper', 'dream', key, {

@@ -14,6 +14,19 @@ const TEST_ROOT = path.join(ROOT, 'tests');
 // suite prevents both fake skips and accidental writes to a developer brain.
 const ISOLATED_SECURITY_OWNER = 'scripts/test/run-isolated-security.mjs';
 const LIVE_FIRE_OWNERS = new Map([
+  ['tests/security/audit-018-remediation-db.test.mjs', ISOLATED_SECURITY_OWNER],
+  ['tests/security/audit-018-event-bytes-db.test.mjs', ISOLATED_SECURITY_OWNER],
+  ['tests/security/audit-018-request-bytes-db.test.mjs', ISOLATED_SECURITY_OWNER],
+  ['tests/security/audit-009-remediation-db.test.mjs', ISOLATED_SECURITY_OWNER],
+  ['tests/security/audit-004-remediation-db.test.mjs', ISOLATED_SECURITY_OWNER],
+  ['tests/security/audit-006-remediation-db.test.mjs', ISOLATED_SECURITY_OWNER],
+  ['tests/security/audit-014-remediation-db.test.mjs', ISOLATED_SECURITY_OWNER],
+  ['tests/security/audit-005-remediation-db.test.mjs', ISOLATED_SECURITY_OWNER],
+  ['tests/security/audit-005-projection-db.test.mjs', ISOLATED_SECURITY_OWNER],
+  ['tests/security/audit-002-remediation-db.test.mjs', ISOLATED_SECURITY_OWNER],
+  ['tests/security/audit-003-remediation-db.test.mjs', ISOLATED_SECURITY_OWNER],
+  ['tests/security/audit-023-remediation-db.test.mjs', ISOLATED_SECURITY_OWNER],
+  ['tests/security/audit-015-remediation-db.test.mjs', ISOLATED_SECURITY_OWNER],
   ['tests/security/auth-tier-system-self.test.mjs', ISOLATED_SECURITY_OWNER],
   ['tests/security/cognitive-weight-baseline-db.test.mjs', ISOLATED_SECURITY_OWNER],
   ['tests/security/cognitive-weight-chain-bidirectional-db.test.mjs', ISOLATED_SECURITY_OWNER],
@@ -31,6 +44,22 @@ const LIVE_FIRE_OWNERS = new Map([
   ['tests/security/mutmem-v2-s5-production-corpus-db.test.mjs',
     'scripts/verification/run-mutmem-v2-s5-disposable-genesis.mjs'],
 ]);
+// These existing canonical checks are their own explicit CLI entrypoints.
+// Registration prevents a source-suite invocation from executing live writes
+// or signals; it does not run them or count them as passed.
+for (const file of [
+  'audit-007-failure-owner-live.test.mjs',
+  'audit-010-remediation.test.mjs', 'audit-010-capacity-live.test.mjs',
+  'audit-010-live-route-queue.test.mjs',
+  'audit-011-remediation.test.mjs', 'audit-011-lock-loss-live.test.mjs',
+  'audit-011-pool-contention-live.test.mjs',
+  'audit-012-save-drain-live.test.mjs', 'audit-012-stream-drain-live.test.mjs',
+  'audit-012-scheduled-drain-live.test.mjs', 'audit-012-save-postcommit-live.test.mjs',
+  'audit-021-credit-live.test.mjs',
+]) {
+  const relative = `tests/security/${file}`;
+  LIVE_FIRE_OWNERS.set(relative, relative);
+}
 const LIVE_FIRE_TESTS = new Set(LIVE_FIRE_OWNERS.keys());
 
 function walk(directory) {
@@ -59,6 +88,12 @@ if (unknownLiveFire.length > 0) {
 for (const [file, owner] of LIVE_FIRE_OWNERS) {
   if (!allTests.includes(file)) throw new Error(`declared live-fire test is missing: ${file}`);
   const isolatedRunner = readFileSync(path.join(ROOT, owner), 'utf8');
+  if (owner === file) {
+    if (!/assert\(\s*process\.argv\.includes\(['"]--live-fire['"]\)/.test(isolatedRunner)) {
+      throw new Error(`canonical live test lacks explicit opt-in: ${file}`);
+    }
+    continue;
+  }
   const basename = path.basename(file);
   if (!isolatedRunner.includes(basename)) {
     throw new Error(`live-fire test is not executed by declared owner ${owner}: ${file}`);
@@ -70,6 +105,20 @@ const selectedTests = benchmarkOnly
   ? benchmarkTests
   : allTests.filter((file) => !LIVE_FIRE_TESTS.has(file) && !benchmarkTests.includes(file));
 if (selectedTests.length === 0) throw new Error('selected test suite is empty');
+
+if (!benchmarkOnly) {
+  // Source tests do not necessarily import late-loaded integrations. Compile
+  // the actual runtime tree too, before reporting an aggregate green result.
+  const runtimeFiles = [path.join(ROOT, 'server.js'),
+    ...['routes', 'services', 'jobs', 'db', 'middleware'].flatMap(dir => walk(path.join(ROOT, dir)))
+  ].filter(file => /\.(?:js|mjs)$/.test(file));
+  for (const file of runtimeFiles) {
+    const syntax = spawnSync(process.execPath, ['--check', file], { cwd: ROOT, stdio: 'inherit' });
+    if (syntax.error) throw syntax.error;
+    if (syntax.status !== 0) throw new Error(`runtime_syntax_invalid:${path.relative(ROOT, file)}`);
+  }
+  console.log(`Native runtime syntax: ${runtimeFiles.length}/${runtimeFiles.length} passed.`);
+}
 
 console.log(
   benchmarkOnly

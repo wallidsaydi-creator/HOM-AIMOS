@@ -6,14 +6,13 @@
  *
  * SERVICE CONNECTION GUIDE:
  * 1. ← Called by: agent-runner.js (post-run confidence, pre-run calibration)
- * 2. → Calls: db/connection.js (query), agent-learning.js (getCalibrationFactor)
+ * 2. → Consumes: canonical recall results; calls permissions ledger
  * 3. Pipeline: AGENT_RUN_PIPELINE | Position: confidence scoring
  *
  * Created: 2026-05-05 (Gap 4 extraction from agent-runner.js)
  */
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
-import { query } from '../../db/connection.js';
 import { getPermissions } from '../core/permissions.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
@@ -118,7 +117,7 @@ export function classifyComplexity(prompt, taskType = 'chat') {
 /**
  * evaluateWithF7Protocol — blends F7 criteria-based score with heuristic confidence.
  *
- * Loads the F7 evaluation protocol from aimos_memories and blends it with the
+ * Consumes the F7 evaluation protocol from canonical recall and blends it with the
  * heuristic confidence using 60/40 weighting (F7 / heuristic).
  *
  * @param {string} agentId             - Agent identifier.
@@ -127,17 +126,12 @@ export function classifyComplexity(prompt, taskType = 'chat') {
  * @param {string} responseText        - Full response text for keyword matching.
  * @returns {Promise<number>} Blended confidence score [0, 1].
  */
-export async function evaluateWithF7Protocol(agentId, taskType, heuristicConfidence, responseText) {
+export async function evaluateWithF7Protocol(agentId, taskType, heuristicConfidence, responseText, recalledMemories = []) {
+  void agentId;
   try {
-    const result = await query(
-      `SELECT value FROM aimos_memories
-     WHERE company_id = $1 AND key = 'procedure_f7_evaluation_protocol'
-     ORDER BY updated_at DESC NULLS LAST, created_at DESC NULLS LAST
-     LIMIT 1`,
-      [COMPANY]
-    );
-    if (!result.rows.length) return heuristicConfidence;
-    const protocol = JSON.parse(result.rows[0].value || '{}');
+    const memory = recalledMemories.find((entry) => entry?.key === 'procedure_f7_evaluation_protocol');
+    if (!memory) return heuristicConfidence;
+    const protocol = JSON.parse(memory.value || '{}');
     const criteria = protocol.task_criteria?.[taskType] || protocol.task_criteria?.['default'];
     if (!criteria) return heuristicConfidence;
 

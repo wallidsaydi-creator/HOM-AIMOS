@@ -37,41 +37,46 @@ async function event(id) {
 }
 
 async function selectedRows() {
+  const outcomeId=process.argv.find(arg=>arg.startsWith('--outcome-id='))?.slice('--outcome-id='.length) || null;
+  if(outcomeId!==null && !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(outcomeId))
+    throw new Error('mutation_projection_outcome_id_invalid');
   const transition = await pool.query(
     `SELECT l.* FROM memory_valence_ledger l
       WHERE l.evidence_schema_version=2 AND l.target_scope='principal_state'
+        AND ($1::uuid IS NULL OR l.outcome_id=$1::uuid)
         AND EXISTS (
           SELECT 1 FROM aimos_memory_provenance p
            WHERE p.memory_id=l.memory_id AND p.event_type='REWEIGHT'
              AND p.body_json->>'valence_row_hash'=encode(l.row_hash,'hex')
-        ) ORDER BY l.id LIMIT 1`,
+        ) ORDER BY l.id LIMIT 1`, [outcomeId],
   );
   const noop = await pool.query(
     `SELECT l.* FROM memory_valence_ledger l
       WHERE l.evidence_schema_version=2 AND l.target_scope='principal_state'
+        AND ($1::uuid IS NULL OR l.outcome_id=$1::uuid)
         AND EXISTS (
           SELECT 1 FROM aimos_events e
            WHERE e.operation='cognitive_weight_unchanged'
              AND e.metadata->>'valence_row_hash'=encode(l.row_hash,'hex')
-        ) ORDER BY l.id LIMIT 1`,
+        ) ORDER BY l.id LIMIT 1`, [outcomeId],
   );
   const observation = await pool.query(
     `SELECT l.* FROM memory_valence_ledger l
       WHERE l.evidence_schema_version=2 AND l.target_scope='occurrence_observation'
+        AND ($1::uuid IS NULL OR l.outcome_id=$1::uuid)
         AND EXISTS (
           SELECT 1 FROM aimos_events e
            WHERE e.operation='mutation_occurrence_observation_retained'
              AND e.parent_event_id=l.outcome_event_id
-        ) ORDER BY l.id LIMIT 1`,
+        ) ORDER BY l.id LIMIT 1`, [outcomeId],
   );
-  if (!transition.rows[0] || !noop.rows[0] || !observation.rows[0]) {
-    throw new Error('p1_mutation_terminal_population_incomplete');
-  }
-  return [
+  const selected=[
     ['authorized_transition', transition.rows[0]],
     ['signed_noop', noop.rows[0]],
     ['occurrence_observation', observation.rows[0]],
-  ];
+  ].filter(([,row])=>row);
+  if(selected.length!==(outcomeId===null?3:1)) throw new Error('p1_mutation_terminal_population_incomplete');
+  return selected;
 }
 
 function outcomeFromRow(row) {
@@ -142,6 +147,7 @@ async function project(kind, row) {
     const transition = await pool.query(
       `SELECT p.provenance_id::text,p.memory_id::text,p.event_type,p.body_json,
               encode(p.mutation_hash,'hex') mutation_hash,
+              encode(p.prev_mutation_hash,'hex') prev_mutation_hash,
               c.projection_id::text,c.old_weight_milli,c.new_weight_milli,
               encode(c.prev_projection_hash,'hex') prev_projection_hash,
               encode(c.projection_hash,'hex') projection_hash,
@@ -164,6 +170,7 @@ async function project(kind, row) {
         event_type: value.event_type,
         mutation_hash: value.mutation_hash,
         body_json: object(value.body_json),
+        ...(object(value.body_json).ancestry_binding ? {prev_mutation_hash:value.prev_mutation_hash} : {}),
       },
     };
     projection = {

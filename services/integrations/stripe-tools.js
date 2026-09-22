@@ -40,13 +40,18 @@ async function stripeRequest(path, params = {}, useContext = {}) {
 
   const url = `${STRIPE_BASE_URL}${path}${query.toString() ? `?${query.toString()}` : ''}`;
   let response;
+  let json;
   try {
     response = await fetchWithTimeout(url, {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${credential.value}`
-      }
+      },
+      signal: useContext?.signal,
+      deadlineAt: useContext?.deadlineAt,
+      destinationPolicy: 'public',
     });
+    json = await response.json();
   } catch (error) {
     await credentialLedger.finalizeCredentialUse({
       reservation,
@@ -56,10 +61,11 @@ async function stripeRequest(path, params = {}, useContext = {}) {
       errorClass: error?.name || 'transport_error',
     });
     throw error;
+  } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
   }
 
   if (!response.ok) {
-    const json = await response.json().catch(async () => ({ error: { message: await response.text() } }));
     await credentialLedger.finalizeCredentialUse({
       reservation,
       outcome: 'failed',
@@ -73,7 +79,7 @@ async function stripeRequest(path, params = {}, useContext = {}) {
     });
     throw new Error(json?.error?.message || `Stripe error (${response.status})`);
   }
-  const json = await response.json();
+
   await credentialLedger.finalizeCredentialUse({
     reservation,
     outcome: 'completed',

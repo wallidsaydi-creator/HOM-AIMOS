@@ -32,6 +32,7 @@ import { query } from '../../db/connection.js';
 import { getSourceTrust, getDepositMode, recordDeposit } from './epistemic-vigilance.js';
 import { getDomainPlasticity, modulateLearningStrength } from './plasticity-controller.js';
 import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
+import { createToolInputState, recordVerifiedEventContextInput } from '../orchestration/tool-action-ledger.js';
 import { logEvent, readVerifiedEventById } from '../observe/event-ledger.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
@@ -171,7 +172,7 @@ export async function getAgentPsychometricStatus(agentId, options = {}) {
   let baseline = null;
   try {
     const existing = await query(
-      `SELECT value FROM aimos_memories
+      `SELECT id, value FROM aimos_memories
        WHERE company_id = $1 AND key = $2 AND memory_type = 'infrastructure'
        ORDER BY created_at DESC
        LIMIT 1`,
@@ -238,15 +239,11 @@ export async function updateBehavioralBaseline(agentId, promptData) {
       timestamp: new Date().toISOString()
     };
 
-    // Load existing baseline
+    // Consume only the exact memory returned by canonical recall. This owner
+    // updates the baseline but has no independent disclosure path.
     const baselineKey = `behavioral_baseline:${agentId}`;
-    const existing = await query(
-      `SELECT value FROM aimos_memories
-       WHERE company_id = $1 AND key = $2 AND memory_type = 'infrastructure'
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [COMPANY, baselineKey]
-    );
+    const existingMemory = (promptData.canonicalBaselineMemories || []).find((memory) =>
+      memory?.key === baselineKey && memory?.memory_type === 'infrastructure');
 
     let baseline = {
       total_runs: 0,
@@ -259,8 +256,8 @@ export async function updateBehavioralBaseline(agentId, promptData) {
       last_updated: null
     };
 
-    if (existing.rows.length > 0) {
-      try { baseline = JSON.parse(existing.rows[0].value); } catch { /* fresh baseline */ }
+    if (existingMemory) {
+      try { baseline = JSON.parse(existingMemory.value); } catch { /* fresh baseline */ }
     }
 
     // Update running averages
@@ -300,7 +297,8 @@ export async function updateBehavioralBaseline(agentId, promptData) {
       memory_type: 'infrastructure',
       clearance_level: 8,
       source: 'agent-learning',
-    });
+      source_memory_ids: existingMemory?.id ? [existingMemory.id] : [],
+    }, { nativeToolInputs: promptData.nativeToolInputs || null });
 
     return { anomalyScore, features, baselineRuns: newN };
   } catch {
@@ -310,7 +308,7 @@ export async function updateBehavioralBaseline(agentId, promptData) {
 
 export async function getAgentHealthScore(agentId) {
   const res = await query(
-    `SELECT metadata FROM aimos_events
+    `SELECT id, encode(mutation_hash, 'hex') AS mutation_sha256, metadata FROM aimos_events
      WHERE company_id = $1 AND agent_id = $2 AND operation = 'agent_run_metric'
        AND ts >= NOW() - INTERVAL '24 hours'`,
     [COMPANY, agentId]
@@ -358,7 +356,7 @@ export async function getAgentHealthScore(agentId) {
   return { agentId, healthScore, successRate, avgConfidence, errorRate, avgLatencyMs, runsLast24h: total };
 }
 
-export async function getAgentRiskBudget(agentId) {
+export async function getAgentRiskBudget(agentId, canonicalMemories = []) {
   const defaults = {
     maxErrorsPerRun: 5,
     maxTokensPerRun: 50000,
@@ -366,14 +364,10 @@ export async function getAgentRiskBudget(agentId) {
   };
 
   try {
-    const res = await query(
-      `SELECT value FROM aimos_memories
-       WHERE company_id = $1 AND key = $2 AND memory_type = 'config'
-       LIMIT 1`,
-      [COMPANY, `risk_budget:${agentId}`]
-    );
-    if (res.rows.length > 0) {
-      const custom = JSON.parse(res.rows[0].value);
+    const memory = canonicalMemories.find((entry) =>
+      entry?.key === `risk_budget:${agentId}` && entry?.memory_type === 'config');
+    if (memory) {
+      const custom = JSON.parse(memory.value);
       return { ...defaults, ...custom };
     }
   } catch {
@@ -383,8 +377,8 @@ export async function getAgentRiskBudget(agentId) {
   return defaults;
 }
 
-export async function checkRiskBudget(agentId, currentRun) {
-  const budget = await getAgentRiskBudget(agentId);
+export async function checkRiskBudget(agentId, currentRun, canonicalMemories = []) {
+  const budget = await getAgentRiskBudget(agentId, canonicalMemories);
   const { errorCount = 0, tokenEstimate = 0, latencyMs = 0 } = currentRun;
 
   if (errorCount > budget.maxErrorsPerRun) {
@@ -452,7 +446,7 @@ export async function getAllAgentHealthScores() {
 // "Creative tension" = gap between current performance and optimal performance.
 export async function getAgentCapabilityGap(agentId) {
   const res = await query(
-    `SELECT metadata FROM aimos_events
+    `SELECT id, encode(mutation_hash, 'hex') AS mutation_sha256, metadata FROM aimos_events
      WHERE company_id = $1 AND agent_id = $2 AND operation = 'agent_run_metric'
        AND ts >= NOW() - INTERVAL '7 days'`,
     [COMPANY, agentId]
@@ -493,7 +487,8 @@ export async function getAgentCapabilityGap(agentId) {
     weakest: gaps[0] || null,
     strongest: gaps[gaps.length - 1] || null,
     gaps,
-    creativeTension: gaps[0] ? `Agent '${agentId}' weakest on '${gaps[0].taskType}' (gap=${gaps[0].gapScore}). Focus learning here.` : 'No data yet.'
+    creativeTension: gaps[0] ? `Agent '${agentId}' weakest on '${gaps[0].taskType}' (gap=${gaps[0].gapScore}). Focus learning here.` : 'No data yet.',
+    sourceEvents: res.rows.map((row) => ({ eventId: row.id, mutationSha256: row.mutation_sha256 })),
   };
 }
 
@@ -501,8 +496,9 @@ export async function getAgentCapabilityGap(agentId) {
 // After each run, the executive agent reads its own capability gaps and creates a learning entry
 // if performance is degraded. This is "creative tension" in action:
 // the gap between current performance and desired performance drives learning.
-export async function selfReflect(agentId) {
+export async function selfReflect(agentId, options = {}) {
   try {
+    const inheritedRuntimeInputs = Boolean(options.nativeToolInputs);
     const gap = await getAgentCapabilityGap(agentId);
     if (!gap.weakest || gap.weakest.gapScore < 15) return null; // reflect on any meaningful gap
 
@@ -515,6 +511,12 @@ export async function selfReflect(agentId) {
       creative_tension: gap.creativeTension,
       reflected_at: new Date().toISOString()
     };
+    const nativeToolInputs = options.nativeToolInputs || createToolInputState();
+    for (const event of gap.sourceEvents || []) recordVerifiedEventContextInput(nativeToolInputs, {
+      owner: 'services/learning/agent-learning.js#selfReflect',
+      eventId: event.eventId,
+      mutationSha256: event.mutationSha256,
+    });
 
     // Save reflection as a learning memory — agents can query this to self-correct
     await executeHousekeeperCanonicalSave({
@@ -522,11 +524,13 @@ export async function selfReflect(agentId) {
       agent_id: agentId,
       key: `reflection:${agentId}:${Date.now()}`,
       value: JSON.stringify(reflection),
-      scope: 'agent',
+      scope: inheritedRuntimeInputs ? 'private' : 'agent',
       memory_type: 'self_reflection',
-      clearance_level: 3,
+      clearance_level: inheritedRuntimeInputs ? 12 : 3,
+      data_class: inheritedRuntimeInputs ? 'restricted' : 'internal',
       source: 'agent-learning',
-    });
+      source_memory_ids: [],
+    }, { nativeToolInputs });
 
     return reflection;
   } catch {
@@ -540,7 +544,7 @@ export async function selfReflect(agentId) {
 export async function getSharedFailures(taskType, excludeAgentId, limit = 5) {
   try {
     const res = await query(
-      `SELECT agent_id, metadata FROM aimos_events
+      `SELECT id, encode(mutation_hash, 'hex') AS mutation_sha256, agent_id, metadata FROM aimos_events
        WHERE company_id = $1 AND operation = 'agent_run_metric'
          AND agent_id != $2
          AND ts >= NOW() - INTERVAL '7 days'
@@ -553,6 +557,8 @@ export async function getSharedFailures(taskType, excludeAgentId, limit = 5) {
       const m = typeof row.metadata === 'string' ? JSON.parse(row.metadata) : row.metadata;
       if (m.success === false && m.taskType === taskType && m.error) {
         failures.push({
+          source_event_id: row.id,
+          source_event_mutation_sha256: row.mutation_sha256,
           agent_id: row.agent_id,
           error: String(m.error).slice(0, 200),
           taskType: m.taskType,
@@ -705,8 +711,9 @@ export async function scoreDueRecommendations() {
 // Unlike selfReflect (aggregate gaps), this evaluates the actual output quality.
 // Checks: response relevance to prompt, confidence calibration, length adequacy,
 // and whether the task type matches the output characteristics.
-export async function afterActionReview(agentId, { prompt, response, taskType, confidence, model, latencyMs }) {
+export async function afterActionReview(agentId, { prompt, response, taskType, confidence, model, latencyMs, nativeToolInputs = null }) {
   try {
+    const inheritedRuntimeInputs = Boolean(nativeToolInputs);
     if (!response || response.length < 50) return null; // trivial responses skip review
 
     const issues = [];
@@ -759,11 +766,13 @@ export async function afterActionReview(agentId, { prompt, response, taskType, c
       agent_id: agentId,
       key: `aar:${agentId}:${Date.now()}`,
       value: JSON.stringify(review),
-      scope: 'agent',
+      scope: inheritedRuntimeInputs ? 'private' : 'agent',
       memory_type: 'after_action_review',
-      clearance_level: 3,
+      clearance_level: inheritedRuntimeInputs ? 12 : 3,
+      data_class: inheritedRuntimeInputs ? 'restricted' : 'internal',
       source: 'agent-learning',
-    });
+      source_memory_ids: [],
+    }, { nativeToolInputs });
 
     // If needs_improvement, also save as a learning signal
     if (verdict === 'needs_improvement') {
@@ -788,7 +797,7 @@ export async function afterActionReview(agentId, { prompt, response, taskType, c
 export async function identifySystemPatterns() {
   try {
     const res = await query(
-      `SELECT agent_id, metadata FROM aimos_events
+      `SELECT id, encode(mutation_hash, 'hex') AS mutation_sha256, agent_id, metadata FROM aimos_events
        WHERE company_id = $1 AND operation = 'agent_run_metric'
          AND ts >= NOW() - INTERVAL '24 hours'
        ORDER BY ts DESC`,
@@ -902,7 +911,7 @@ export async function getAgentModel(agentId) {
 export async function curateSkillsFromSuccesses(companyId = COMPANY) {
   try {
     const res = await query(
-      `SELECT agent_id, metadata FROM aimos_events
+      `SELECT id, encode(mutation_hash, 'hex') AS mutation_sha256, agent_id, metadata FROM aimos_events
        WHERE company_id = $1 AND operation = 'agent_run_metric'
          AND ts >= NOW() - INTERVAL '24 hours'
        ORDER BY ts DESC`,
@@ -917,7 +926,7 @@ export async function curateSkillsFromSuccesses(companyId = COMPANY) {
       const taskType = m.taskType || 'unknown';
       const key = `${row.agent_id}:${taskType}`;
       if (!groups[key]) groups[key] = { agentId: row.agent_id, taskType, runs: [], avgConfidence: 0 };
-      groups[key].runs.push(m);
+      groups[key].runs.push({ ...m, source_event_id: row.id, source_event_mutation_sha256: row.mutation_sha256 });
     }
 
     let curated = 0;
@@ -963,6 +972,13 @@ export async function curateSkillsFromSuccesses(companyId = COMPANY) {
         skillEmbedding = await getEmbedding(skillDesc);
       } catch { /* embedding optional */ }
 
+      const nativeToolInputs = createToolInputState();
+      for (const run of group.runs) recordVerifiedEventContextInput(nativeToolInputs, {
+        owner: 'services/learning/agent-learning.js#curateSkillsFromSuccesses',
+        eventId: run.source_event_id,
+        mutationSha256: run.source_event_mutation_sha256,
+      });
+
       await executeHousekeeperCanonicalSave({
         company_id: companyId,
         agent_id: group.agentId,
@@ -981,7 +997,8 @@ export async function curateSkillsFromSuccesses(companyId = COMPANY) {
         memory_type: 'procedural',
         clearance_level: 3,
         source: 'agent-learning:curated-skill',
-      });
+        source_memory_ids: [],
+      }, { nativeToolInputs });
       curated++;
     }
 

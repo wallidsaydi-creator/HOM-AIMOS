@@ -25,7 +25,7 @@ For GitHub provenance verification, install GitHub CLI and identify the public
 repository that published the release:
 
 ```sh
-gh attestation verify aimos-backend-1.0.0.tgz --repo OWNER/REPOSITORY
+gh attestation verify aimos-backend-1.0.5.tgz --repo OWNER/REPOSITORY
 ```
 
 The command verifies the artifact digest, Sigstore certificate, GitHub Actions

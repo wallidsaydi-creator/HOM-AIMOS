@@ -76,16 +76,6 @@ export const AIMOS_MCP_TOOLS = Object.freeze([
     }),
   },
   {
-    name: 'aimos_qmd_explain',
-    category: 'query',
-    endpoint: '/aimos/qmd/explain',
-    description: 'Parse and explain a QMD query without executing it.',
-    inputSchema: objectSchema({
-      query: { type: 'string' },
-      company_id: { type: 'string', default: DEFAULT_COMPANY },
-    }, ['query']),
-  },
-  {
     name: 'aimos_save',
     category: 'memory_write',
     endpoint: '/aimos/save',

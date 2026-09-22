@@ -1,5 +1,4 @@
 import express from 'express';
-import { fetchWithTimeout } from '../services/orchestration/http.js';
 import {
   getModelPreferences,
   resolveModelForRequest

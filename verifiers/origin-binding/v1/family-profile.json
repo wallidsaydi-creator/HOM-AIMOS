@@ -1,0 +1,242 @@
+{
+  "body": {
+    "schema": "hom.aimos.origin-family-profile/v1",
+    "version": 1,
+    "canonicalization": "hom-aimos/canonical-json/v1-safe-integers",
+    "hash": "sha256",
+    "signature": "ed25519",
+    "family_order": "utf8_lexicographic_ascending",
+    "maximum_family_count": 64,
+    "maximum_parent_count": 64,
+    "maximum_corroborator_count": 16,
+    "confidentiality_order": [
+      "public",
+      "internal",
+      "confidential",
+      "restricted"
+    ],
+    "integrity_order": [
+      "untrusted",
+      "agent",
+      "trusted"
+    ],
+    "action_class_order": [
+      "none",
+      "inform",
+      "act"
+    ],
+    "risk_class_order": [
+      "non_consequential",
+      "consequential",
+      "high_impact"
+    ],
+    "ingress_channels": [
+      "untrusted_external",
+      "agent_self",
+      "authenticated_agent",
+      "housekeeper_system",
+      "authenticated_tool",
+      "authenticated_user",
+      "system_internal"
+    ],
+    "classification_authorities": [
+      "deterministic_route_schema",
+      "deterministic_field_schema",
+      "authenticated_tool_schema",
+      "system_producer_schema",
+      "trusted_monitor_classifier",
+      "legacy_successor_review"
+    ],
+    "family_action_policies": [
+      "inform_only",
+      "exact_origin_verdict",
+      "exact_user_or_provider",
+      "exact_configuration_owner",
+      "inherit_parents",
+      "deny_action"
+    ],
+    "families": [
+      {
+        "id": "action_input",
+        "parent_id": null,
+        "confidentiality_floor": "internal",
+        "action_policy": "exact_origin_verdict"
+      },
+      {
+        "id": "action_input.executable_instruction",
+        "parent_id": "action_input",
+        "confidentiality_floor": "internal",
+        "action_policy": "exact_origin_verdict"
+      },
+      {
+        "id": "action_input.external_destination",
+        "parent_id": "action_input",
+        "confidentiality_floor": "internal",
+        "action_policy": "exact_origin_verdict"
+      },
+      {
+        "id": "action_input.financial_value",
+        "parent_id": "action_input",
+        "confidentiality_floor": "confidential",
+        "action_policy": "exact_origin_verdict"
+      },
+      {
+        "id": "action_input.resource_target",
+        "parent_id": "action_input",
+        "confidentiality_floor": "internal",
+        "action_policy": "exact_origin_verdict"
+      },
+      {
+        "id": "derived",
+        "parent_id": null,
+        "confidentiality_floor": "internal",
+        "action_policy": "inherit_parents"
+      },
+      {
+        "id": "derived.housekeeper_derivation",
+        "parent_id": "derived",
+        "confidentiality_floor": "internal",
+        "action_policy": "inherit_parents"
+      },
+      {
+        "id": "derived.reflection",
+        "parent_id": "derived",
+        "confidentiality_floor": "internal",
+        "action_policy": "inherit_parents"
+      },
+      {
+        "id": "derived.summary",
+        "parent_id": "derived",
+        "confidentiality_floor": "internal",
+        "action_policy": "inherit_parents"
+      },
+      {
+        "id": "derived.tool_result",
+        "parent_id": "derived",
+        "confidentiality_floor": "internal",
+        "action_policy": "inherit_parents"
+      },
+      {
+        "id": "identity",
+        "parent_id": null,
+        "confidentiality_floor": "internal",
+        "action_policy": "exact_origin_verdict"
+      },
+      {
+        "id": "identity.ownership_assertion",
+        "parent_id": "identity",
+        "confidentiality_floor": "internal",
+        "action_policy": "exact_origin_verdict"
+      },
+      {
+        "id": "identity.principal_assertion",
+        "parent_id": "identity",
+        "confidentiality_floor": "internal",
+        "action_policy": "exact_origin_verdict"
+      },
+      {
+        "id": "identity.role_assertion",
+        "parent_id": "identity",
+        "confidentiality_floor": "internal",
+        "action_policy": "exact_origin_verdict"
+      },
+      {
+        "id": "information",
+        "parent_id": null,
+        "confidentiality_floor": "public",
+        "action_policy": "inform_only"
+      },
+      {
+        "id": "information.event",
+        "parent_id": "information",
+        "confidentiality_floor": "public",
+        "action_policy": "inform_only"
+      },
+      {
+        "id": "information.fact",
+        "parent_id": "information",
+        "confidentiality_floor": "public",
+        "action_policy": "inform_only"
+      },
+      {
+        "id": "information.preference",
+        "parent_id": "information",
+        "confidentiality_floor": "internal",
+        "action_policy": "inform_only"
+      },
+      {
+        "id": "information.relationship",
+        "parent_id": "information",
+        "confidentiality_floor": "internal",
+        "action_policy": "inform_only"
+      },
+      {
+        "id": "secret",
+        "parent_id": null,
+        "confidentiality_floor": "restricted",
+        "action_policy": "exact_user_or_provider"
+      },
+      {
+        "id": "secret.access_token",
+        "parent_id": "secret",
+        "confidentiality_floor": "restricted",
+        "action_policy": "exact_user_or_provider"
+      },
+      {
+        "id": "secret.credential",
+        "parent_id": "secret",
+        "confidentiality_floor": "restricted",
+        "action_policy": "exact_user_or_provider"
+      },
+      {
+        "id": "secret.personal_data",
+        "parent_id": "secret",
+        "confidentiality_floor": "restricted",
+        "action_policy": "exact_user_or_provider"
+      },
+      {
+        "id": "secret.private_key",
+        "parent_id": "secret",
+        "confidentiality_floor": "restricted",
+        "action_policy": "exact_user_or_provider"
+      },
+      {
+        "id": "system_control",
+        "parent_id": null,
+        "confidentiality_floor": "restricted",
+        "action_policy": "exact_configuration_owner"
+      },
+      {
+        "id": "system_control.authorization_directive",
+        "parent_id": "system_control",
+        "confidentiality_floor": "restricted",
+        "action_policy": "exact_configuration_owner"
+      },
+      {
+        "id": "system_control.memory_directive",
+        "parent_id": "system_control",
+        "confidentiality_floor": "restricted",
+        "action_policy": "exact_configuration_owner"
+      },
+      {
+        "id": "system_control.model_configuration",
+        "parent_id": "system_control",
+        "confidentiality_floor": "restricted",
+        "action_policy": "exact_configuration_owner"
+      },
+      {
+        "id": "system_control.security_policy",
+        "parent_id": "system_control",
+        "confidentiality_floor": "restricted",
+        "action_policy": "exact_configuration_owner"
+      },
+      {
+        "id": "unknown_protected",
+        "parent_id": null,
+        "confidentiality_floor": "restricted",
+        "action_policy": "deny_action"
+      }
+    ]
+  },
+  "profile_sha256": "49af981a17761ffe7798125b6c710a7fc6a498970b2e29c31c58ec6f2f2afe24"
+}

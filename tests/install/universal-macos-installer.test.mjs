@@ -65,9 +65,10 @@ test('release upload promotes the qualified Node 26 runtime into GitHub CI', () 
   const genesis = read('scripts/genesis-install.mjs');
   const ci = read('.github/workflows/ci.yml');
   const release = read('.github/workflows/release-ceremony.yml');
-  assert.equal(packageJson.engines.node, '^20.0.0 || ^24.0.0 || ^26.0.0');
+  assert.equal(packageJson.engines.node, '^20.18.1 || ^24.0.0 || ^26.0.0');
   assert.equal(packageLock.packages[''].engines.node, packageJson.engines.node);
   assert.match(genesis, /\[20, 24, 26\]\.includes\(major\)/);
+  assert.match(genesis, /minor < 18 \|\| minor === 18 && patch < 1/);
   assert.match(ci, /node: \[20, 24, 26\]/);
   assert.match(release, /node-version: 26\.8\.1/);
 });

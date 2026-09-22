@@ -2,12 +2,13 @@
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 const pack = JSON.parse(execFileSync('npm', ['pack', '--dry-run', '--json'], {
   encoding: 'utf8',
   maxBuffer: 16 * 1024 * 1024,
 }))[0];
+const packageJson = JSON.parse(readFileSync('package.json', 'utf8'));
 const paths = pack.files.map((entry) => entry.path);
 const required = [
   'package.json',
@@ -19,21 +20,8 @@ const required = [
   'RELEASE.md',
   'SECURITY.md',
   'Guide/GENESIS-MANIFEST.json',
-  'eval/publication/README.md',
-  'eval/publication/mutation-integrity-verification.json',
-  'eval/publication/poisonedrag-epistemic-ablation.json',
-  'eval/publication/poisonedrag-epistemic-verification.json',
-  'eval/publication/verified-benchmark-results.json',
-  'eval/data/canonical/corpus-manifest.json',
-  'reproducibility/README.md',
-  'reproducibility/mutmem-v2-contract.json',
-  'reproducibility/mutmem-v2-environment-contract.json',
-  'paper/mutmem-v2.tex',
-  'paper/mutmem-v2-manuscript-contract.json',
-  'paper/mutmem-v2-audit.json',
-  'paper/generated/evidence-values.tex',
-  'scripts/verification/verify-mutmem-v2-publication.mjs',
-  'scripts/benchmark/run-isolated.mjs',
+  'baselines/live-canonical/migration-098-099-uncertainty.json',
+  'migrations/compatibility/029-runtime-role-password-removal.json',
   'Brewfile',
   'install-macos.sh',
   'server.js',
@@ -46,7 +34,7 @@ const forbidden = [
   /^plans\//,
   /^remediation\//,
   /^engineering\//,
-  /^baselines\//,
+  /^baselines\/(?!live-canonical\/migration-098-099-uncertainty\.json$)/,
   /^scratchpad\//,
   /^RELEASE-IMPROVEMENT-PLAN\.md$/,
   /^REMEDIATION-INDEX\.md$/,
@@ -86,7 +74,7 @@ const bom = JSON.parse(execFileSync('npm', [
 
 assert.equal(bom.bomFormat, 'CycloneDX');
 assert.equal(bom.specVersion, '1.5');
-assert.equal(bom.metadata?.component?.['bom-ref'], 'aimos-backend@1.0.4');
+assert.equal(bom.metadata?.component?.['bom-ref'], `aimos-backend@${packageJson.version}`);
 assert.equal(bom.metadata?.component?.licenses?.[0]?.license?.id, 'AGPL-3.0-or-later');
 assert(Array.isArray(bom.components) && bom.components.length > 0, 'runtime SBOM has no components');
 assert(Array.isArray(bom.dependencies) && bom.dependencies.length > 0, 'runtime SBOM has no dependency graph');

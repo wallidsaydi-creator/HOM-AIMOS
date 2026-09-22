@@ -16,6 +16,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { analyzeSituation } from './sun-tzu-analyzer.js';
+import { beginServingWork, getServingAbortSignal } from '../runtime/serving-control.js';
 import { assessQuality } from '../write/quality-gate.js';
 import { searchWeb } from '../integrations/web-search.js';
 import { xSearchRecent } from '../integrations/x-search.js';
@@ -26,11 +27,15 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { createHash } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
+import { canonicalJson } from '../security/protocol/canonical-json.js';
+import { ORIGIN_FAMILY_PROFILE_SHA256_V1 } from '../security/protocol/origin-binding-v1.js';
+import { consequentialActionPolicyForTool } from '../security/protocol/consequential-action-v1.js';
 import { runAgent } from './agent-runner.js';
 import { validateExecution, createExecutionPlan } from '../write/execution-interceptor.js';
 import { classifyIntent, enforceVerbPolicy } from '../write/intent-classifier.js';
 import {
-  gmailListInbox, gmailSearchMessages, gmailSendMessage,
+  gmailListInbox, gmailSearchMessages, gmailSendMessage, gmailReplyMessage,
   youtubeSearch, youtubeChannelStats, youtubeListChannelVideos,
   driveListFiles, driveReadTextFile,
   calendarListEvents, calendarTodayEvents, calendarCreateEvent,
@@ -50,29 +55,31 @@ import {
   contactsSearch,
   imessageListChats,
   imessageSearchContact,
-  imessageSend
+  imessageSend,
+  imessageRequestAccess
 } from '../integrations/integration-tools.js';
+import { telegramSendMessage } from '../integrations/telegram-tools.js';
 import { createScheduledTask, listScheduledTasks } from './scheduler.js';
-import { query } from '../../db/connection.js';
+import { query, withTransaction } from '../../db/connection.js';
 import { executeCanonicalSave, executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 import {
   claimToolApprovalExecution,
   createToolApprovalRequest,
 } from './tool-approval-store.js';
-import { beginToolAction, finishToolAction } from './tool-action-ledger.js';
-import { shouldBlockToolForMissingKnowledge } from '../security/knowledge-gate.js';
+import { beginToolAction, finishToolAction, createToolInputState, readToolInputState, recordToolInputResult, recordToolContextInput, mergeToolInputState, classifyNativeResult, invalidateToolInputState, verifyToolActionAuthority } from './tool-action-ledger.js';
+import { createKnowledgeGateState, shouldBlockToolForMissingKnowledge, recordKnowledgeToolEvent } from '../security/knowledge-gate.js';
 import { scanToolExecution, scanToolResult } from '../security/canary-tracker.js';
 import { buildToolRepresentation as buildToolRepresentationDiagnostic } from './tool-representation-diagnostics.js';
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { recallAuthorizationService } from '../security/recall-authorization.js';
+import { readVerifiedRequestReceiptByMutationHash } from '../security/request-receipt-ledger.js';
+import { readVerifiedEventById } from '../observe/event-ledger.js';
 import { executeCanonicalRecall } from '../retrieval/native-recall-pipeline.js';
 import { masterPubkeyCache } from '../security/master-pubkey-cache.js';
 import { authorizePurposeLocalFileRead } from '../security/purpose-authorization.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 const AIMOS_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-const DELEGATE_TASK_TIMEOUT_MS = 10_000;
-const TOOL_EXEC_TIMEOUT_MS = 12_000;
 const X_INTENT_MARKERS = [
   'twitter',
   'x.com',
@@ -98,6 +105,55 @@ async function notifyToolObserver(observer, payload) {
 
 // ─── AIMOS ───────────────────────────────────────────────────────────────────
 
+// Discovery is not execution authority. Both this native admission check and
+// the canonical SAVE/RECALL owners consume the SAME exact-epoch master grant;
+// the owners still lock/recheck it when consuming a concrete signed action.
+// Generic tool capabilities cannot grant or revoke these memory rights.
+export async function readNativeMemoryToolGrant(executionContext) {
+  const context = executionContext;
+  if (!context || context.authSource !== 'envelope' || context.companyId !== COMPANY
+    || !context.actorAgentId || !context.actorValidFromIso || !context.requestReceiptId
+    || !context.requestReceiptMutationHash || !context.requestAdmissionEventId
+    || !context.requestAdmissionMutationHash) throw new Error('native_memory_tool_request_authority_required');
+  return withTransaction(async client => {
+    await client.query('SET TRANSACTION READ ONLY');
+    const receipt = await readVerifiedRequestReceiptByMutationHash({
+      companyId: context.companyId, requestReceiptMutationHash: context.requestReceiptMutationHash, client,
+    });
+    const admission = await readVerifiedEventById(context.requestAdmissionEventId,context.companyId,{client});
+    const metadata = admission.metadata;
+    if (receipt.requestReceiptId !== context.requestReceiptId
+      || receipt.actorAgentId !== context.actorAgentId
+      || receipt.actorValidFromIso !== new Date(context.actorValidFromIso).toISOString()
+      || receipt.signedMethod !== context.signedMethod || receipt.signedPath !== context.signedPath
+      || receipt.signedTs !== context.signedTs
+      || admission.operation !== 'request_admission_verified' || admission.signer_agent_id !== 'housekeeper'
+      || Buffer.from(admission.mutation_hash).toString('hex') !== context.requestAdmissionMutationHash
+      || metadata.request_receipt_id !== receipt.requestReceiptId
+      || metadata.request_receipt_mutation_hash !== receipt.requestReceiptMutationHash
+      || metadata.actor_agent_id !== receipt.actorAgentId
+      || new Date(metadata.actor_valid_from).toISOString() !== receipt.actorValidFromIso
+      || metadata.request_hash !== receipt.requestHash) throw new Error('native_memory_tool_request_binding_invalid');
+    await client.query("SELECT set_config('app.current_agent_id',$1,true)",[context.actorAgentId]);
+    const identity = (await client.query(`SELECT 1 FROM agent_identity identity
+      WHERE identity.agent_id=$1 AND identity.valid_from=$2
+        AND identity.valid_from<=clock_timestamp() AND identity.valid_until>clock_timestamp()
+        AND NOT EXISTS(SELECT 1 FROM aimos_agent_revocation_events revoked
+          WHERE revoked.agent_id=identity.agent_id AND revoked.agent_valid_from=identity.valid_from)`,
+    [context.actorAgentId,context.actorValidFromIso])).rows[0];
+    if (!identity) throw new Error('native_memory_tool_actor_epoch_not_active');
+    const grant = await recallAuthorizationService.getEffective({ companyId:context.companyId,
+      subjectAgentId:context.actorAgentId,subjectValidFrom:context.actorValidFromIso,client });
+    if (!grant) return null;
+    return Object.freeze({ schema:'hom.aimos.native-memory-tool-grant-reference/v1',
+      company_id:context.companyId,actor_agent_id:context.actorAgentId,
+      actor_valid_from:receipt.actorValidFromIso,actor_cert_fingerprint:receipt.actorCertFingerprint,
+      grant_event_id:grant.eventId,grant_mutation_sha256:grant.mutationHash.toString('hex'),
+      allowed:grant.allowed,write_allowed:grant.writeAllowed,
+      clearance_ceiling:grant.clearanceCeiling,data_class_ceiling:grant.dataClassCeiling });
+  }, { restricted:true,client_id:context.companyId,agent_id:context.actorAgentId });
+}
+
 async function aimosRecall(rawCommand = {}, options = {}) {
   const { query: q, key, memory_id } = rawCommand;
   if (!q && !key && !memory_id) {
@@ -119,11 +175,13 @@ async function aimosRecall(rawCommand = {}, options = {}) {
     transportBinding: { transport: 'tool', toolName: 'aimos_recall' },
   });
   if (result.status !== 200) throw new Error(result.body?.error || 'native_tool_recall_failed');
-  return result.body;
+  // Match the canonical HTTP JSON value before committing the tool outcome.
+  // Optional JavaScript-only undefined fields are not part of that value.
+  return JSON.parse(JSON.stringify(result.body));
 }
 
 
-async function aimosSave({ content, tags = [], agent_id = 'unknown' }, options = {}) {
+async function aimosSave({ content, tags = [], agent_id = 'unknown', source_memory_ids }, options = {}) {
   const executionContext = options.executionContext || options.credentialUseContext || null;
   const actorAgentId = String(executionContext?.actorAgentId || '').trim();
   const actorValidFromIso = executionContext?.actorValidFromIso || null;
@@ -158,10 +216,13 @@ async function aimosSave({ content, tags = [], agent_id = 'unknown' }, options =
     scope: 'private',
     clearance_level: requestedClearance,
     session_id: options.sessionKey || null,
+    ...(options.inputMemoryIds == null && source_memory_ids === undefined
+      ? {} : { source_memory_ids: options.inputMemoryIds ?? source_memory_ids }),
   };
   const commitAction = await beginToolAction({
     tool: 'aimos_save_commit',
     args: saveSpec,
+    inputState: options.nativeToolInputs,
     runtimeAgentId,
     executionContext,
     parentEventId: options.toolActionAuthority.eventId,
@@ -205,6 +266,14 @@ async function aimosSave({ content, tags = [], agent_id = 'unknown' }, options =
 
 export const ALL_TOOL_DEFS = {
   web_search: {
+    profile: {
+      owner: 'services/integrations/web-search.js#searchWeb',
+      operation_class: 'read', required_clearance: 1,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'web-search-provider',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'internal',
+    },
     schema: {
       type: 'function',
       function: {
@@ -232,6 +301,14 @@ export const ALL_TOOL_DEFS = {
 
   // x_search: available for explicit requests only. Removed from INLINE_TOOL_NAME_ALIASES to prevent autonomous drain.
   x_search: {
+    profile: {
+      owner: 'services/integrations/x-search.js#xSearchRecent',
+      operation_class: 'read', required_clearance: 3,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'x',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'internal',
+    },
     schema: {
       type: 'function',
       function: {
@@ -255,6 +332,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   x_post: {
+    profile: {
+      owner: 'services/integrations/x-tools.js#xPostTweet',
+      operation_class: 'external_write', required_clearance: 5,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'x',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'internal',
+    },
     schema: {
       type: 'function',
       function: {
@@ -273,6 +358,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   x_reply: {
+    profile: {
+      owner: 'services/integrations/x-tools.js#xReplyToTweet',
+      operation_class: 'external_write', required_clearance: 5,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'x',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'internal',
+    },
     schema: {
       type: 'function',
       function: {
@@ -292,6 +385,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   x_quote: {
+    profile: {
+      owner: 'services/integrations/x-tools.js#xQuoteTweet',
+      operation_class: 'external_write', required_clearance: 5,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'x',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'internal',
+    },
     schema: {
       type: 'function',
       function: {
@@ -315,6 +416,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   gmail_inbox: {
+    profile: {
+      owner: 'services/integrations/google-tools.js#gmailListInbox',
+      operation_class: 'read', required_clearance: 2,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'google',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
     schema: {
       type: 'function',
       function: {
@@ -336,6 +445,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   gmail_search: {
+    profile: {
+      owner: 'services/integrations/google-tools.js#gmailSearchMessages',
+      operation_class: 'read', required_clearance: 2,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'google',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
     schema: {
       type: 'function',
       function: {
@@ -358,6 +475,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   gmail_send: {
+    profile: {
+      owner: 'services/integrations/google-tools.js#gmailSendMessage',
+      operation_class: 'external_write', required_clearance: 4,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'google',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
     schema: {
       type: 'function',
       function: {
@@ -380,7 +505,45 @@ export const ALL_TOOL_DEFS = {
     )
   },
 
+  gmail_reply: {
+    profile: {
+      owner: 'services/integrations/google-tools.js#gmailReplyMessage',
+      operation_class: 'external_write', required_clearance: 4,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'google',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
+    schema: {
+      type: 'function',
+      function: {
+        name: 'gmail_reply',
+        description: 'Reply to one exact Gmail message.',
+        parameters: {
+          type: 'object',
+          properties: {
+            messageId: { type: 'string', description: 'Exact Gmail message identifier' },
+            body: { type: 'string', description: 'Exact reply body' },
+          },
+          required: ['messageId', 'body'],
+        },
+      },
+    },
+    fn: async ({ messageId, body }, options = {}) => gmailReplyMessage(
+      { messageId, body },
+      options.credentialUseContext || {},
+    ),
+  },
+
   youtube_search: {
+    profile: {
+      owner: 'services/integrations/google-tools.js#youtubeSearch',
+      operation_class: 'read', required_clearance: 1,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'google',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'internal',
+    },
     schema: {
       type: 'function',
       function: {
@@ -403,6 +566,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   youtube_channel: {
+    profile: {
+      owner: 'services/integrations/google-tools.js#youtubeChannelStats+youtubeListChannelVideos',
+      operation_class: 'read', required_clearance: 1,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'google',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'internal',
+    },
     schema: {
       type: 'function',
       function: {
@@ -423,6 +594,14 @@ export const ALL_TOOL_DEFS = {
 
 
   drive_list: {
+    profile: {
+      owner: 'services/integrations/google-tools.js#driveListFiles',
+      operation_class: 'read', required_clearance: 2,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'google',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'confidential',
+    },
     schema: {
       type: 'function',
       function: {
@@ -444,6 +623,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   drive_read: {
+    profile: {
+      owner: 'services/integrations/google-tools.js#driveReadTextFile',
+      operation_class: 'read', required_clearance: 2,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'google',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'confidential',
+    },
     schema: {
       type: 'function',
       function: {
@@ -462,6 +649,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   calendar_today: {
+    profile: {
+      owner: 'services/integrations/google-tools.js#calendarTodayEvents',
+      operation_class: 'read', required_clearance: 1,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'google',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
     schema: {
       type: 'function',
       function: {
@@ -474,6 +669,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   calendar_events: {
+    profile: {
+      owner: 'services/integrations/google-tools.js#calendarListEvents',
+      operation_class: 'read', required_clearance: 1,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'google',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
     schema: {
       type: 'function',
       function: {
@@ -494,6 +697,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   calendar_create: {
+    profile: {
+      owner: 'services/integrations/google-tools.js#calendarCreateEvent',
+      operation_class: 'external_write', required_clearance: 3,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'google',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
     schema: {
       type: 'function',
       function: {
@@ -518,6 +729,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   docs_read: {
+    profile: {
+      owner: 'services/integrations/google-tools.js#docsGetDocument',
+      operation_class: 'read', required_clearance: 2,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'google',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'confidential',
+    },
     schema: {
       type: 'function',
       function: {
@@ -536,6 +755,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   sheets_read: {
+    profile: {
+      owner: 'services/integrations/google-tools.js#sheetsGetValues',
+      operation_class: 'read', required_clearance: 2,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'google',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'confidential',
+    },
     schema: {
       type: 'function',
       function: {
@@ -559,6 +786,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   google_profile: {
+    profile: {
+      owner: 'services/integrations/google-tools.js#googleGetProfile',
+      operation_class: 'read', required_clearance: 2,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'google',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
     schema: {
       type: 'function',
       function: {
@@ -571,6 +806,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   stripe_account_summary: {
+    profile: {
+      owner: 'services/integrations/stripe-tools.js#stripeAccountSummary',
+      operation_class: 'read', required_clearance: 3,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'stripe',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'confidential',
+    },
     schema: {
       type: 'function',
       function: {
@@ -583,6 +826,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   stripe_list_customers: {
+    profile: {
+      owner: 'services/integrations/stripe-tools.js#stripeListCustomers',
+      operation_class: 'read', required_clearance: 3,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'stripe',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
     schema: {
       type: 'function',
       function: {
@@ -605,6 +856,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   stripe_list_subscriptions: {
+    profile: {
+      owner: 'services/integrations/stripe-tools.js#stripeListSubscriptions',
+      operation_class: 'read', required_clearance: 3,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'stripe',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
     schema: {
       type: 'function',
       function: {
@@ -627,6 +886,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   stripe_list_payment_intents: {
+    profile: {
+      owner: 'services/integrations/stripe-tools.js#stripeListPaymentIntents',
+      operation_class: 'read', required_clearance: 3,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'stripe',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
     schema: {
       type: 'function',
       function: {
@@ -647,6 +914,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   integrations_status: {
+    profile: {
+      owner: 'services/integrations/integration-tools.js#listIntegrationStatus',
+      operation_class: 'read', required_clearance: 2,
+      autonomous_approval_required: true,
+      source_kind: 'native_record', source_namespace: 'hom.aimos.configuration',
+      source_evidence_requirement: 'configuration_and_credential_lifecycle_records',
+      result_integrity_ceiling: 'agent', confidentiality_floor: 'internal',
+    },
     schema: {
       type: 'function',
       function: {
@@ -659,6 +934,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   github_list_repos: {
+    profile: {
+      owner: 'services/integrations/integration-tools.js#githubListRepos',
+      operation_class: 'read', required_clearance: 2,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'github',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'confidential',
+    },
     schema: {
       type: 'function',
       function: {
@@ -680,6 +963,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   github_search_issues: {
+    profile: {
+      owner: 'services/integrations/integration-tools.js#githubSearchIssues',
+      operation_class: 'read', required_clearance: 2,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'github',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'confidential',
+    },
     schema: {
       type: 'function',
       function: {
@@ -702,6 +993,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   salesforce_list_objects: {
+    profile: {
+      owner: 'services/integrations/integration-tools.js#salesforceListObjects',
+      operation_class: 'read', required_clearance: 3,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'salesforce',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'confidential',
+    },
     schema: {
       type: 'function',
       function: {
@@ -722,6 +1021,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   contacts_search: {
+    profile: {
+      owner: 'services/integrations/integration-tools.js#contactsSearch',
+      operation_class: 'read', required_clearance: 2,
+      autonomous_approval_required: true,
+      source_kind: 'host_automation', source_namespace: 'local.contacts',
+      source_evidence_requirement: 'local_automation_action_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
     schema: {
       type: 'function',
       function: {
@@ -740,6 +1047,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   imessage_chats: {
+    profile: {
+      owner: 'services/integrations/integration-tools.js#imessageListChats',
+      operation_class: 'read', required_clearance: 2,
+      autonomous_approval_required: true,
+      source_kind: 'host_automation', source_namespace: 'local.imessage',
+      source_evidence_requirement: 'local_automation_action_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
     schema: {
       type: 'function',
       function: {
@@ -757,6 +1072,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   imessage_search_contact: {
+    profile: {
+      owner: 'services/integrations/integration-tools.js#imessageSearchContact',
+      operation_class: 'read', required_clearance: 2,
+      autonomous_approval_required: true,
+      source_kind: 'host_automation', source_namespace: 'local.imessage',
+      source_evidence_requirement: 'local_automation_action_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
     schema: {
       type: 'function',
       function: {
@@ -774,7 +1097,44 @@ export const ALL_TOOL_DEFS = {
     fn: async ({ query: q }, options = {}) => imessageSearchContact({ query: q }, options.credentialUseContext || {})
   },
 
+  imessage_request_access: {
+    profile: {
+      owner: 'services/integrations/integration-tools.js#imessageRequestAccess',
+      operation_class: 'internal_write', required_clearance: 5,
+      autonomous_approval_required: true,
+      source_kind: 'host_automation', source_namespace: 'local.imessage',
+      source_evidence_requirement: 'local_automation_action_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
+    schema: {
+      type: 'function',
+      function: {
+        name: 'imessage_request_access',
+        description: 'Request the exact local Messages automation permission.',
+        parameters: {
+          type: 'object',
+          properties: {
+            request_access: { type: 'boolean', description: 'Must be true for this explicit permission request' },
+          },
+          required: ['request_access'],
+        },
+      },
+    },
+    fn: async ({ request_access: requestAccess }, options = {}) => {
+      if (requestAccess !== true) throw new Error('imessage_request_access_confirmation_required');
+      return { success: true, chat_count: await imessageRequestAccess(options.credentialUseContext || {}) };
+    },
+  },
+
   imessage_send: {
+    profile: {
+      owner: 'services/integrations/integration-tools.js#imessageSend',
+      operation_class: 'external_write', required_clearance: 4,
+      autonomous_approval_required: true,
+      source_kind: 'host_automation', source_namespace: 'local.imessage',
+      source_evidence_requirement: 'local_automation_action_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
     schema: {
       type: 'function',
       function: {
@@ -793,7 +1153,50 @@ export const ALL_TOOL_DEFS = {
     fn: async ({ to, message }, options = {}) => imessageSend({ to, message }, options.credentialUseContext || {})
   },
 
+  telegram_send: {
+    profile: {
+      owner: 'services/integrations/telegram-tools.js#telegramSendMessage',
+      operation_class: 'external_write', required_clearance: 4,
+      autonomous_approval_required: true,
+      source_kind: 'credential_account', source_namespace: 'telegram',
+      source_evidence_requirement: 'credential_use_receipt',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'restricted',
+    },
+    schema: {
+      type: 'function',
+      function: {
+        name: 'telegram_send',
+        description: 'Send one exact Telegram message.',
+        parameters: {
+          type: 'object',
+          properties: {
+            chat_id: { type: 'string', description: 'Exact Telegram chat identifier' },
+            text: { type: 'string', description: 'Exact message text' },
+            parse_mode: { type: 'string', description: 'Optional Telegram parse mode' },
+          },
+          required: ['chat_id', 'text'],
+        },
+      },
+    },
+    fn: async ({ chat_id: chatId, text, parse_mode: parseMode = null }, options = {}) => (
+      telegramSendMessage({
+        chatId,
+        text,
+        parseMode,
+        useContext: options.credentialUseContext || {},
+      })
+    ),
+  },
+
   aimos_recall: {
+    profile: {
+      owner: 'services/retrieval/native-recall-pipeline.js#executeCanonicalRecall',
+      operation_class: 'read', required_clearance: 1,
+      autonomous_approval_required: false,
+      source_kind: 'native_memory', source_namespace: 'hom.aimos.memory',
+      source_evidence_requirement: 'native_recall_receipt_and_memory_origins',
+      result_integrity_ceiling: 'agent', confidentiality_floor: 'internal',
+    },
     schema: {
       type: 'function',
       function: {
@@ -819,6 +1222,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   aimos_save: {
+    profile: {
+      owner: 'services/write/canonical-save-owner.js#executeCanonicalSave',
+      operation_class: 'memory_write', required_clearance: 2,
+      autonomous_approval_required: false,
+      source_kind: 'native_memory', source_namespace: 'hom.aimos.memory',
+      source_evidence_requirement: 'canonical_save_terminal_and_memory_origin',
+      result_integrity_ceiling: 'agent', confidentiality_floor: 'internal',
+    },
     schema: {
       type: 'function',
       function: {
@@ -828,18 +1239,27 @@ export const ALL_TOOL_DEFS = {
           type: 'object',
           properties: {
             content: { type: 'string', description: 'Information to store' },
-            tags: { type: 'array', items: { type: 'string' }, description: 'Tags for retrieval' }
+            tags: { type: 'array', items: { type: 'string' }, description: 'Tags for retrieval' },
+            source_memory_ids: { type: 'array', items: { type: 'string' }, description: 'Additional retained memory inputs; runtime-collected inputs cannot be removed' }
           },
           required: ['content']
         }
       }
     },
-    fn: async ({ content, tags = [] }, agentId, options = {}) => (
-      aimosSave({ content, tags, agent_id: agentId }, options)
+    fn: async ({ content, tags = [], source_memory_ids }, agentId, options = {}) => (
+      aimosSave({ content, tags, agent_id: agentId, source_memory_ids }, options)
     )
   },
 
   write_file: {
+    profile: {
+      owner: 'services/orchestration/tool-registry.js#write_file',
+      operation_class: 'internal_write', required_clearance: 5,
+      autonomous_approval_required: false,
+      source_kind: 'local_file', source_namespace: 'local.files',
+      source_evidence_requirement: 'verified_tool_action_and_file_content_hash',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'confidential',
+    },
     schema: {
       type: 'function',
       function: {
@@ -857,6 +1277,17 @@ export const ALL_TOOL_DEFS = {
     },
     fn: async ({ filepath, content }, agentId, options = {}) => {
       try {
+        const authorizedArgs = options.toolActionArguments || { filepath, content };
+        if (authorizedArgs.filepath !== filepath || authorizedArgs.content !== content) {
+          throw new Error('consequential_action_argument_substitution');
+        }
+        await verifyToolActionAuthority(options.toolActionAuthority, {
+          expectedCompanyId: COMPANY,
+          expectedTool: 'write_file',
+          expectedActorAgentId: options.executionContext?.actorAgentId
+            || options.credentialUseContext?.actorAgentId,
+          expectedArguments: authorizedArgs,
+        });
         const resolved = path.resolve(filepath);
         const filename = path.basename(resolved).toLowerCase();
         
@@ -867,7 +1298,9 @@ export const ALL_TOOL_DEFS = {
         if (isBrainFile) {
           // Inside Brain: Requires Reasoning Trace
           const { checkReasoningTrace } = await import('./reasoning-trace-check.js');
-          const trace = await checkReasoningTrace(agentId, resolved);
+          const trace = await checkReasoningTrace(agentId, resolved, {
+            canonicalMemories: options.canonicalMemories || [],
+          });
           
           if (!trace.valid) {
             return {
@@ -922,6 +1355,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   hive_search_specialists: {
+    profile: {
+      owner: 'services/orchestration/tool-registry.js#hive_search_specialists',
+      operation_class: 'read', required_clearance: 1,
+      autonomous_approval_required: false,
+      source_kind: 'native_record', source_namespace: 'hom.aimos.agent_profiles',
+      source_evidence_requirement: 'native_profile_record_origin',
+      result_integrity_ceiling: 'agent', confidentiality_floor: 'internal',
+    },
     schema: {
       type: 'function',
       function: {
@@ -962,6 +1403,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   schedule_task: {
+    profile: {
+      owner: 'services/orchestration/scheduler.js#createScheduledTask',
+      operation_class: 'orchestration', required_clearance: 5,
+      autonomous_approval_required: false,
+      source_kind: 'native_record', source_namespace: 'hom.aimos.scheduler',
+      source_evidence_requirement: 'signed_schedule_record',
+      result_integrity_ceiling: 'agent', confidentiality_floor: 'internal',
+    },
     schema: {
       type: 'function',
       function: {
@@ -979,18 +1428,28 @@ export const ALL_TOOL_DEFS = {
         }
       }
     },
-    fn: async ({ cron_expression, task_description, agent_id = getOperatorAgentId(), label }) => {
+    fn: async ({ cron_expression, task_description, agent_id = getOperatorAgentId(), label }, options = {}) => {
       const schedule = await createScheduledTask({
         cronExpression: cron_expression,
         taskDescription: task_description,
         agentId: agent_id,
-        label
+        label,
+        authority: options.toolActionAuthority,
+        actionArguments: options.toolActionArguments,
       });
       return { success: true, scheduled: true, schedule };
     }
   },
 
   list_scheduled_tasks: {
+    profile: {
+      owner: 'services/orchestration/scheduler.js#listScheduledTasks',
+      operation_class: 'read', required_clearance: 2,
+      autonomous_approval_required: false,
+      source_kind: 'native_record', source_namespace: 'hom.aimos.scheduler',
+      source_evidence_requirement: 'signed_schedule_record',
+      result_integrity_ceiling: 'agent', confidentiality_floor: 'internal',
+    },
     schema: {
       type: 'function',
       function: {
@@ -1006,6 +1465,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   delegate_task: {
+    profile: {
+      owner: 'services/orchestration/agent-runner.js#runAgent',
+      operation_class: 'orchestration', required_clearance: 3,
+      autonomous_approval_required: false,
+      source_kind: 'native_derivation', source_namespace: 'hom.aimos.delegation',
+      source_evidence_requirement: 'parent_tool_action_child_run_and_result_origin',
+      result_integrity_ceiling: 'agent', confidentiality_floor: 'internal',
+    },
     schema: {
       type: 'function',
       function: {
@@ -1017,15 +1484,42 @@ export const ALL_TOOL_DEFS = {
             agent_id: { type: 'string', description: 'The precise ID of the specialized agent to wake up (e.g. "academic-researcher", "data-analyst", "frontend", etc.)' },
             task_prompt: { type: 'string', description: 'A highly detailed instructional prompt explaining exactly what you want the sub-agent to do.' },
             wait: { type: 'boolean', description: 'If true, block until child completes or timeout (default: false = fire-and-forget)' },
-            delegation_context: { type: 'object', description: 'Scoped state passed to child (like env vars — not persisted to Aimos)' }
+            delegation_context: { type: 'object', description: 'Scoped task data passed to the child; never identity or operation authority' },
+            source_memory_ids: { type: 'array', items: { type: 'string' }, description: 'Additional retained inputs; inherited runtime inputs remain mandatory' }
           },
           required: ['agent_id', 'task_prompt']
         }
       }
     },
-    fn: async ({ agent_id, task_prompt, wait = false, delegation_context = {} }, originAgentId = '', options = {}) => {
+    fn: async ({ agent_id, task_prompt, wait = false, delegation_context = {}, source_memory_ids }, originAgentId = '', options = {}) => {
       try {
+        const executionContext = options.executionContext || options.credentialUseContext;
+        if (!executionContext?.actorAgentId || !options.toolActionAuthority) {
+          throw new Error('verified_delegation_authority_required');
+        }
+        const authorizedArgs = options.toolActionArguments || {
+          agent_id, task_prompt, wait, delegation_context,
+          ...(source_memory_ids === undefined ? {} : { source_memory_ids }),
+        };
+        if (authorizedArgs.agent_id !== agent_id
+            || authorizedArgs.task_prompt !== task_prompt
+            || (authorizedArgs.wait ?? false) !== wait
+            || canonicalJson(authorizedArgs.delegation_context ?? {}) !== canonicalJson(delegation_context)
+            || canonicalJson(authorizedArgs.source_memory_ids ?? null)
+              !== canonicalJson(source_memory_ids ?? null)) {
+          throw new Error('consequential_action_argument_substitution');
+        }
+        await verifyToolActionAuthority(options.toolActionAuthority, {
+          expectedCompanyId: COMPANY,
+          expectedTool: 'delegate_task',
+          expectedActorAgentId: executionContext.actorAgentId,
+          expectedArguments: authorizedArgs,
+        });
         const taskId = `delegate-${agent_id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const childInputs = createToolInputState(options.inputMemoryIds || [], options.nativeToolInputs);
+        recordToolContextInput(childInputs, { kind: 'derived',
+          owner: 'services/orchestration/tool-registry.js#delegate_task',
+          ref: options.toolActionAuthority.eventId, value: { task_prompt, delegation_context } });
         console.log(`[orchestrator] ${wait ? 'Awaiting' : 'Queueing'} delegated task ${taskId} for sub-agent: ${agent_id}`);
 
         // ─── P0-5: Structured delegation with return channels ─────────────────
@@ -1035,6 +1529,8 @@ export const ALL_TOOL_DEFS = {
 
         const executeDelegate = async () => {
           const startedAt = Date.now();
+          let result;
+          let structured;
           try {
             const effectiveParentRunId = options.runId || options.parentRunId || null;
             const effectiveDelegationContext = {
@@ -1043,52 +1539,45 @@ export const ALL_TOOL_DEFS = {
               parentRunId: effectiveParentRunId,
               conversationSessionKey: options.sessionKey || delegation_context.conversationSessionKey || null
             };
-            const result = await Promise.race([
-              runAgent(agent_id, task_prompt, {
+            result = await runAgent(agent_id, task_prompt, {
                 skipAimos: true,
                 originAgentId,
                 delegationContext: effectiveDelegationContext,
                 parentRunId: effectiveParentRunId,
                 sessionKey: options.sessionKey || null,
                 taskType: options.taskType || 'delegated_task',
-                _scopedState: options._scopedState || null
-              }),
-              new Promise((_, reject) =>
-                setTimeout(() => reject(new Error(`Delegated task exceeded ${DELEGATE_TASK_TIMEOUT_MS}ms timeout`)), DELEGATE_TASK_TIMEOUT_MS)
-              )
-            ]);
+                _scopedState: options._scopedState || null,
+                depth: Number(options.depth || 0) + 1,
+                executionContext,
+                credentialUseContext: options.credentialUseContext || executionContext,
+                sourceMemoryIds: options.inputMemoryIds || [],
+                nativeToolInputs: childInputs,
+                ...(options.selectedModel ? {
+                  model: options.selectedModel,
+                  requestedModel: options.selectedModel,
+                  strictRequestedModel: true,
+                  modelPlan: [options.selectedModel],
+                } : {}),
+              });
 
             const elapsed = Date.now() - startedAt;
             const response = typeof result === 'string' ? result : (result?.response || JSON.stringify(result));
             const confidence = typeof result === 'object' ? (result?.confidence || 0.5) : 0.5;
 
             // Structured return protocol (Quine-inspired)
-            const structured = {
+            structured = {
               status: 0, // 0=success
               confidence,
-              response: String(response || '').slice(0, 4000),
+              response: String(response || ''),
               diagnostics: [],
               wisdom: { task_id: taskId, agent_id, elapsed_ms: elapsed },
               task_id: taskId
             };
 
-            // Save result to Aimos for parent retrieval
-            await executeHousekeeperCanonicalSave({
-              company_id: COMPANY,
-              agent_id,
-              key: `delegation:${taskId}:result`,
-              value: JSON.stringify(structured),
-              scope: 'system',
-              memory_type: 'delegation_result',
-              clearance_level: 5,
-              source: 'tool-registry',
-            });
-
             console.log(`[orchestrator] Delegated task ${taskId} completed in ${elapsed}ms (status: 0)`);
-            return structured;
           } catch (err) {
             const elapsed = Date.now() - startedAt;
-            const structured = {
+            structured = {
               status: err.message?.includes('timeout') ? 1 : 2, // 1=partial(timeout), 2=failed
               confidence: 0,
               response: '',
@@ -1097,20 +1586,44 @@ export const ALL_TOOL_DEFS = {
               task_id: taskId
             };
 
-            // Save failure result
-            await executeHousekeeperCanonicalSave({
-              company_id: COMPANY,
-              agent_id,
-              key: `delegation:${taskId}:result`,
-              value: JSON.stringify(structured),
-              scope: 'system',
-              memory_type: 'delegation_result',
-              clearance_level: 5,
-              source: 'tool-registry',
-            }).catch(() => {});
-
             console.error(`[orchestrator] Delegated task ${taskId} failed after ${elapsed}ms (status: ${structured.status})`, err.message);
-            return structured;
+          }
+          // The original actor owns the result. The child runtime name is
+          // attribution, not a new signer or a Housekeeper privilege grant.
+          const sourceMemoryIds = [...new Set([
+            ...(options.inputMemoryIds || []), ...readToolInputState(childInputs).memory_ids,
+          ])].sort();
+          structured.origin_inputs = {
+            memory_ids: sourceMemoryIds,
+            parent_tool_event_id: options.toolActionAuthority.eventId,
+            child: readToolInputState(childInputs),
+          };
+          const spec = {
+            company_id: COMPANY,
+            agent_id: executionContext.actorAgentId,
+            key: `delegation:${taskId}:result`,
+            value: JSON.stringify(structured),
+            scope: 'private',
+            memory_type: 'delegation_result',
+            clearance_level: Number(options.clearanceLevel || 1),
+            source: 'tool-registry',
+            session_id: options.sessionKey || null,
+            source_memory_ids: sourceMemoryIds,
+          };
+          const commitAction = await beginToolAction({
+            tool: 'aimos_save_commit', args: spec, runtimeAgentId: originAgentId,
+            inputState: childInputs,
+            executionContext, parentEventId: options.toolActionAuthority.eventId,
+          });
+          try {
+            const saved = await executeCanonicalSave({ ...spec, mutation_authority: commitAction.authority });
+            if (saved?.rejected || !saved?.id) throw new Error(saved?.reason || 'delegation_result_save_failed');
+            await finishToolAction({ action: commitAction, executionContext, succeeded: true, result: { memory_id: saved.id } });
+            if (wait) mergeToolInputState(options.nativeToolInputs, childInputs);
+            return { ...structured, memory_id: saved.id, save_commit_event_id: commitAction.receipt.event_id };
+          } catch (error) {
+            await finishToolAction({ action: commitAction, executionContext, succeeded: false, error: error.message });
+            throw error;
           }
         };
 
@@ -1121,7 +1634,9 @@ export const ALL_TOOL_DEFS = {
         }
 
         // Async mode: fire-and-forget with result saved to Aimos
-        setImmediate(() => { executeDelegate().catch(() => {}); });
+        setImmediate(() => { executeDelegate().catch(error => {
+          console.error(`[orchestrator] Delegated result persistence failed for ${taskId}: ${error.message}`);
+        }); });
 
         return {
           success: true,
@@ -1142,6 +1657,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   read_file: {
+    profile: {
+      owner: 'services/orchestration/tool-registry.js#read_file',
+      operation_class: 'read', required_clearance: 3,
+      autonomous_approval_required: false,
+      source_kind: 'local_file', source_namespace: 'local.files',
+      source_evidence_requirement: 'authorized_file_read_and_content_hash',
+      result_integrity_ceiling: 'untrusted', confidentiality_floor: 'confidential',
+    },
     schema: {
       type: 'function',
       function: {
@@ -1174,6 +1697,14 @@ export const ALL_TOOL_DEFS = {
   },
 
   sun_tzu_analyze: {
+    profile: {
+      owner: 'services/orchestration/sun-tzu-analyzer.js#analyzeSituation',
+      operation_class: 'read', required_clearance: 1,
+      autonomous_approval_required: false,
+      source_kind: 'native_derivation', source_namespace: 'hom.aimos.analysis',
+      source_evidence_requirement: 'signed_tool_action_and_input_origins',
+      result_integrity_ceiling: 'agent', confidentiality_floor: 'internal',
+    },
     schema: {
       type: 'function',
       function: {
@@ -1196,17 +1727,17 @@ export const ALL_TOOL_DEFS = {
 // ─── SUITE → TOOL MAP ─────────────────────────────────────────────────────────
 
 const SUITE_TO_TOOLS = {
-  'full': ['web_search', 'gmail_inbox', 'gmail_search', 'gmail_send', 'youtube_search', 'youtube_channel','drive_list', 'drive_read', 'docs_read', 'sheets_read', 'google_profile', 'calendar_today', 'calendar_events', 'calendar_create', 'stripe_account_summary', 'stripe_list_customers', 'stripe_list_subscriptions', 'stripe_list_payment_intents', 'integrations_status', 'github_list_repos', 'github_search_issues', 'salesforce_list_objects', 'contacts_search', 'imessage_chats', 'imessage_search_contact', 'imessage_send', 'aimos_recall', 'aimos_save', 'write_file', 'read_file', 'schedule_task', 'list_scheduled_tasks', 'delegate_task', 'hive_search_specialists', 'x_search', 'x_post', 'x_reply', 'x_quote', 'sun_tzu_analyze'],
+  'full': ['web_search', 'gmail_inbox', 'gmail_search', 'gmail_send', 'gmail_reply', 'youtube_search', 'youtube_channel','drive_list', 'drive_read', 'docs_read', 'sheets_read', 'google_profile', 'calendar_today', 'calendar_events', 'calendar_create', 'stripe_account_summary', 'stripe_list_customers', 'stripe_list_subscriptions', 'stripe_list_payment_intents', 'integrations_status', 'github_list_repos', 'github_search_issues', 'salesforce_list_objects', 'contacts_search', 'imessage_chats', 'imessage_search_contact', 'imessage_request_access', 'imessage_send', 'telegram_send', 'aimos_recall', 'aimos_save', 'write_file', 'read_file', 'schedule_task', 'list_scheduled_tasks', 'delegate_task', 'hive_search_specialists', 'x_search', 'x_post', 'x_reply', 'x_quote', 'sun_tzu_analyze'],
   'web-search': ['web_search', 'aimos_recall', 'aimos_save'],
   'x-search': ['x_search', 'aimos_recall', 'aimos_save'],
   'x': ['x_search', 'x_post', 'x_reply', 'x_quote', 'aimos_recall', 'aimos_save'],
-  'google': ['web_search', 'gmail_inbox', 'gmail_search', 'youtube_search', 'youtube_channel','drive_list', 'drive_read', 'docs_read', 'sheets_read', 'google_profile', 'calendar_today', 'calendar_events', 'calendar_create', 'aimos_recall', 'aimos_save'],
+  'google': ['web_search', 'gmail_inbox', 'gmail_search', 'gmail_send', 'gmail_reply', 'youtube_search', 'youtube_channel','drive_list', 'drive_read', 'docs_read', 'sheets_read', 'google_profile', 'calendar_today', 'calendar_events', 'calendar_create', 'aimos_recall', 'aimos_save'],
   'sheets': ['sheets_read', 'aimos_recall', 'aimos_save'],
   'google-profile': ['google_profile'],
   'stripe': ['stripe_account_summary', 'stripe_list_customers', 'stripe_list_subscriptions', 'stripe_list_payment_intents', 'aimos_recall', 'aimos_save'],
-  'integrations': ['integrations_status', 'github_list_repos', 'github_search_issues', 'salesforce_list_objects', 'contacts_search', 'imessage_chats', 'imessage_search_contact', 'imessage_send', 'aimos_recall', 'aimos_save'],
+  'integrations': ['integrations_status', 'github_list_repos', 'github_search_issues', 'salesforce_list_objects', 'contacts_search', 'imessage_chats', 'imessage_search_contact', 'imessage_request_access', 'imessage_send', 'telegram_send', 'aimos_recall', 'aimos_save'],
   'gmail-read': ['gmail_inbox', 'gmail_search', 'aimos_recall', 'aimos_save'],
-  'gmail-send': ['gmail_send'],
+  'gmail-send': ['gmail_send', 'gmail_reply'],
   'gmail-search': ['gmail_search'],
   'youtube': ['youtube_search', 'youtube_channel','aimos_recall', 'aimos_save'],
   'drive': ['drive_list', 'drive_read', 'aimos_recall', 'aimos_save'],
@@ -1219,93 +1750,16 @@ const SUITE_TO_TOOLS = {
 
 // ─── CLEARANCE LEVELS PER TOOL (Aimos Order v2 Layer 1: Decision Rights) ─────
 // Level 1 = any agent, Level 3 = mid-tier, Level 5 = CEO/Reviewer only
-const TOOL_CLEARANCE_LEVELS = {
-  sun_tzu_analyze: 1,
-  aimos_recall: 1,
-  aimos_save: 2,
-  web_search: 1,
-  x_search: 3,
-  x_post: 5,
-  x_reply: 5,
-  x_quote: 5,
-  gmail_inbox: 2,
-  gmail_search: 2,
-  gmail_send: 4,
-  youtube_search: 1,
-  youtube_channel: 1,
-  drive_list: 2,
-  drive_read: 2,
-  docs_read: 2,
-  sheets_read: 2,
-  google_profile: 2,
-  calendar_today: 1,
-  calendar_events: 1,
-  calendar_create: 3,
-  stripe_account_summary: 3,
-  stripe_list_customers: 3,
-  stripe_list_subscriptions: 3,
-  stripe_list_payment_intents: 3,
-  integrations_status: 2,
-  github_list_repos: 2,
-  github_search_issues: 2,
-  salesforce_list_objects: 3,
-  contacts_search: 2,
-  imessage_chats: 2,
-  imessage_search_contact: 2,
-  imessage_send: 4,
-  write_file: 5,
-  read_file: 3,
-  schedule_task: 5,
-  list_scheduled_tasks: 2,
-  delegate_task: 3,
-  hive_search_specialists: 1,
-};
+const TOOL_CLEARANCE_LEVELS = Object.freeze(Object.fromEntries(
+  Object.entries(ALL_TOOL_DEFS).map(([name, tool]) => [name, tool.profile.required_clearance]),
+));
 
-const SIDE_EFFECT_TOOLS = new Set([
-  'gmail_send',
-  'calendar_create',
-  'imessage_send',
-  'aimos_save',
-  'write_file',
-  'schedule_task',
-  'delegate_task',
-  'x_post',
-  'x_reply',
-  'x_quote'
-]);
+const SIDE_EFFECT_TOOLS = new Set(Object.entries(ALL_TOOL_DEFS)
+  .filter(([, tool]) => tool.profile.operation_class !== 'read').map(([name]) => name));
 
-const QUOTA_SPENDING_TOOLS = new Set([
-  'web_search',
-  'x_search',
-  'x_post',
-  'x_reply',
-  'x_quote',
-  'gmail_inbox',
-  'gmail_search',
-  'gmail_send',
-  'youtube_search',
-  'youtube_channel',
-  'drive_list',
-  'drive_read',
-  'calendar_today',
-  'calendar_events',
-  'calendar_create',
-  'docs_read',
-  'sheets_read',
-  'google_profile',
-  'stripe_account_summary',
-  'stripe_list_customers',
-  'stripe_list_subscriptions',
-  'stripe_list_payment_intents',
-  'integrations_status',
-  'github_list_repos',
-  'github_search_issues',
-  'salesforce_list_objects',
-  'contacts_search',
-  'imessage_chats',
-  'imessage_search_contact',
-  'imessage_send'
-]);
+const QUOTA_SPENDING_TOOLS = new Set(Object.entries(ALL_TOOL_DEFS)
+  .filter(([, tool]) => tool.profile.autonomous_approval_required).map(([name]) => name));
+const CORROBORATED_ACTION_EXECUTION = Symbol('hom.aimos.corroborated-action-execution');
 
 const TOOL_DIRECTIONS = Object.freeze({
   READ: 'read',
@@ -1315,50 +1769,79 @@ const TOOL_DIRECTIONS = Object.freeze({
   ORCHESTRATION: 'orchestration'
 });
 
-const TOOL_DIRECTION_BY_NAME = Object.freeze({
-  sun_tzu_analyze: TOOL_DIRECTIONS.READ,
-  aimos_recall: TOOL_DIRECTIONS.READ,
-  aimos_save: TOOL_DIRECTIONS.MEMORY_WRITE,
-  web_search: TOOL_DIRECTIONS.READ,
-  x_search: TOOL_DIRECTIONS.READ,
-  x_post: TOOL_DIRECTIONS.EXTERNAL_WRITE,
-  x_reply: TOOL_DIRECTIONS.EXTERNAL_WRITE,
-  x_quote: TOOL_DIRECTIONS.EXTERNAL_WRITE,
-  gmail_inbox: TOOL_DIRECTIONS.READ,
-  gmail_search: TOOL_DIRECTIONS.READ,
-  gmail_send: TOOL_DIRECTIONS.EXTERNAL_WRITE,
-  youtube_search: TOOL_DIRECTIONS.READ,
-  youtube_channel: TOOL_DIRECTIONS.READ,
-  drive_list: TOOL_DIRECTIONS.READ,
-  drive_read: TOOL_DIRECTIONS.READ,
-  docs_read: TOOL_DIRECTIONS.READ,
-  sheets_read: TOOL_DIRECTIONS.READ,
-  google_profile: TOOL_DIRECTIONS.READ,
-  calendar_today: TOOL_DIRECTIONS.READ,
-  calendar_events: TOOL_DIRECTIONS.READ,
-  calendar_create: TOOL_DIRECTIONS.EXTERNAL_WRITE,
-  stripe_account_summary: TOOL_DIRECTIONS.READ,
-  stripe_list_customers: TOOL_DIRECTIONS.READ,
-  stripe_list_subscriptions: TOOL_DIRECTIONS.READ,
-  stripe_list_payment_intents: TOOL_DIRECTIONS.READ,
-  integrations_status: TOOL_DIRECTIONS.READ,
-  github_list_repos: TOOL_DIRECTIONS.READ,
-  github_search_issues: TOOL_DIRECTIONS.READ,
-  salesforce_list_objects: TOOL_DIRECTIONS.READ,
-  contacts_search: TOOL_DIRECTIONS.READ,
-  imessage_chats: TOOL_DIRECTIONS.READ,
-  imessage_search_contact: TOOL_DIRECTIONS.READ,
-  imessage_send: TOOL_DIRECTIONS.EXTERNAL_WRITE,
-  write_file: TOOL_DIRECTIONS.INTERNAL_WRITE,
-  read_file: TOOL_DIRECTIONS.READ,
-  schedule_task: TOOL_DIRECTIONS.ORCHESTRATION,
-  list_scheduled_tasks: TOOL_DIRECTIONS.READ,
-  delegate_task: TOOL_DIRECTIONS.ORCHESTRATION,
-  hive_search_specialists: TOOL_DIRECTIONS.READ
-});
+// Code-owned policy declarations, not connector connectivity or result verdicts.
+// Louck M2: opaque output inherits every input's restrictions; an authenticated
+// transport never makes its content an independent trusted corroborator.
+function freezeToolDefinition(value) {
+  if (value && typeof value === 'object' && !Object.isFrozen(value)) {
+    for (const child of Object.values(value)) freezeToolDefinition(child);
+    Object.freeze(value);
+  }
+  return value;
+}
+
+for (const [name, definition] of Object.entries(ALL_TOOL_DEFS)) {
+  const p = definition.profile;
+  const actionAuthority = consequentialActionPolicyForTool(name);
+  const fields = ['owner', 'operation_class', 'required_clearance', 'autonomous_approval_required',
+    'source_kind', 'source_namespace', 'source_evidence_requirement',
+    'result_integrity_ceiling', 'confidentiality_floor'];
+  if (!p || Object.keys(p).length !== fields.length || fields.some(field => !Object.hasOwn(p, field))
+    || typeof definition.fn !== 'function' || definition.schema?.function?.name !== name
+    || definition.schema?.function?.parameters?.type !== 'object'
+    || typeof p.owner !== 'string' || !/^services\/[a-z0-9\/-]+\.js#[A-Za-z0-9_+]+$/.test(p.owner)
+    || !Object.values(TOOL_DIRECTIONS).includes(p.operation_class)
+    || !Number.isInteger(p.required_clearance) || p.required_clearance < 1 || p.required_clearance > 12
+    || typeof p.autonomous_approval_required !== 'boolean'
+    || !['credential_account', 'native_memory', 'native_record', 'native_derivation', 'local_file', 'host_automation'].includes(p.source_kind)
+    || typeof p.source_namespace !== 'string' || !/^[a-z0-9._-]+$/.test(p.source_namespace)
+    || typeof p.source_evidence_requirement !== 'string' || !/^[a-z_]+$/.test(p.source_evidence_requirement)
+    || !['untrusted', 'agent'].includes(p.result_integrity_ceiling)
+    || !['internal', 'confidential', 'restricted'].includes(p.confidentiality_floor)
+    || (['external_write', 'internal_write', 'orchestration'].includes(p.operation_class)
+      ? actionAuthority == null : actionAuthority != null)) {
+    throw new Error(`native_tool_profile_invalid:${name}`);
+  }
+  definition.profile = freezeToolDefinition({
+    schema: 'hom.aimos.native-tool-profile/v1',
+    tool: name,
+    version: 1,
+    family_profile_sha256: ORIGIN_FAMILY_PROFILE_SHA256_V1,
+    ...p,
+    ...(actionAuthority ? { action_authority: actionAuthority } : {}),
+    argument_schema: definition.schema.function.parameters,
+    input_policy: {
+      arguments: 'exact_signed_arguments',
+      context: 'all_runtime_consumed_inputs',
+      source: p.source_evidence_requirement,
+      missing_origin: 'unknown_protected',
+    },
+    result_policy: {
+      family_ids: ['derived', 'derived.tool_result'],
+      family_rule: 'closure_of_all_input_families_and_tool_result',
+      confidentiality_rule: 'join_all_inputs_and_profile_floor',
+      integrity_rule: 'meet_all_inputs_and_profile_ceiling',
+      action_rule: 'no_new_action_authority',
+      independent_authority: false,
+    },
+  });
+  definition.profile_sha256 = createHash('sha256')
+    .update(canonicalJson(definition.profile), 'utf8').digest('hex');
+  freezeToolDefinition(definition);
+}
+Object.freeze(ALL_TOOL_DEFS);
+
+export function getNativeToolProfile(name) {
+  if (!Object.hasOwn(ALL_TOOL_DEFS, name)) throw new Error(`native_tool_unregistered:${String(name)}`);
+  const definition = ALL_TOOL_DEFS[name];
+  if (!definition.profile_sha256 || !Object.isFrozen(definition.profile)) {
+    throw new Error(`native_tool_profile_invalid:${name}`);
+  }
+  return Object.freeze({ profile: definition.profile, sha256: definition.profile_sha256 });
+}
 
 function resolveToolDirection(toolName = '') {
-  return TOOL_DIRECTION_BY_NAME[toolName] || TOOL_DIRECTIONS.READ;
+  return getNativeToolProfile(toolName).profile.operation_class;
 }
 
 function normalizeDirection(value = '') {
@@ -1425,20 +1908,6 @@ function buildDirectionalityPolicy(options = {}) {
   };
 }
 
-async function runWithTimeout(toolName, fn, timeoutMs = TOOL_EXEC_TIMEOUT_MS) {
-  let timeoutId;
-  const timeoutPromise = new Promise((_, reject) => {
-    timeoutId = setTimeout(() => {
-      reject(new Error(`Tool timeout after ${timeoutMs}ms (${toolName})`));
-    }, timeoutMs);
-  });
-  try {
-    return await Promise.race([fn(), timeoutPromise]);
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
 function getToolSchema(name) {
   return ALL_TOOL_DEFS[name]?.schema?.function?.parameters || null;
 }
@@ -1460,6 +1929,7 @@ function preflightValidateArgs(name, args) {
 }
 
 function buildToolPlan(name, args, agentId) {
+  const nativeProfile = getNativeToolProfile(name);
   const sideEffecting = SIDE_EFFECT_TOOLS.has(name);
   return {
     kind: 'tool_preflight',
@@ -1468,6 +1938,8 @@ function buildToolPlan(name, args, agentId) {
     agentId,
     risk: sideEffecting ? 'high' : (name === 'x_search' ? 'medium' : 'low'),
     direction: resolveToolDirection(name),
+    native_tool_profile: nativeProfile.profile,
+    native_tool_profile_sha256: nativeProfile.sha256,
     preview: previewArgs(args),
     sideEffecting,
     args: args || {},
@@ -1558,7 +2030,10 @@ export function getToolsForAgent(toolSuitesOrNames, options = {}) {
     toolSet.delete('list_scheduled_tasks');
   }
 
-  return [...toolSet].map(name => ALL_TOOL_DEFS[name]).filter(Boolean);
+  return [...toolSet].filter(name => Object.hasOwn(ALL_TOOL_DEFS, name)).map(name => {
+    getNativeToolProfile(name);
+    return ALL_TOOL_DEFS[name];
+  });
 }
 
 export function getToolRepresentationsForAgent(toolSuitesOrNames, options = {}) {
@@ -1569,8 +2044,42 @@ export function getToolRepresentationsForAgent(toolSuitesOrNames, options = {}) 
 }
 
 export async function executeTool(name, args, agentId, options = {}) {
+  const finishWork = beginServingWork('native_tool');
+  try {
+  options = { ...options, signal: AbortSignal.any([getServingAbortSignal(), ...(options.signal ? [options.signal] : [])]) };
+  const nativeProfile = getNativeToolProfile(name);
   const tool = ALL_TOOL_DEFS[name];
-  if (!tool) throw new Error(`Unknown tool: ${name}`);
+  const inputState = options.nativeToolInputs || createToolInputState();
+  readToolInputState(inputState);
+  const executionContext = options.executionContext || options.credentialUseContext || null;
+  let signedToolAction = null;
+  let finalizing = false;
+  let toolInvoked = false;
+  let memoryGrant = null;
+  // Every caller receives the same JSON-visible result that this native owner
+  // classifies. A denial start records an attempt, never dispatch authority.
+  async function completeResult(result, disposition, disclosedResult = result) {
+    finalizing = true;
+    if (!signedToolAction) signedToolAction = await beginToolAction({
+      tool: name, args: args || {}, runtimeAgentId: String(agentId || ''),
+      executionContext, parentEventId: options.securityDecisionEventId || null,
+      inputState, nativeProfile, dispatchAllowed: false,
+    });
+    const classification = await classifyNativeResult({ state: inputState,
+      companyId: executionContext.companyId, actionEventId: signedToolAction.receipt.event_id,
+      profile: nativeProfile.profile, result, disclosedResult,
+      execution: { disposition, tool_invoked: toolInvoked } });
+    const terminal = await finishToolAction({ action: signedToolAction, executionContext,
+      disposition, result, classification });
+    recordToolInputResult(inputState, { action: signedToolAction, terminal, result, disclosedResult, classification });
+    recordKnowledgeToolEvent(options.knowledgeGateState, {
+      toolName: name, result: disclosedResult, blocked: disposition !== 'SUCCEEDED',
+    });
+    await notifyToolObserver(options.onToolResult, { toolName: name, args,
+      result: disclosedResult, blocked: disposition !== 'SUCCEEDED' });
+    return disclosedResult;
+  }
+  try {
   const allowedTools = Array.isArray(options.allowedTools) ? new Set(options.allowedTools) : null;
   if (allowedTools && !allowedTools.has(name)) {
     throw new Error(`Tool '${name}' is not allowed for this run.`);
@@ -1578,6 +2087,19 @@ export async function executeTool(name, args, agentId, options = {}) {
   const validationIssues = preflightValidateArgs(name, args);
   if (validationIssues.length) {
     throw new Error(`Tool preflight failed for '${name}': ${validationIssues.join('; ')}`);
+  }
+  if (name === 'aimos_recall' || name === 'aimos_save') {
+    memoryGrant = await readNativeMemoryToolGrant(options.executionContext || options.credentialUseContext);
+    if (!memoryGrant?.allowed || (name === 'aimos_save' && !memoryGrant.write_allowed)) {
+      throw new Error(name === 'aimos_save' ? 'master_signed_memory_write_grant_required' : 'master_signed_memory_read_grant_required');
+    }
+    const requestedClearance = Number(options.clearanceLevel ?? memoryGrant.clearance_ceiling);
+    if (!Number.isInteger(requestedClearance) || requestedClearance < 1) throw new Error('native_memory_tool_clearance_invalid');
+    options = { ...options, clearanceLevel:Math.min(requestedClearance,memoryGrant.clearance_ceiling) };
+  } else if (options.clearanceLevel == null && executionContext?.authSource === 'envelope') {
+    const actorGrant = await readNativeMemoryToolGrant(executionContext);
+    if (!actorGrant?.allowed) throw new Error('master_signed_agent_clearance_required');
+    options = { ...options, clearanceLevel: actorGrant.clearance_ceiling };
   }
 
   const toolDirection = resolveToolDirection(name);
@@ -1595,13 +2117,7 @@ export async function executeTool(name, args, agentId, options = {}) {
           explicitlyDenied
         }
       };
-      await notifyToolObserver(options.onToolResult, {
-        toolName: name,
-        args,
-        result: blockedResult,
-        blocked: true
-      });
-      return blockedResult;
+      return await completeResult(blockedResult, 'DENIED');
     }
   }
 
@@ -1611,24 +2127,17 @@ export async function executeTool(name, args, agentId, options = {}) {
   }
 
   const knowledgeGateBlock = shouldBlockToolForMissingKnowledge(options.knowledgeGateState, name);
-  if (knowledgeGateBlock.blocked) {
+  if (knowledgeGateBlock.blocked && !options.approvalEvidence) {
     const blockedResult = {
       error: knowledgeGateBlock.message,
       blocked: true,
       knowledgeGate: knowledgeGateBlock
     };
-    await notifyToolObserver(options.onToolResult, {
-      toolName: name,
-      args,
-      result: blockedResult,
-      blocked: true,
-      knowledgeGate: knowledgeGateBlock
-    });
-    return blockedResult;
+    return await completeResult(blockedResult, 'DENIED');
   }
 
   // ─── CLEARANCE GATE (Aimos Order v2 Layer 1: Decision Rights) ──────────────
-  const requiredClearance = TOOL_CLEARANCE_LEVELS[name] || 1;
+  const requiredClearance = nativeProfile.profile.required_clearance;
   const agentClearance = Number(options.clearanceLevel || 1);
   if (agentClearance < requiredClearance) {
     const escalation = {
@@ -1644,13 +2153,7 @@ export async function executeTool(name, args, agentId, options = {}) {
       escalation,
       blocked: true
     };
-    await notifyToolObserver(options.onToolResult, {
-      toolName: name,
-      args,
-      result: blockedResult,
-      blocked: true
-    });
-    return blockedResult;
+    return await completeResult(blockedResult, 'DENIED');
   }
 
   // Direct native callers do not pass through agent-runner's tool-list
@@ -1679,15 +2182,14 @@ export async function executeTool(name, args, agentId, options = {}) {
     });
   }
 
-  const autonomous = options.autonomous === true;
-  const approvalRequiredForAutonomy = autonomous && QUOTA_SPENDING_TOOLS.has(name);
+  const approvalRequired = Boolean(nativeProfile.profile.action_authority);
   const approvalEvidence = options.approvalEvidence || null;
   const approved = Boolean(approvalEvidence);
   if (options.approved === true && !approvalEvidence) {
     throw new Error('signed_tool_approval_execution_evidence_required');
   }
 
-  if (!approved && approvalRequiredForAutonomy) {
+  if (!approved && approvalRequired && options[CORROBORATED_ACTION_EXECUTION] !== true) {
     const plan = buildToolPlan(name, args, agentId);
     const approvalRequest = await createToolApprovalRequest({
       tool: name,
@@ -1705,17 +2207,11 @@ export async function executeTool(name, args, agentId, options = {}) {
       approvalRequestId: approvalRequest.id,
       approvalRequest
     };
-    await notifyToolObserver(options.onToolResult, {
-      toolName: name,
-      args,
-      result,
-      blocked: false
-    });
-    return result;
+    return await completeResult(result, 'DENIED');
   }
 
   // ─── Wire #29: Intent Classifier — scope enforcement before execution ───────
-  try {
+  {
     const intentClass = classifyIntent(options.userPrompt || '', [name]);
     // Tool dispatch is an internal function call, not an HTTP request. Map the
     // declared tool direction to the equivalent policy verb so read-only tools
@@ -1728,20 +2224,12 @@ export async function executeTool(name, args, agentId, options = {}) {
         blocked: true,
         intentScope: intentClass.scope
       };
-      await notifyToolObserver(options.onToolResult, {
-        toolName: name,
-        args,
-        result: blockedResult,
-        blocked: true
-      });
-      return blockedResult;
+      return await completeResult(blockedResult, 'DENIED');
     }
-  } catch (err) {
-    console.warn('[tool-registry] Intent classification failed:', err.message);
   }
 
   // ─── Wire #28: Execution Interceptor — fail-closed gate wrapping execution ─
-  try {
+  {
     if (options.approvedPlan) {
       const interceptResult = await validateExecution(name, 'POST', args, options.approvedPlan, COMPANY);
       if (!interceptResult.allowed) {
@@ -1750,23 +2238,13 @@ export async function executeTool(name, args, agentId, options = {}) {
           blocked: true,
           violations: interceptResult.violations
         };
-        await notifyToolObserver(options.onToolResult, {
-          toolName: name,
-          args,
-          result: blockedResult,
-          blocked: true
-        });
-        return blockedResult;
+        return await completeResult(blockedResult, 'DENIED');
       }
     }
-  } catch (err) {
-    console.warn('[tool-registry] Execution interceptor failed:', err.message);
   }
 
-  let signedToolAction = null;
-  let terminalToolActionRecorded = false;
-  try {
     let actionParentEventId = options.securityDecisionEventId || null;
+    let actionAuthorization = null;
     if (approvalEvidence) {
       const approvalClaim = await claimToolApprovalExecution({
         ...approvalEvidence,
@@ -1776,8 +2254,12 @@ export async function executeTool(name, args, agentId, options = {}) {
         authority: options.executionContext || options.credentialUseContext || null,
       });
       actionParentEventId = approvalClaim.receipt.event_id;
+      actionAuthorization = {
+        eventId: approvalClaim.receipt.event_id,
+        mutationSha256: approvalClaim.receipt.mutation_hash,
+        operatorProof: approvalEvidence.operatorProof || null,
+      };
     }
-    const executionContext = options.executionContext || options.credentialUseContext || null;
     signedToolAction = await beginToolAction({
       tool: name,
       args: args || {},
@@ -1785,7 +2267,22 @@ export async function executeTool(name, args, agentId, options = {}) {
       executionContext,
       parentEventId: actionParentEventId,
       purposeAuthorizationReceipt,
+      inputState,
+      nativeProfile,
+      memoryGrant,
+      actionAuthorization,
     });
+    if (signedToolAction.authority.actionOriginDecision
+        && signedToolAction.authority.actionOriginDecision !== 'ALLOW') {
+      return await completeResult({
+        error: `Consequential action '${name}' ${signedToolAction.authority.actionOriginDecision.toLowerCase()} by origin authority`,
+        blocked: true,
+        code: signedToolAction.authority.actionOriginDecision === 'INDETERMINATE'
+          ? 'CONSEQUENTIAL_ACTION_INDETERMINATE'
+          : 'CONSEQUENTIAL_ACTION_DENIED',
+      }, signedToolAction.authority.actionOriginDecision === 'INDETERMINATE'
+        ? 'INDETERMINATE' : 'DENIED');
+    }
     const canaryContext = {
       parentEventId: signedToolAction.receipt.event_id,
       authority: executionContext,
@@ -1806,14 +2303,29 @@ export async function executeTool(name, args, agentId, options = {}) {
     }
     const invocationOptions = {
       ...options,
+      nativeToolInputs: inputState,
+      inputMemoryIds: signedToolAction.sourceMemoryIds,
       toolActionAuthority: signedToolAction.authority,
+      toolActionArguments: Object.freeze(JSON.parse(canonicalJson(args || {}))),
       credentialUseContext: Object.freeze({
         ...(options.executionContext || options.credentialUseContext || {}),
+        signal: options.signal && executionContext?.signal
+          ? AbortSignal.any([options.signal, executionContext.signal]) : options.signal || executionContext?.signal,
+        deadlineAt: options.deadlineAt === undefined ? executionContext?.deadlineAt
+          : Math.min(options.deadlineAt, executionContext?.deadlineAt ?? Infinity),
         autonomousActionEventId: signedToolAction.authority.eventId,
+        toolActionAuthority: signedToolAction.authority,
+        toolActionArguments: Object.freeze(JSON.parse(canonicalJson(args || {}))),
       }),
     };
     const invokeTool = () => {
-      if (name === 'aimos_save' || name === 'delegate_task') {
+      invocationOptions.credentialUseContext.signal?.throwIfAborted();
+      if (performance.now() >= (invocationOptions.credentialUseContext.deadlineAt ?? Infinity)) {
+        throw new DOMException('Tool operation deadline exceeded', 'TimeoutError');
+      }
+      options.signal.throwIfAborted();
+      toolInvoked = true;
+      if (name === 'aimos_save' || name === 'delegate_task' || name === 'write_file') {
         return tool.fn(args, agentId, invocationOptions);
       }
       if (name === 'aimos_recall') {
@@ -1821,20 +2333,16 @@ export async function executeTool(name, args, agentId, options = {}) {
       }
       return tool.fn(args, invocationOptions);
     };
-    const result = await runWithTimeout(name, invokeTool, TOOL_EXEC_TIMEOUT_MS);
+    // Settle the native integration before signing its consumed inputs/result.
+    // Integration-owned request/child deadlines still apply. A dispatcher
+    // Promise.race cannot cancel a side effect or freeze inputs it still reads.
+    const result = await invokeTool();
     const canaryExposure = await scanToolResult(
       name,
       result,
       options.runId || signedToolAction.receipt.event_id,
       { ...canaryContext, toolInvoked: true },
     );
-    await finishToolAction({
-      action: signedToolAction,
-      executionContext,
-      disposition: 'SUCCEEDED',
-      result,
-    });
-    terminalToolActionRecorded = true;
     const returnedResult = canaryExposure.canariesFound.length > 0
       ? {
           error: `Canary token detected in '${name}' tool result; raw result withheld.`,
@@ -1844,41 +2352,77 @@ export async function executeTool(name, args, agentId, options = {}) {
           kill_chain_diagnostics: canaryExposure.kill_chain_diagnostics,
         }
       : result;
-    await notifyToolObserver(options.onToolResult, {
-      toolName: name,
-      args,
-      result: returnedResult,
-      blocked: Boolean(returnedResult?.blocked),
-    });
-    return returnedResult;
+    const disposition = returnedResult?.blocked || returnedResult?.requiresApproval ? 'DENIED'
+      : result?.error || result?.success === false || result?.ok === false ? 'FAILED' : 'SUCCEEDED';
+    return await completeResult(result, disposition, returnedResult);
   } catch (error) {
-    if (signedToolAction && !terminalToolActionRecorded) {
+    if (!finalizing) {
+      const disposition = !toolInvoked ? 'DENIED'
+        : options.signal.aborted || error?.httpOutcome === 'INDETERMINATE' || /Timeout|Abort/.test(error?.name || '')
+          || /(?:timed?\s*out|timeout)/i.test(String(error?.message || '')) ? 'INDETERMINATE' : 'FAILED';
       try {
-        await finishToolAction({
-          action: signedToolAction,
-          executionContext: options.executionContext || options.credentialUseContext || null,
-          disposition: /(?:timed?\s*out|timeout)/i.test(String(error?.message || ''))
-            ? 'INDETERMINATE'
-            : 'FAILED',
-          error: error?.message || error,
-        });
-      } catch (ledgerError) {
-        error.toolActionLedgerError = ledgerError?.message || String(ledgerError);
-      }
+        return await completeResult({ error: String(error?.message || error) }, disposition,
+          { error: `Native tool ${disposition.toLowerCase()}.`, code: `NATIVE_TOOL_${disposition}`,
+            blocked: disposition === 'DENIED', toolExecuted: toolInvoked });
+      } catch (evidenceError) { error = evidenceError; }
     }
-    await notifyToolObserver(options.onToolResult, {
-      toolName: name,
-      args,
-      error,
-      blocked: Boolean(error?.blocked),
-    });
+    invalidateToolInputState(inputState);
+    error.code = 'NATIVE_TOOL_RESULT_EVIDENCE_INCOMPLETE';
     throw error;
   }
+  } finally { finishWork(); }
+}
+
+// Only the native corroboration route receives this capability. Callers cannot
+// spell or serialize the private Symbol; without a matching v2 elevation the
+// ordinary origin verdict remains DENY and the tool is never invoked.
+export async function executeCorroboratedToolAction({
+  registry,
+  memoryId,
+  agentId,
+  executionContext,
+} = {}) {
+  if (!registry?.action?.tool || !registry?.action?.arguments
+      || !memoryId || !agentId || !executionContext?.requestReceiptMutationHash) {
+    throw new Error('corroborated_tool_action_input_invalid');
+  }
+  const nativeToolInputs = createToolInputState([memoryId]);
+  const knowledgeGateState = createKnowledgeGateState({
+    agentId,
+    prompt: registry.claim.rendered_value,
+    intent: 'verification',
+    taskType: 'security',
+    sessionId: executionContext.requestReceiptId,
+  });
+  const recalled = await executeTool('aimos_recall', { memory_id: memoryId }, agentId, {
+    executionContext,
+    credentialUseContext: executionContext,
+    nativeToolInputs,
+    knowledgeGateState,
+  });
+  if (!Array.isArray(recalled?.memories)
+      || recalled.memories.length !== 1
+      || recalled.memories[0]?.id !== memoryId
+      || knowledgeGateState.knowledgeEvidence.length !== 1
+      || knowledgeGateState.lastRecalledMemoryId !== memoryId) {
+    throw new Error('corroborated_tool_exact_recall_required');
+  }
+  return executeTool(
+    registry.action.tool,
+    registry.action.arguments,
+    agentId,
+    {
+      executionContext,
+      credentialUseContext: executionContext,
+      nativeToolInputs,
+      knowledgeGateState,
+      [CORROBORATED_ACTION_EXECUTION]: true,
+    },
+  );
 }
 
 export function preflightTool(name, args, agentId) {
-  const tool = ALL_TOOL_DEFS[name];
-  if (!tool) {
+  if (!Object.hasOwn(ALL_TOOL_DEFS, name)) {
     return { ok: false, issues: [`Unknown tool: ${name}`], plan: null };
   }
   const issues = preflightValidateArgs(name, args);

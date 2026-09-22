@@ -77,6 +77,7 @@ import { refreshCachedCredential } from '../security/credential-cache.js';
 import { recallAuthorizationService } from '../security/recall-authorization.js';
 import { sessionKeyQueryScope } from '../shared/session-scope.js';
 import { classifyAndCommitRetainedMemoryGroup } from '../security/memory-epistemic-classifier.js';
+import { commitCanonicalSaveOrigin, readCanonicalSaveInputs } from '../security/save-origin-binding.js';
 import { serializeMemoryValue } from '../security/protocol/memory-value.js';
 import {
   computeOccurrenceCommitmentV3,
@@ -512,6 +513,7 @@ async function commitInitialEvidence({
   source,
   actionSource,
   sessionId,
+  sourceMemoryIds,
   liveContentHash,
   memoryOriginatedAt,
   supersessionEvidence,
@@ -551,6 +553,7 @@ async function commitInitialEvidence({
         memory_type: memoryType,
         source: actionSource,
         session_id: sessionId || null,
+        ...(sourceMemoryIds === undefined ? {} : { source_memory_ids: sourceMemoryIds }),
       },
     });
     signed = await signAsHousekeeper({
@@ -741,14 +744,11 @@ async function persistCredentialMutation(params) {
       || existingReferenceRow.envelope_nonce === params.mutation_authority?.nonce
     );
     if (mayReuseReference) {
-      referenceResult = {
-        id: existingReferenceRow.id,
-        existing: true,
-        ledger_commit: null,
-      };
+      referenceResult = await persistMemory({ ...prepared.referenceSpec, session_id: params.session_id, client: txClient });
     } else {
       referenceResult = await persistMemory({
         ...prepared.referenceSpec,
+        session_id: params.session_id,
         client: txClient,
       });
       if (referenceResult?.rejected || !referenceResult?.id) {
@@ -763,7 +763,7 @@ async function persistCredentialMutation(params) {
         credential_memory_id: referenceResult.id,
       };
       const existingProvider = await txClient.query(
-        `SELECT m.id
+        `SELECT m.id, m.value
            FROM aimos_memories m
            JOIN aimos_memory_provenance p ON p.memory_id = m.id AND p.is_genesis = true
           WHERE m.company_id = $1
@@ -780,11 +780,10 @@ async function persistCredentialMutation(params) {
           prepared.account,
         ]
       );
-      providerResult = existingProvider.rows[0]
-        ? { id: existingProvider.rows[0].id, existing: true }
-        : await persistMemory({
+      providerResult = await persistMemory({
             ...prepared.providerSpec,
-            value: JSON.stringify(providerPayload),
+            value: existingProvider.rows[0]?.value ?? JSON.stringify(providerPayload),
+            session_id: params.session_id,
             client: txClient,
           });
       if (providerResult?.rejected || !providerResult?.id) {
@@ -901,7 +900,9 @@ async function persistCredentialMutation(params) {
     }
     return {
       ...referenceResult,
+      origin_bindings: [...(referenceResult.origin_bindings || []), ...(providerResult?.origin_bindings || [])],
       credential_lane: true,
+      credential_service_name: prepared.service_name,
       keychain_slot: prepared.keychain_slot,
       keychain_version_slot: prepared.keychain_version_slot,
       credential_hash: prepared.credential_hash,
@@ -1159,6 +1160,7 @@ export async function persistMemory({
   valid_from = null,
   valid_until = null,
   session_id = null,
+  source_memory_ids,
   account = null,
   ts_created = null,
   canary_disposition = null,
@@ -1308,7 +1310,7 @@ export async function persistMemory({
   // The baseline regex remains a second native classification net.
   const quarantined = baselineQuarantined || decisionQuarantined;
 
-  const effectiveScope = quarantined ? 'quarantine' : (scope || 'global');
+  let effectiveScope = quarantined ? 'quarantine' : (scope || 'global');
   // Aladdin full-retention semantics: quarantine is an untrusted-reference
   // label and minimum-frequency cognitive state, never a lifecycle exclusion.
   const effectiveActive = true;
@@ -1339,7 +1341,11 @@ export async function persistMemory({
   let resolvedSupersedesId = supersedes_id || null;
 
   // ─── Auto-classify data sensitivity ────────────────────────────────────
-  const dataClass = classifyDataSensitivity(safeValue, clearance_level);
+  // Credential reference/provider records contain no plaintext, but belong to
+  // the restricted secret.credential origin family. Apply its native floor
+  // before content hashing, authority checks and origin co-commit.
+  let dataClass = ['credential_reference', 'credential_provider'].includes(effectiveType)
+    ? 'restricted' : classifyDataSensitivity(safeValue, clearance_level);
 
   // ─── Batch 10: Resolve compression_ratio from intent classification ──────
   // If caller didn't provide compression_ratio, derive it from memory type
@@ -1378,7 +1384,7 @@ export async function persistMemory({
   const effectiveSourceForHash = embeddingDegraded
     ? `${effectiveSource}:degraded_embedding`
     : effectiveSource;
-  const liveContentHashBuf = computeLiveRowContentHash({
+  let liveContentHashBuf = computeLiveRowContentHash({
     key,
     value: safeValue,
     scope: effectiveScope,
@@ -1397,6 +1403,34 @@ export async function persistMemory({
       await txClient.query('BEGIN');
       await txClient.query('SELECT set_config($1,$2,true)', ['app.current_client_id', String(cid)]);
       await txClient.query('SELECT set_config($1,$2,true)', ['app.current_agent_id', String(aid)]);
+    }
+    if (key) {
+      // OB-3: a new immutable version cannot declassify the retained key's
+      // history. Resolve the join before hashing, exact-state lookup and the
+      // grant check; the caller cannot opt out with a new source/type label.
+      await txClient.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+        [`${String(cid).length}:${cid}${key}`]);
+      const inherited = (await txClient.query(
+        `SELECT max(array_position(ARRAY['public','internal','confidential','restricted'],data_class)) AS rank
+           FROM aimos_memories WHERE company_id=$1 AND key=$2`, [cid, key])).rows[0];
+      const classes = ['public', 'internal', 'confidential', 'restricted'];
+      dataClass = classes[Math.max(classes.indexOf(dataClass), Number(inherited.rank || 1) - 1)];
+      liveContentHashBuf = computeLiveRowContentHash({ key, value: safeValue, scope: effectiveScope,
+        memory_type: effectiveType, clearance_level: effectiveClearanceLevel,
+        data_class: dataClass, source: effectiveSourceForHash });
+    }
+    const inputState = await readCanonicalSaveInputs({client:txClient,companyId:cid,subjectAgentId:aid,
+      value:safeValue,sessionId:session_id,authority:mutation_authority,key,sourceMemoryIds:source_memory_ids});
+    if (inputState) {
+      if (effectiveClearanceLevel<inputState.clearance_floor) throw new Error('origin_input_clearance_downgrade');
+      if (inputState.private_input && effectiveClearanceLevel>2
+        && (effectiveScope==='quarantine' || effectiveType==='quarantine')) throw new Error('origin_input_scope_broadening');
+      if (inputState.private_input && effectiveClearanceLevel>2
+        && !['private','agent',aid].includes(effectiveScope)) effectiveScope='private';
+      const classes=['public','internal','confidential','restricted'];
+      dataClass=classes[Math.max(classes.indexOf(dataClass),classes.indexOf(inputState.confidentiality))];
+      liveContentHashBuf=computeLiveRowContentHash({key,value:safeValue,scope:effectiveScope,
+        memory_type:effectiveType,clearance_level:effectiveClearanceLevel,data_class:dataClass,source:effectiveSourceForHash});
     }
     await lockVerifiedAuthorityEpoch(txClient, mutation_authority, {
       companyId: cid,
@@ -1446,6 +1480,10 @@ export async function persistMemory({
             source: effectiveSourceForHash,
             session_id: session_id || null,
             authority_kind: mutation_authority?.kind || 'housekeeper',
+            action_event_id: mutation_authority.kind === 'verified_tool_action'
+              ? mutation_authority.eventId : mutation_authority.actionEventId,
+            action_mutation_sha256: mutation_authority.kind === 'verified_tool_action'
+              ? mutation_authority.eventMutationHash : mutation_authority.actionMutationHash,
           };
       const requestBodyHash = createHash('sha256')
         .update(Buffer.from(canonicalJson(requestBody), 'utf8'))
@@ -1575,9 +1613,14 @@ export async function persistMemory({
           binding_mutation_hash: null,
         },
       });
+      const origin = await commitCanonicalSaveOrigin({ client: txClient, companyId: cid,
+        memoryId: exactState.id, occurrenceId: occurrence.provenanceId,
+        authority: mutation_authority, sessionId: session_id, sourceMemoryIds: source_memory_ids });
       if (ownsTransaction) await txClient.query('COMMIT');
       return {
         id: exactState.id,
+        occurrence_id: occurrence.provenanceId,
+        origin_bindings: [origin],
         memory_tier: exactState.memory_tier,
         expires_at: exactState.expires_at,
         quarantined: effectiveScope === 'quarantine' || effectiveType === 'quarantine',
@@ -1717,7 +1760,7 @@ export async function persistMemory({
                  1.0, 0, $19, $20, $21, $22, $23,
                  $24, $25, $26, $27, $28, $29)
          RETURNING id, created_at, memory_tier, expires_at, last_verified_at, verified_by, verification_basis, freshness_state,
-           semantic_triples, surprise_at_save, compression_ratio, valid_from, valid_until
+           semantic_triples, surprise_at_save, compression_ratio, valid_from, valid_until, data_class
         `, [
           cid, aid, key, safeValue, JSON.stringify(embedding), effectiveScope,
           Number(clearance_level || 1), effectiveType,
@@ -1940,6 +1983,7 @@ export async function persistMemory({
     source: effectiveSourceForHash,
     actionSource: effectiveSource,
     sessionId: session_id,
+    sourceMemoryIds: source_memory_ids,
     liveContentHash: liveContentHashBuf,
     memoryOriginatedAt: result.rows[0].created_at,
     supersessionEvidence,
@@ -1968,6 +2012,9 @@ export async function persistMemory({
     },
   });
 
+  const origin = await commitCanonicalSaveOrigin({ client: txClient, companyId: cid,
+    memoryId: result.rows[0].id, occurrenceId: ledgerCommit.provenance.provenanceId,
+    authority: mutation_authority, sessionId: session_id, sourceMemoryIds: source_memory_ids });
   if (ownsTransaction) await txClient.query('COMMIT');
 
   // Ordinary operational telemetry and trigger execution occur only after this
@@ -2052,6 +2099,13 @@ export async function persistMemory({
     valid_until: result.rows[0].valid_until,
     live_content_hash: liveContentHashBuf,
     ledger_commit: ledgerCommit.provenance,
+    occurrence_id: ledgerCommit.provenance?.provenanceId || null,
+    origin_bindings: [origin],
+    occurrence_content_hash: ledgerCommit.provenance?.contentHash
+      ? Buffer.from(ledgerCommit.provenance.contentHash, 'hex')
+      : null,
+    data_class: result.rows[0].data_class,
+    scope: effectiveScope,
     binding_commit: ledgerCommit.binding,
     envelope_commit: ledgerCommit.envelope,
     secret_boundary: {

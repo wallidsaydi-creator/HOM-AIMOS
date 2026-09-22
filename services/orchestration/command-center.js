@@ -3,7 +3,6 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-import { fetchWithTimeout } from './http.js';
 import {
   discoverActiveProviders,
   getProviderRegistry,

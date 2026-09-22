@@ -1,11 +1,11 @@
 // ─── PIPELINE CONNECTIONS ────────────────────────────────────────────────────
 // ← Called by: tool-registry.js (write_file, shell actions)
-// → Calls: db (connection.js) — aimos_memories query
+// → Consumes: the current run's origin-labelled canonical recall result
 // Pipeline: AGENT_RUN_PIPELINE | Position: Knowledge-to-Write Gate (security)
 //
 // SERVICE CONNECTION GUIDE:
 // 1. ← Triggered by: tool-registry.js (Specifically for write_file / shell actions)
-// 2. → Pulls from: aimos_memories (Queries for recent 'framework' and 'procedural' memories)
+// 2. → Filters: canonically recalled recent 'framework' and 'procedural' memories
 // 3. → Benefits from: asmr-pipeline.js (PPR and recall calibration increase trace accuracy)
 // 4. → Affects: tool-registry.js (Blocks write access if reasoning score < threshold)
 //
@@ -36,11 +36,6 @@
  * exists before writes. Bayesian procedure selection and contrastive refinement
  * remain outside this security check.
  */
-import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
-import { query } from '../../db/connection.js';
-
-const COMPANY = AIMOS_COMPANY_ID;
-
 function tokenize(text) {
   return new Set(String(text || '').toLowerCase().split(/[^a-z0-9_:-]+/).filter((token) => token.length > 2));
 }
@@ -63,25 +58,18 @@ function overlapScore(left, right) {
  * @param {string} targetPath - The file path being modified.
  * @returns {Promise<{valid: boolean, reason: string, score: number}>}
  */
-export async function checkReasoningTrace(agentId, targetPath) {
+export async function checkReasoningTrace(agentId, targetPath, { canonicalMemories = [] } = {}) {
   try {
     const filename = targetPath.split('/').pop();
-    
-    // 1. Look for recent framework or procedural memories from THIS agent
-    // that specifically match the target filename.
-    const res = await query(
-      `SELECT memory_type, value, created_at 
-       FROM aimos_memories
-       WHERE company_id = $1 
-         AND agent_id = $2
-         AND (memory_type IN ('framework', 'procedural'))
-         AND (value ILIKE $3 OR key ILIKE $3)
-         AND created_at > NOW() - INTERVAL '60 minutes'
-       ORDER BY created_at DESC LIMIT 5`,
-      [COMPANY, agentId, `%${filename}%`]
-    );
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    const rows = canonicalMemories
+      .filter((memory) => memory?.agent_id === agentId
+        && ['framework', 'procedural'].includes(String(memory?.memory_type || ''))
+        && `${memory?.key || ''}\n${memory?.value || ''}`.toLowerCase().includes(filename.toLowerCase())
+        && new Date(memory?.created_at || 0).getTime() > cutoff)
+      .slice(0, 5);
 
-    if (res.rows.length === 0) {
+    if (rows.length === 0) {
       return {
         valid: false,
         reason: `Knowledge-to-Write Gate: Agent ${agentId} lacks required 'framework' or 'procedural' knowledge for ${filename}. Proof of Reasoning missing.`,
@@ -90,7 +78,7 @@ export async function checkReasoningTrace(agentId, targetPath) {
     }
 
     // 2. Simple score based on evidence volume and recency
-    const score = Math.min(1.0, res.rows.length * 0.25);
+    const score = Math.min(1.0, rows.length * 0.25);
     
     return {
       valid: true,

@@ -1,7 +1,10 @@
+import { performance } from 'node:perf_hooks';
 import {
   discoverActiveProviders,
   resolveProviderForModel,
-  runProvider
+  runProvider,
+  PROVIDER_REQUEST_TIMEOUT_MS,
+  CODEX_REQUEST_TIMEOUT_MS
 } from '../core/providers.js';
 import { systemConfigStore } from '../security/system-config-store.js';
 
@@ -85,6 +88,8 @@ export async function callNativeLlm(promptOrOpts, maybeOpts = {}) {
 
   const targets = listNativeProviderTargets(opts);
   const failures = [];
+  const deadlineAt = Math.min(opts.deadlineAt ?? Infinity, opts.useContext?.deadlineAt ?? Infinity,
+    performance.now() + (targets[0]?.provider === 'codex' ? CODEX_REQUEST_TIMEOUT_MS : PROVIDER_REQUEST_TIMEOUT_MS));
 
   for (const target of targets) {
     try {
@@ -93,9 +98,14 @@ export async function callNativeLlm(promptOrOpts, maybeOpts = {}) {
         model: target.model || undefined,
         prompt: prompt || userPrompt,
         systemPrompt,
-        userPrompt
+        userPrompt,
+        signal: opts.signal,
+        deadlineAt,
+        useContext: opts.useContext
       });
     } catch (error) {
+      if (opts.useContext?.signal?.aborted || /Timeout|Abort/.test(error?.name || '')
+          || error?.httpOutcome === 'INDETERMINATE') throw error;
       failures.push(`${target.provider}:${target.model || 'default'} => ${summarizeProviderError(error)}`);
     }
   }

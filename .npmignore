@@ -1,12 +1,19 @@
 .claude/
 .git/
 .github/
+HOM-AIMOS_Herald_Plan_of_Execution_TEMPORARY.md
+2026-09-05_065849-hom-aimos-24-item-remediation.md
+HOM-AIMOS-SYSTEM-AUDIT-2026-09-05.md
+paper/back /
 plans/
 remediation/
 scratchpad/
 research/
 engineering/
-baselines/
+baselines/*
+!baselines/live-canonical/
+baselines/live-canonical/*
+!baselines/live-canonical/migration-098-099-uncertainty.json
 RELEASE-IMPROVEMENT-PLAN.md
 REMEDIATION-INDEX.md
 architecture-authority.json
@@ -83,6 +90,20 @@ tests/retrieval/mnemis-m3-full-gearbox-evaluator.test.mjs
 tests/security/canary-magma-*
 tests/security/content-state-occurrence-r3-crypto.test.mjs
 tests/security/content-state-occurrence-r7-runtime.test.mjs
+
+# Canonical operator evidence is intentionally outside the public source tree.
+# These checks require ignored identity-bearing artifacts, a local agent key,
+# the live operator database, an internal closure ledger, or the generated
+# machine-specific architecture authority. Runtime Origin Binding, portable
+# protocol vectors, migrations, and self-contained tests remain included.
+scripts/verification/audit-ob5-independent-corroboration.mjs
+scripts/verification/generate-phase1-origin-closure-artifacts.mjs
+verifiers/origin-binding/phase1-closure/
+tests/security/audit-007-remediation.test.mjs
+tests/security/audit-008-remediation.test.mjs
+tests/security/audit-018-event-domain-retained.test.mjs
+tests/security/audit-024-remediation.test.mjs
+tests/security/phase1-origin-closure.test.mjs
 
 # One-time reconciliation of historical private database checksums is not part
 # of fresh Genesis and becomes invalid after immutable migration-note cleanup.

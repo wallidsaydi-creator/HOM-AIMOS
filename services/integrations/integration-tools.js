@@ -12,6 +12,7 @@ import { peekCachedCredential } from '../security/credential-cache.js';
 import { credentialLedger, credentialUseEvidenceHash } from '../security/credential-ledger.js';
 import { systemConfigStore } from '../security/system-config-store.js';
 import { materialEffectOwner } from '../security/material-effect-owner.js';
+import { verifyToolActionAuthority } from '../orchestration/tool-action-ledger.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -57,6 +58,10 @@ async function githubRequest(target, operation, requestEvidence, useContext = {}
         Accept: 'application/vnd.github+json',
         'X-GitHub-Api-Version': '2022-11-28',
       },
+
+      signal: useContext?.signal,
+      deadlineAt: useContext?.deadlineAt,
+      destinationPolicy: 'public',
     });
     const json = await response.json();
     if (!response.ok) {
@@ -82,13 +87,15 @@ async function githubRequest(target, operation, requestEvidence, useContext = {}
     if (!terminalRecorded) {
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: response ? 'failed' : 'indeterminate',
+        outcome: 'indeterminate',
         outcomeClass: response ? 'github_api_response_invalid' : 'github_api_transport_failed',
         errorClass: error?.name || 'github_api_failed',
         outcomeHash: credentialUseEvidenceHash({ status: response?.status || null, error: error?.message || String(error) }),
       });
     }
     throw error;
+  } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
   }
 }
 
@@ -235,6 +242,10 @@ export async function salesforceListObjects({ limit = 50 } = {}, useContext = {}
   try {
     res = await fetchWithTimeout(target.toString(), {
       headers: { Authorization: `Bearer ${checkout.value}` },
+
+      signal: useContext?.signal,
+      deadlineAt: useContext?.deadlineAt,
+      destinationPolicy: 'public',
     });
     json = await res.json();
     if (!res.ok) {
@@ -259,13 +270,15 @@ export async function salesforceListObjects({ limit = 50 } = {}, useContext = {}
     if (!terminalRecorded) {
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: res ? 'failed' : 'indeterminate',
+        outcome: 'indeterminate',
         outcomeClass: res ? 'salesforce_api_response_invalid' : 'salesforce_api_transport_failed',
         errorClass: error?.name || 'salesforce_api_failed',
         outcomeHash: credentialUseEvidenceHash({ status: res?.status || null, error: error?.message || String(error) }),
       });
     }
     throw error;
+  } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
   }
   const capped = Math.min(Math.max(toInt(limit, 50), 1), 500);
   return {
@@ -319,6 +332,16 @@ export async function githubListMyPullRequests({ limit = 20 } = {}, useContext =
 }
 
 export async function imessageRequestAccess(useContext = {}) {
+  const authorizedArgs = useContext.toolActionArguments || { request_access: true };
+  if (authorizedArgs.request_access !== true) {
+    throw new Error('imessage_action_argument_substitution');
+  }
+  await verifyToolActionAuthority(useContext.toolActionAuthority, {
+    expectedCompanyId: COMPANY,
+    expectedTool: 'imessage_request_access',
+    expectedActorAgentId: useContext.actorAgentId,
+    expectedArguments: authorizedArgs,
+  });
   const result = await runAppleScript(
     'tell application "Messages" to count of chats',
     'imessage_request_access',
@@ -404,6 +427,16 @@ export async function contactsSearch({ query }, useContext = {}) {
 
 export async function imessageSend({ to, message }, useContext = {}) {
   if (!to || !message) throw new Error('to and message are required');
+  const authorizedArgs = useContext.toolActionArguments || { to, message };
+  if (authorizedArgs.to !== to || authorizedArgs.message !== message) {
+    throw new Error('imessage_action_argument_substitution');
+  }
+  await verifyToolActionAuthority(useContext.toolActionAuthority, {
+    expectedCompanyId: COMPANY,
+    expectedTool: 'imessage_send',
+    expectedActorAgentId: useContext.actorAgentId,
+    expectedArguments: authorizedArgs,
+  });
   const safe = escapeAppleScriptString(message);
 
   // If "to" is a name (not a phone/email), resolve it via Contacts first

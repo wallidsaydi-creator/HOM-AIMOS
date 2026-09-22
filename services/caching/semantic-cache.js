@@ -360,7 +360,7 @@ export class SemanticCache {
       || !/^[0-9a-f]{64}$/.test(calibrationMutationHash)) {
       return null;
     }
-    return `${companyId}:${agentId}:${clearanceLevel}:${calibrationMutationHash}`;
+    return `${companyId}:${agentId}:${clearanceLevel}:${calibrationMutationHash}:${context.creditFrontier || ''}`;
   }
 
   /**

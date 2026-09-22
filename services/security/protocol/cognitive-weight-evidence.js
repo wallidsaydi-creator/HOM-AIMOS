@@ -17,6 +17,10 @@ import {
   cognitiveTransitionHash,
   eventGenesisHash,
   eventMutationHash,
+  eventPayloadCommitment,
+  eventPayloadBody,
+  verifyCognitiveAncestryBinding,
+  buildSignedRequestMessageV5,
 } from './mutmem-protocol.js';
 
 export const COGNITIVE_EVIDENCE_SCHEMA = 'hom.aimos.mutmem-cognitive-evidence/v1';
@@ -166,7 +170,7 @@ function normalizeEvent(row) {
     authority_kind: String(row.authority_kind || ''),
     operation: String(row.operation || ''),
     key: row.key == null ? null : String(row.key),
-    metadata: parseObject(row.metadata) ?? {},
+    ...(row.signed_body_bytes == null ? { metadata: parseObject(row.metadata) ?? {} } : {}),
     parent_event_id: row.parent_event_id == null ? null : String(row.parent_event_id),
     ledger_sequence: exactInteger(row.ledger_seq, 'cognitive_evidence_event_sequence_invalid', { minimum: 1 }),
     previous_mutation_hash: exactHex(row.prev_mutation_hash, 32, 'cognitive_evidence_event_previous_invalid'),
@@ -177,7 +181,11 @@ function normalizeEvent(row) {
     signature: exactHex(row.sig, 64, 'cognitive_evidence_event_signature_invalid'),
     proof_required: row.proof_required === true,
     ledger_version: exactInteger(row.ledger_version, 'cognitive_evidence_event_version_invalid', { minimum: 1 }),
-    signed_body: parseObject(row.signed_body),
+    ...(row.signed_body_bytes == null ? {
+      signed_body: parseObject(row.signed_body),
+    } : {
+      signed_body_bytes_b64u: Buffer.from(row.signed_body_bytes).toString('base64url'),
+    }),
   };
 }
 
@@ -434,6 +442,9 @@ function verifyStoredSignature(pubkeyB64u, body, nonce, signedTs, signature, con
     if (context.signatureForm === 2) {
       if (!Number.isSafeInteger(context.memoryOriginatedAt)) return { valid: false, reason: 'malformed_input' };
       message += `\n${nonce}\n${signedTs}\n${context.memoryOriginatedAt}`;
+    } else if (context.requestSignatureForm === 5) {
+      return rawVerify(pubkeyB64u, buildSignedRequestMessageV5(body, context.method, context.path,
+        context.claims, nonce, signedTs), signature) ? { valid: true, reason: null } : { valid: false, reason: 'sig_invalid' };
     } else if (context.requestSignatureForm === 3) {
       const method = String(context.method || '').toUpperCase();
       const path = String(context.path || '').split('?')[0];
@@ -557,6 +568,14 @@ function verifyIdentityEpoch(identity, signedTs) {
 }
 
 function decodeEvent(event, identity) {
+  const body = eventPayloadBody(event);
+  let signedBodyBytes;
+  if (Object.hasOwn(event, 'signed_body_bytes_b64u')) {
+    const encoded = event.signed_body_bytes_b64u;
+    if (typeof encoded !== 'string' || !encoded.length) throw new Error('cognitive_evidence_event_bytes_invalid');
+    signedBodyBytes = Buffer.from(encoded, 'base64url');
+    if (signedBodyBytes.toString('base64url') !== encoded) throw new Error('cognitive_evidence_event_bytes_invalid');
+  }
   return {
     id: event.event_id,
     company_id: event.company_id,
@@ -568,7 +587,8 @@ function decodeEvent(event, identity) {
     authority_kind: event.authority_kind,
     operation: event.operation,
     key: event.key,
-    metadata: event.metadata,
+    metadata: Object.hasOwn(event,'metadata') ? event.metadata
+      : Object.hasOwn(event,'signed_body_bytes_b64u') ? body.metadata : undefined,
     parent_event_id: event.parent_event_id,
     ledger_seq: event.ledger_sequence,
     prev_mutation_hash: hexBuffer(event.previous_mutation_hash, 32, 'cognitive_evidence_event_previous_invalid'),
@@ -580,7 +600,8 @@ function decodeEvent(event, identity) {
     sig: hexBuffer(event.signature, 64, 'cognitive_evidence_event_signature_invalid'),
     proof_required: event.proof_required,
     ledger_version: event.ledger_version,
-    signed_body: event.signed_body,
+    signed_body: body,
+    ...(signedBodyBytes == null ? {} : { signed_body_bytes: signedBodyBytes }),
     pubkey: identity.pubkey,
     cert: identity.cert,
     device_fp: identity.device_fp,
@@ -603,7 +624,7 @@ function verifyEventProof(row, signerPubkey) {
     if (!body || row.proof_required !== true || Number(row.ledger_version) !== 1) {
       return { valid: false, reason: 'event_proof_version' };
     }
-    const contentHash = sha256(Buffer.from(canonicalJson(body), 'utf8'));
+    const contentHash = eventPayloadCommitment(body, row.nonce, row.signed_body_bytes);
     const mutationHash = eventMutationHash(
       Buffer.from(row.prev_mutation_hash),
       contentHash,
@@ -629,6 +650,10 @@ function verifyEventProof(row, signerPubkey) {
       && Buffer.from(row.content_hash).equals(contentHash)
       && Buffer.from(row.mutation_hash).equals(mutationHash);
     if (!exact) return { valid: false, reason: 'event_proof_hash_mismatch' };
+    if (body.payload_schema === 'hom.aimos.event/v2') {
+      const valid = rawVerify(signerPubkey, contentHash, row.sig);
+      return { valid, reason: valid ? null : 'sig_invalid' };
+    }
     return verifyStoredSignature(signerPubkey, body, String(row.nonce), Number(row.ts_signed), row.sig);
   } catch {
     return { valid: false, reason: 'event_proof_malformed' };
@@ -734,14 +759,15 @@ function verifyReweightProvenance(row) {
   }
   const signatureForm = Number(row.sig_form_version || 1);
   const requestForm = Number(row.request_sig_form || 1);
+  if (requestForm === 5 && signatureForm === 2) return { valid: false, reason: 'request_signature_form_invalid' };
   const claims = parseObject(row.signed_claims);
   if (Boolean(row.is_genesis) !== (row.prev_mutation_hash == null)) {
     return { valid: false, reason: 'provenance_genesis_shape_invalid' };
   }
-  if (['T2', 'T3'].includes(String(row.identity_tier)) && requestForm !== 4) {
+  if (['T2', 'T3'].includes(String(row.identity_tier)) && ![4, 5].includes(requestForm)) {
     return { valid: false, reason: 'elevated_provenance_requires_form4' };
   }
-  if (requestForm === 4) {
+  if (requestForm === 4 || (requestForm === 5 && ['T2', 'T3'].includes(String(row.identity_tier)))) {
     let previousClaim = null;
     try { previousClaim = Buffer.from(String(claims?.prev_chain_hash || ''), 'base64url'); } catch { /* invalid below */ }
     if (!previousClaim || previousClaim.length !== 32) return { valid: false, reason: 'signed_chain_claim_invalid' };
@@ -891,7 +917,7 @@ function orderProjectionRows(rows) {
   return ordered;
 }
 
-export function verifyPortableCognitiveState({ memory, baseline = null, baselineEvent = null, projections = [] }) {
+export function verifyPortableCognitiveState({ memory, baseline = null, baselineEvent = null, projections = [], ancestryEvents = new Map() }) {
   const baselineProof = baseline
     ? verifyPortableCognitiveBaseline({
         baseline,
@@ -983,6 +1009,27 @@ export function verifyPortableCognitiveState({ memory, baseline = null, baseline
     if (!expectedTransition.equals(Buffer.from(row.transition_hash))
         || !rawVerify(provenance.signer_pubkey, expectedTransition, row.transition_sig)) {
       return { memory_id: String(memory.id), certification_status: 'certified_chain', ok: false, chain_length: index, sigs_verified: signatures, reason: 'transition_signature_invalid' };
+    }
+    if(Object.hasOwn(provenanceBody,'ancestry_binding')) {
+      try {
+        verifyCognitiveAncestryBinding(provenanceBody.ancestry_binding,{
+          nativePredecessorHash:provenance.prev_mutation_hash,previousProjectionHash:previousHash});
+        const events=ancestryEvents.get(Buffer.from(row.provenance_mutation_hash).toString('hex')) || [];
+        const event=events[0], meta=event?.metadata;
+        if(events.length!==1 || !event.event_stream_verified || !verifyEventProof(event,provenance.signer_pubkey).valid
+          || event.company_id!==memory.company_id || event.agent_id!=='housekeeper'
+          || event.authority_kind!=='housekeeper_autonomous'
+          || new Date(event.signer_valid_from).getTime()!==new Date(provenance.agent_valid_from).getTime()
+          || event.cert_fingerprint!==provenance.cert_fingerprint
+          || meta?.schema!=='hom.aimos.cognitive-ancestry-bridge/v1' || meta.company_id!==memory.company_id
+          || meta.memory_id!==memory.id || meta.native_mutation_hash!==Buffer.from(row.provenance_mutation_hash).toString('hex')
+          || meta.projection_hash!==Buffer.from(row.projection_hash).toString('hex')
+          || meta.old_weight_milli!==oldMilli || meta.new_weight_milli!==newMilli
+          || meta.attestation_kind!=='atomic_transition' || meta.historical_origin_claimed!==false
+          || canonicalJson(meta.ancestry_binding)!==canonicalJson(provenanceBody.ancestry_binding))
+          throw new Error('ancestry_bridge_invalid');
+      } catch { return {memory_id:String(memory.id),certification_status:'certified_chain',ok:false,
+        chain_length:index,sigs_verified:signatures,reason:'ancestry_bridge_invalid'}; }
     }
     previousHash = expectedProjection;
     previousMilli = newMilli;
@@ -1170,6 +1217,11 @@ export function verifyCognitiveWeightEvidenceBundle(bundle) {
   }
 
   const records = [];
+  const ancestryEvents=new Map();
+  for(const event of eventById.values()) if(event.operation==='cognitive_ancestry_bound') {
+    const key=String(event.key);if(!ancestryEvents.has(key)) ancestryEvents.set(key,[]);
+    ancestryEvents.get(key).push(event);
+  }
   let previousMemoryId = null;
   for (const item of bundle.memories) {
     const memoryId = String(item.memory_id || '');
@@ -1195,6 +1247,7 @@ export function verifyCognitiveWeightEvidenceBundle(bundle) {
         baseline,
         baselineEvent: baseline ? eventById.get(String(baseline.event_id)) || null : null,
         projections,
+        ancestryEvents,
       }));
     } catch {
       records.push({

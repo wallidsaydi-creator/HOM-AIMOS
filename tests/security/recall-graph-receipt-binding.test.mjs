@@ -14,9 +14,9 @@ test('verified graph decision is signed in the native receipt on normal and earl
   assert.match(recallOwner, /unsigned_edge_admission_count\) !== 0/);
 });
 
-test('graph receipt binding does not silently change the portable v3 Merkle entry family', () => {
+test('graph receipt binding remains event-body evidence in the origin-aware v4 receipt', () => {
   assert.doesNotMatch(recallOwner, /entry_type: 'verified_recall_graph'/);
-  assert.match(recallOwner, /hom-aimos\/recall-merkle\/v3-epistemic-and-security-closure/);
+  assert.match(recallOwner, /hom-aimos\/recall-merkle\/v4-origin-family-disclosure/);
 });
 
 test('native structural projection is signed without obtaining rank or Merkle-family authority', () => {

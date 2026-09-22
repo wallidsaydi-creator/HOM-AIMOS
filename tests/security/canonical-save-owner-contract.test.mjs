@@ -52,14 +52,23 @@ function traceEvidenceKeys(value, out = []) {
   return out;
 }
 
-function ownerFixture({ validatorError = null, persistenceError = null, quarantine = false, reassert = false } = {}) {
+function ownerFixture({ validatorError = null, persistenceError = null, quarantine = false, reassert = false,
+  loseCommitAcknowledgement = false, uncertainCommit = false, publicationError = null,
+  credential = false, credentialRefreshError = null } = {}) {
   const events = [];
   const diagnosticCalls = { rpe: [], screening: 0, encoding: [], transformationRead: 0, transformationWrite: 0 };
   const persistInputs = [];
+  const credentialRefreshes = [];
+  const outcomes = new WeakMap();
+  let injectCommitFault = loseCommitAcknowledgement || uncertainCommit;
   const transaction = { commits: 0, rollbacks: 0, client: null, attackerClient: { attacker: true } };
   const client = {
-    async query(sql) {
+    async query(sql,parameters=[]) {
       if (String(sql).includes('clearance_level>=12')) return { rows: [] };
+      if (String(sql).includes('SELECT id FROM aimos_events')) return {
+        rows:events.filter(e=>e.committed&&e.key===parameters[1]&&e.operation==='canonical_save_terminal')
+          .map(e=>({id:e.receipt.event_id})),
+      };
       return { rows: [], rowCount: 0 };
     },
   };
@@ -71,6 +80,10 @@ function ownerFixture({ validatorError = null, persistenceError = null, quaranti
     live_content_hash: hash,
     ledger_commit: { mutationHash: hash, contentHash: hash, isGenesis: true, prevMutationHash: null },
     binding_commit: { mutationHash: Buffer.alloc(32, 8) },
+    origin_bindings: [{
+      memory_id: '11111111-1111-4111-8111-111111111111',
+      binding_mutation_hash: '8'.repeat(64),
+    }],
     envelope_commit: null,
     embedding_disposition: { degraded: false, dimension: 768 },
     lineage_disposition: { status: 'NO_OP', reason: 'fixture' },
@@ -82,24 +95,57 @@ function ownerFixture({ validatorError = null, persistenceError = null, quaranti
     quarantined: quarantine,
     occurrence_reasserted: reassert,
     save_feedback: {},
+    ...(credential ? {
+      credential_lane: true,
+      credential_service_name: 'openai_api_key',
+      keychain_slot: 'com.aimos.credentials.openai_api_key',
+      credential_ledger_commit: { mutationHash: Buffer.alloc(32, 6), contentHash: Buffer.alloc(32, 5),
+        prevMutationHash: null, isGenesis: true },
+    } : {}),
   };
   const owner = createCanonicalSaveOwner({
-    withTransaction: async (fn) => {
+    // Diagnostic transaction double only; real outcome qualification is owned
+    // by audit-006-remediation-db.test.mjs on actual PostgreSQL connections.
+    getTransactionOutcome: error => outcomes.get(error)||({state:'NOT_COMMITTED',rollbackAcknowledged:true}),
+    readVerifiedEventById: async id => {
+      const event=events.find(e=>e.committed&&e.receipt.event_id===id);
+      assert(event,'diagnostic event must model a committed row');
+      return {id,company_id:'hom',agent_id:'fixture-agent',operation:event.operation,key:event.key,
+        signer_agent_id:'housekeeper',
+        metadata:event.metadata,mutation_hash:Buffer.from(event.receipt.mutation_hash,'hex')};
+    },
+    withTransaction: async (fn,options={}) => {
       try {
         const result = await fn(client);
-        transaction.commits += 1;
+        if (!options.readOnly) {
+          if (!uncertainCommit) {
+            transaction.commits += 1;
+            for(const event of events)event.committed=true;
+          }
+          if(injectCommitFault){
+            injectCommitFault=false;
+            const error=new Error('diagnostic_commit_acknowledgement_lost');
+            outcomes.set(error,{state:uncertainCommit?'INDETERMINATE':'COMMITTED',rollbackAcknowledged:false});
+            throw error;
+          }
+        }
         return result;
       } catch (error) {
-        transaction.rollbacks += 1;
+        if (!outcomes.has(error) && !options.readOnly) transaction.rollbacks += 1;
         throw error;
       }
     },
     logEvent: async (_company, _agent, operation, _key, metadata, parent, options) => {
+      if (options?.exclusiveOperationKey
+          && events.some(event => event.committed && event.operation === operation && event.key === _key)) {
+        throw new Error('event_operation_key_exists');
+      }
       const receipt = {
         event_id: `${String(events.length + 1).padStart(8, '0')}-0000-4000-8000-000000000000`,
         mutation_hash: String(events.length + 1).padStart(64, '0'),
       };
-      events.push({ operation, metadata, parent, client: options?.client || null, receipt });
+      events.push({ operation, metadata, parent, key:_key, client: options?.client || null, receipt,
+        committed:options?.client==null });
       return receipt;
     },
     evaluateCanaryWrite: async () => ({
@@ -136,7 +182,14 @@ function ownerFixture({ validatorError = null, persistenceError = null, quaranti
     computeSchemaHash: () => 'schema-hash',
     getCachedTransformation: async () => { diagnosticCalls.transformationRead += 1; return { cached: true }; },
     cacheTransformation: async () => { diagnosticCalls.transformationWrite += 1; },
-    semanticCache: { invalidate() {} },
+    semanticCache: { invalidate() {if(publicationError)throw publicationError;} },
+    refreshCachedCredential: async service => {
+      credentialRefreshes.push(service);
+      const refreshError = typeof credentialRefreshError === 'function'
+        ? credentialRefreshError(credentialRefreshes.length) : credentialRefreshError;
+      if (refreshError) throw refreshError;
+      return { generation: credentialRefreshes.length, state: 'READY' };
+    },
     persistMemory: async (input) => {
       persistInputs.push(input);
       assert.equal(input.client, client);
@@ -144,6 +197,16 @@ function ownerFixture({ validatorError = null, persistenceError = null, quaranti
       if (persistenceError) throw persistenceError;
       return persisted;
     },
+    verifyEvidence: async ({ memoryIds, client: evidenceClient }) => ({
+      verified: new Set(memoryIds),
+      proofs: new Map(memoryIds.map((memoryId) => [memoryId, {
+        live_content_hash: hash.toString('hex'),
+        save_mutation_hash: hash.toString('hex'),
+        binding_mutation_hash: Buffer.alloc(32, 8).toString('hex'),
+      }])),
+      rejected: [],
+      client: evidenceClient,
+    }),
     recallAuthorizationService: {
       getEffective: async () => ({
         allowed: true,
@@ -154,7 +217,7 @@ function ownerFixture({ validatorError = null, persistenceError = null, quaranti
       }),
     },
   });
-  return { owner, events, transaction, persisted, diagnosticCalls, persistInputs };
+  return { owner, events, transaction, persisted, diagnosticCalls, persistInputs, credentialRefreshes };
 }
 
 function internalSpec(overrides = {}) {
@@ -393,4 +456,86 @@ test('quarantine and exact-state reassertion retain complete successful traces',
   assert.equal(reassertResult.canonical_save_trace.stages[13].status, 'RETAINED_EXISTING');
   assert.equal(reassertResult.canonical_save_trace.stages[13].evidence.classification_hash, 'a'.repeat(64));
   assert.equal(reassertResult.canonical_save_trace.outcome, 'SUCCESS');
+});
+
+test('AUD-006 diagnostic owner rejects a false rollback after a lost commit acknowledgement', async()=>{
+  const fixture=ownerFixture({loseCommitAcknowledgement:true});
+  const value=await fixture.owner(internalSpec());
+  assert.equal(value.canonical_save_trace.outcome,'SUCCESS');
+  assert.equal(value.operation_replayed,true);
+  assert.equal(fixture.persistInputs.length,1);
+  assert.equal(fixture.events.filter(e=>e.operation==='canonical_save_terminal').length,1);
+});
+
+test('AUD-006 diagnostic unresolved commit emits no contradictory FAILED terminal', async()=>{
+  const fixture=ownerFixture({uncertainCommit:true});
+  await assert.rejects(fixture.owner(internalSpec()),error=>error.canonicalSaveOutcome?.state==='INDETERMINATE');
+  assert.equal(fixture.events.filter(e=>e.operation==='canonical_save_terminal'&&e.metadata.outcome==='FAILED').length,0);
+});
+
+test('AUD-006 exact operation retry reads the result; changed intent conflicts and postcommit publication cannot undo commit',async()=>{
+  const fixture=ownerFixture({publicationError:new Error('diagnostic_cache_unavailable')});
+  const input=internalSpec({save_operation_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'});
+  const first=await fixture.owner(input),again=await fixture.owner(input);
+  assert.equal(first.canonical_save_trace.outcome,'SUCCESS');
+  assert.equal(first.save_diagnostics.semantic_cache.status,'DEGRADED_AFTER_COMMIT');
+  assert.equal(again.id,first.id);assert.equal(again.operation_replayed,true);
+  assert.equal(fixture.persistInputs.length,1);assert.equal(fixture.diagnosticCalls.rpe.length,1);
+  await assert.rejects(fixture.owner({...input,value:'A different substantive intent cannot reuse the completed logical SAVE.'}),/canonical_save_operation_conflict/);
+  assert.equal(fixture.persistInputs.length,1);
+});
+
+test('AUD-014 confirmed outer commit publishes credential cache; rollback and indeterminate commit do not', async () => {
+  const operationId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const input = internalSpec({ key:'openai_api_key', value:'diagnostic-secret-not-retained',
+    data_class:'confidential', save_operation_id:operationId });
+  const committed = ownerFixture({ credential:true });
+  const result = await committed.owner(input);
+  assert.equal(result.save_diagnostics.credential_cache.status, 'PUBLISHED_AFTER_COMMIT');
+  assert.deepEqual(committed.credentialRefreshes, ['openai_api_key']);
+
+  const rolledBack = ownerFixture({ credential:true,
+    persistenceError:Object.assign(new Error('credential_db_fault'),{code:'credential_db_fault'}) });
+  await assert.rejects(rolledBack.owner(input), /credential_db_fault/);
+  assert.deepEqual(rolledBack.credentialRefreshes, []);
+
+  const indeterminate = ownerFixture({ credential:true, uncertainCommit:true });
+  await assert.rejects(indeterminate.owner(input), error => error.canonicalSaveOutcome?.state === 'INDETERMINATE');
+  assert.deepEqual(indeterminate.credentialRefreshes, []);
+});
+
+test('AUD-014 publication failure stays committed and exact retry refreshes without repeating custody SAVE', async () => {
+  const fixture = ownerFixture({ credential:true,
+    credentialRefreshError:new Error('diagnostic_keychain_temporarily_unavailable') });
+  const input = internalSpec({ key:'openai_api_key', value:'diagnostic-secret-not-retained',
+    data_class:'confidential', save_operation_id:'cccccccc-cccc-4ccc-8ccc-cccccccccccc' });
+  const first = await fixture.owner(input);
+  assert.equal(first.canonical_save_trace.outcome, 'SUCCESS');
+  assert.equal(first.save_diagnostics.credential_cache.status, 'COMMITTED_PUBLICATION_UNAVAILABLE');
+  assert.equal(fixture.persistInputs.length, 1);
+  const retry = await fixture.owner(input);
+  assert.equal(retry.operation_replayed, true);
+  assert.equal(retry.canonical_save_trace.outcome, 'SUCCESS');
+  assert.equal(fixture.persistInputs.length, 1);
+  assert.equal(fixture.credentialRefreshes.length, 2);
+  assert.equal(fixture.events.filter(event => event.operation === 'credential_cache_refresh_failed').length, 1);
+});
+
+test('AUD-014 replay-time publication failure retains resolved authority and appends one signed failure event', async () => {
+  const fixture = ownerFixture({
+    credential: true,
+    credentialRefreshError: (attempt) => attempt === 1
+      ? null : new Error('diagnostic_replay_publication_unavailable'),
+  });
+  const input = internalSpec({ key:'openai_api_key', value:'diagnostic-secret-not-retained',
+    data_class:'confidential', save_operation_id:'dddddddd-dddd-4ddd-8ddd-dddddddddddd' });
+  const first = await fixture.owner(input);
+  assert.equal(first.save_diagnostics.credential_cache.status, 'PUBLISHED_AFTER_COMMIT');
+  const replay = await fixture.owner(input);
+  assert.equal(replay.operation_replayed, true);
+  assert.equal(replay.save_diagnostics.credential_cache.status, 'COMMITTED_PUBLICATION_UNAVAILABLE');
+  assert.equal(fixture.persistInputs.length, 1);
+  const failure = fixture.events.filter(event => event.operation === 'credential_cache_refresh_failed');
+  assert.equal(failure.length, 1);
+  assert.equal(failure[0].parent, first.terminal_receipt.event_id);
 });

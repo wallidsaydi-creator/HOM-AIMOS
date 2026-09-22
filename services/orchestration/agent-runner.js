@@ -31,11 +31,15 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
+import { randomUUID } from 'node:crypto';
 import { agents, ensureAgent } from './agent-store.js';
-import { getToolsForAgent, executeTool } from './tool-registry.js';
+import { getToolsForAgent, executeTool, readNativeMemoryToolGrant } from './tool-registry.js';
 import { query } from '../../db/connection.js';
 import { getEmbedding } from '../core/embeddings.js';
 import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
+import { normalizeSourceMemoryIds } from '../write/canonical-save-contract.js';
+import { createToolInputState, readToolInputState, recordToolContextInput,
+  recordVerifiedEventContextInput, mergeToolInputState } from './tool-action-ledger.js';
 import { getConversationHistory, addConversationTurn } from './session-runner.js';
 import { buildModelAllocationDiagnostics, resolveModelForRequest } from './model-preferences.js';
 import { resolveProviderForModel } from '../core/providers.js';
@@ -49,12 +53,10 @@ import { recordAgentRun, selfReflect, getSharedFailures, recordRecommendation, a
 import { buildEpistemicBlindingGate, deblindText } from '../learning/epistemic-vigilance.js';
 import { assessQuality } from '../write/quality-gate.js';
 import { evaluateSocialLawViolations } from '../core/brain-contract.js';
-import { fetchWithTimeout } from './http.js';
 import { logEvent } from '../observe/event-ledger.js';
 import { getPermissions } from '../core/permissions.js';
 import {
   createKnowledgeGateState,
-  recordKnowledgeToolEvent,
   shouldBlockCompletionForMissingKnowledge
 } from '../security/knowledge-gate.js';
 import { evaluateDelegatedDirectiveAgainstConstitution } from '../core/hom-constitution.js';
@@ -65,10 +67,9 @@ import {
   buildSecurityDecisionEvidence,
   runSecurityPipeline,
 } from '../security/security-classifier.js';
-import { getToolSchema, mapFactsToToolCalls, extractStructuredFacts } from '../shared/schema-mapper.js';
 import { resolveEscalation } from './escalation-resolver.js';
 import { selectAction, renderDecision } from './decision-renderer.js';
-import { shouldRenew, checkpointProgress, loadCheckpoint, incrementRenewalCount } from '../context/context-renewal.js';
+import { shouldRenew, checkpointProgress, incrementRenewalCount } from '../context/context-renewal.js';
 import { buildSeparatedPrompt, validateChannelSeparation, sanitizeMemoryValue } from '../write/channel-separator.js';
 import { createWorkspace, setPartition, getPartition, serializeWorkspace } from '../context/workspace-partitions.js';
 import { auditTrajectory, getWarningSignsForEvents } from '../core/scheming-monitor.js';
@@ -139,7 +140,7 @@ import { getOperatorAgentId, isOperatorAgentId, systemConfigStore } from '../sec
 import { getConstraintForRole, applyNoHaveConstraint, applyEPrimeConstraint } from '../context/linguistic-constraints.js';
 import { createScopedState, inheritState, setScopedVar, getAllScopedVars, getStateSummary } from '../context/scoped-state.js';
 import { retrieveSkills } from '../learning/dual-skill-bank.js';
-import { buildAgscOutputContract, buildKeyedPrefetchPlan, buildRobustLengthPrediction, buildTokenScaleRuntimeSignal } from '../runtime/serving-control.js';
+import { beginServingWork, buildAgscOutputContract, buildKeyedPrefetchPlan, buildRobustLengthPrediction, buildTokenScaleRuntimeSignal } from '../runtime/serving-control.js';
 import { buildLocalInferenceRunPlan } from '../runtime/local-inference-control.js';
 
 // ─── Sub-module imports ───────────────────────────────────────────────────────
@@ -191,7 +192,9 @@ async function saveLearnedProceduralSkill({
   tags = [],
   observation,
   parentEventId = null,
+  nativeToolInputs = null,
 }) {
+  const inheritedRuntimeInputs = Boolean(nativeToolInputs);
   return executeHousekeeperCanonicalSave({
     company_id: COMPANY,
     agent_id: agentId,
@@ -204,12 +207,13 @@ async function saveLearnedProceduralSkill({
       tags: Array.isArray(tags) ? tags : [],
       observation,
     }),
-    scope: 'agent',
+    scope: inheritedRuntimeInputs ? 'private' : 'agent',
     memory_type: 'procedural',
-    clearance_level: 3,
+    clearance_level: inheritedRuntimeInputs ? 12 : 3,
+    data_class: inheritedRuntimeInputs ? 'restricted' : 'internal',
     source: 'agent-runner:procedural-learning',
     securityParentEventId: parentEventId,
-  });
+  }, { nativeToolInputs });
 }
 
 const MAX_AGENT_RECURSION_DEPTH = 2;
@@ -395,17 +399,17 @@ function detectContinuationSignal(response, mergedIntentions, confidence) {
 // ─── ADVISABILITY: Mid-run correction inbox ─────────────────────────────────
 // Humans (or other agents) can post corrections that running agents pick up.
 // checkAdvisability() is called before LLM execution to merge any pending advice.
-export async function checkAdvisability(agentId) {
+export async function checkAdvisability(agentId, recalledMemories = []) {
   try {
-    const res = await query(
-      `SELECT id, value FROM aimos_memories
-       WHERE company_id = $1 AND agent_id = $2 AND memory_type = 'advisory'
-       ORDER BY created_at DESC LIMIT 5`,
-      [COMPANY, agentId]
-    );
-    if (!res.rows.length) return null;
-    const advisories = res.rows.map(r => {
-      try { return JSON.parse(r.value); } catch { return { text: r.value }; }
+    const rows = recalledMemories
+      .filter((memory) => memory.memory_type === 'advisory'
+        && String(memory.agentId || memory.agent_id || '') === String(agentId))
+      .slice(0, 5);
+    if (!rows.length) return null;
+    const advisories = rows.map((memory) => {
+      const value = memory.rawValue ?? memory.value;
+      try { return { ...JSON.parse(value), sourceMemoryId: memory.id }; }
+      catch { return { text: value, sourceMemoryId: memory.id }; }
     });
     return advisories;
   } catch { return null; }
@@ -436,8 +440,9 @@ export async function postAdvisory(agentId, advice, fromAgent = 'human') {
 // Writes to aimos_memories with memory_type='event_log' so boot recall,
 // nightly dream, and session queries always see what happened.
 // This is NOT optional. An agent run not logged = a run that never happened.
-async function logMandatoryRunEvent(agentId, { success, model, taskType, confidence, latencyMs, error, promptSnippet, parentEventId }) {
+async function logMandatoryRunEvent(agentId, { success, model, taskType, confidence, latencyMs, error, promptSnippet, parentEventId, nativeToolInputs = null }) {
   try {
+    const inheritedRuntimeInputs = Boolean(nativeToolInputs);
     const now = new Date();
     const hhmm = now.toISOString().slice(11, 16);
     const ts = now.toISOString().slice(0, 16).replace('T', '_').replace(':', '');
@@ -456,11 +461,12 @@ async function logMandatoryRunEvent(agentId, { success, model, taskType, confide
       agent_id: agentId,
       key,
       value: lines,
-      scope: 'system',
+      scope: inheritedRuntimeInputs ? 'private' : 'system',
       memory_type: 'event_log',
-      clearance_level: 5,
+      clearance_level: inheritedRuntimeInputs ? 12 : 5,
+      data_class: inheritedRuntimeInputs ? 'restricted' : 'internal',
       source: 'agent-runner',
-    });
+    }, { nativeToolInputs });
 
     // Phase 4: Also log to aimos_events with parent_event_id for trace tree
     try {
@@ -542,15 +548,26 @@ function evaluateToolTrust(trust) {
 }
 
 // ─── TOOL PERMISSION FILTER ──────────────────────────────────────────────────
-async function filterToolsForAgent(agentId, companyId, allTools) {
+async function filterToolsForAgent(agentId, companyId, allTools, executionContext) {
   const total = allTools.length;
 
   try {
-    const permissions = await getPermissions(agentId, companyId);
+    let permissions = {};
+    try { permissions = await getPermissions(agentId, companyId); }
+    catch (error) { console.warn('[tool-filter] Generic tool authority unavailable:', error.message); }
+    let memoryGrant = null;
+    if (allTools.some(t => ['aimos_recall','aimos_save'].includes(t.schema?.function?.name))) {
+      try { memoryGrant = await readNativeMemoryToolGrant(executionContext); }
+      catch (error) { console.warn('[tool-filter] Native memory authority unavailable:', error.message); }
+    }
 
     const filtered = allTools.filter((toolDef) => {
       const name = String(toolDef?.schema?.function?.name || '');
       if (!name) return false;
+      if (name === 'aimos_recall' || name === 'aimos_save') {
+        return Boolean(memoryGrant?.allowed && (name !== 'aimos_save' || memoryGrant.write_allowed)
+          && memoryGrant.clearance_ceiling >= toolDef.profile.required_clearance);
+      }
       const capability = TOOL_CAPABILITIES[name];
       return Boolean(capability && permissions[capability] === true);
     });
@@ -565,16 +582,15 @@ async function filterToolsForAgent(agentId, companyId, allTools) {
 }
 
 // ─── TASK ROUTER: query F7 framework sequence before acting ─────────────────
-async function resolveTaskRoute(agentId, taskType, userPrompt) {
+async function resolveTaskRoute(agentId, taskType, userPrompt, nativeToolInputs, recalledMemories = []) {
   try {
-    const result = await query(
-      `SELECT value FROM aimos_memories
-       WHERE company_id = $1 AND key = 'procedure_f7_task_router'
-       ORDER BY created_at DESC LIMIT 1`,
-      [COMPANY]
-    );
-    if (!result.rows.length) return null;
-    const raw = result.rows[0].value;
+    const memory = recalledMemories.find((row) => row.key === 'procedure_f7_task_router');
+    if (!memory) return null;
+    recordToolContextInput(nativeToolInputs, { kind: 'memory',
+      owner: 'services/orchestration/agent-runner.js#resolveTaskRoute',
+      ref: `aimos_memories:${memory.id}`, value: memory.rawValue ?? memory.value,
+      memoryIds: [memory.id] });
+    const raw = memory.rawValue ?? memory.value;
     const parsed = typeof raw === 'string' ? raw : JSON.stringify(raw);
     const router = JSON.parse(parsed || '{}');
     const routes = router.routes || router.task_routes || {};
@@ -603,24 +619,26 @@ async function resolveTaskRoute(agentId, taskType, userPrompt) {
 // Message types (MetaGPT: structured communication over idle chatter):
 // 'directive' = task assignment, 'report' = completed work, 'escalation' = blocked/needs higher clearance,
 // 'contradiction' = deliberative dialogue, 'feedback' = executable feedback loop result, 'handoff' = water spider routing
-export async function sendAgentMessage(fromAgentId, toAgentId, message, metadata = {}) {
+export async function sendAgentMessage(fromAgentId, toAgentId, message, metadata = {}, options = {}) {
+  const targetAgentId = String(toAgentId || '').trim();
+  if (!targetAgentId) return { error: 'agent_message_target_required', blocked: true };
   const topology = TEAM_TOPOLOGY[fromAgentId];
   if (topology && !topology.canMessageAll) {
     const allowed = topology.canMessage || [];
-    if (!allowed.includes(toAgentId)) {
-      return { error: `Agent ${fromAgentId} cannot message ${toAgentId} per team topology`, blocked: true };
+    if (!allowed.includes(targetAgentId)) {
+      return { error: `Agent ${fromAgentId} cannot message ${targetAgentId} per team topology`, blocked: true };
     }
   }
 
   const msgType = metadata.messageType || 'directive';
-  const key = `agent_msg:${fromAgentId}:${toAgentId}:${Date.now()}`;
+  const key = `agent_msg:${fromAgentId}:${targetAgentId}:${Date.now()}`;
   await executeHousekeeperCanonicalSave({
     company_id: COMPANY,
-    agent_id: toAgentId,
+    agent_id: targetAgentId,
     key,
     value: JSON.stringify({
       from: fromAgentId,
-      to: toAgentId,
+      to: targetAgentId,
       messageType: msgType,
       interactionMode: (TEAM_TOPOLOGY[fromAgentId] || {}).interactionMode || 'x-as-a-service',
       message,
@@ -630,22 +648,20 @@ export async function sendAgentMessage(fromAgentId, toAgentId, message, metadata
     scope: 'agent',
     memory_type: 'agent_message',
     source: 'agent-runner',
-  });
+  }, { nativeToolInputs: options.nativeToolInputs || null });
 
   return { sent: true, key, messageType: msgType };
 }
 
-export async function getAgentInbox(agentId, limit = 10) {
-  const res = await query(
-    `SELECT key, value, created_at FROM aimos_memories
-     WHERE company_id = $1 AND agent_id = $2 AND memory_type = 'agent_message'
-     ORDER BY created_at DESC LIMIT $3`,
-    [COMPANY, agentId, limit]
-  );
-
-  return res.rows.map(r => {
-    const parsed = typeof r.value === 'string' ? JSON.parse(r.value) : r.value;
-    return { key: r.key, ...parsed, received_at: r.created_at };
+export async function getAgentInbox(agentId, limit = 10, recalledMemories = []) {
+  return recalledMemories
+    .filter((memory) => memory.memory_type === 'agent_message'
+      && String(memory.agent_id || '') === String(agentId))
+    .slice(0, Math.max(1, Number(limit || 10)))
+    .map((memory) => {
+    const parsed = typeof memory.value === 'string' ? JSON.parse(memory.value) : memory.value;
+    return { key: memory.key, ...parsed, received_at: memory.created_at,
+      origin_disclosure: memory.origin_disclosure };
   });
 }
 
@@ -680,20 +696,7 @@ export async function markMessageRead(messageKey, agentId, authority = null) {
   return { marked: key, event_id: eventId };
 }
 
-async function loadWorkingContext(agentId) {
-  try {
-    const res = await query(
-      `SELECT value FROM aimos_memories
-       WHERE company_id = $1 AND key = $2
-       ORDER BY updated_at DESC LIMIT 1`,
-      [COMPANY, `working_context:${agentId}`]
-    );
-    if (!res.rows.length) return '';
-    return String(res.rows[0].value || '').slice(0, 4000);
-  } catch { return ''; }
-}
-
-async function updateWorkingContext(agentId, newFacts) {
+async function updateWorkingContext(agentId, newFacts, nativeToolInputs = null) {
   try {
     if (!newFacts || String(newFacts).length < 10) return;
     const key = `working_context:${agentId}`;
@@ -703,11 +706,12 @@ async function updateWorkingContext(agentId, newFacts) {
       agent_id: agentId,
       key,
       value: sanitized,
-      scope: 'agent',
+      scope: nativeToolInputs ? 'private' : 'agent',
       memory_type: 'working_context',
-      clearance_level: 3,
+      clearance_level: nativeToolInputs ? 12 : 3,
+      data_class: nativeToolInputs ? 'restricted' : 'internal',
       source: 'agent-runner',
-    });
+    }, { nativeToolInputs });
   } catch { /* best-effort */ }
 }
 
@@ -721,19 +725,87 @@ export async function runAgent(agentId, userPrompt, options = {}) {
   }
 
   // ─── JOB QUEUE: wait for a slot before executing ────────────────────────────
-  await acquireRunSlot();
+  const finishWork = beginServingWork('agent_run');
+  let acquired = false;
   try {
+    await acquireRunSlot();
+    acquired = true;
+    options.signal?.throwIfAborted();
     return await _runAgentInner(agentId, userPrompt, options);
   } finally {
-    releaseRunSlot();
+    if (acquired) releaseRunSlot();
+    finishWork();
   }
 }
 
 async function _runAgentInner(agentId, userPrompt, options = {}) {
   const runStartTime = Date.now();
+  const producerMemoryInputs = new Set(normalizeSourceMemoryIds(options.sourceMemoryIds || []));
+  const nativeToolInputs = options.nativeToolInputs || createToolInputState([...producerMemoryInputs]);
+  recordToolContextInput(nativeToolInputs, {
+    kind: options.parentRunId ? 'derived' : 'request', owner: 'services/orchestration/agent-runner.js#runAgent',
+    ref: options.parentRunId || options.executionContext?.requestAdmissionEventId || options.credentialUseContext?.requestAdmissionEventId || agentId,
+    value: { prompt: userPrompt, source_memory_ids: [...producerMemoryInputs] },
+    memoryIds: [...producerMemoryInputs],
+  });
+  const requestToolInputs = createToolInputState([], nativeToolInputs);
   const depth = Math.max(0, Number(options.depth || 0));
   const runId = options.runId || `run_${agentId}_${runStartTime}`;
   let securityDecisionReceipt = null;
+  const fastLane = options.fastLane === true;
+  const persistedAgent = agents.get(agentId);
+  if (!persistedAgent) throw new Error(`Agent not found: ${agentId}`);
+  const resolution = options.resolution || {};
+  const runtimeAgent = {
+    ...persistedAgent,
+    id: agentId,
+    model: resolution.primaryModel
+      || options.model
+      || options.requestedModel
+      || options.preferredModel
+      || systemConfigStore.readConfigString('DEFAULT_AGENT_MODEL')
+      || systemConfigStore.readConfigString('LLM_MODEL')
+      || systemConfigStore.readConfigString('OLLAMA_MODEL')
+      || '',
+    persona: resolution.persona || persistedAgent.persona,
+    tools: [resolution.toolProfile || (Array.isArray(persistedAgent.tools) ? persistedAgent.tools[0] : persistedAgent.tools || 'full')],
+    toolDeltas: resolution.toolDeltas || persistedAgent.toolDeltas || { allow: [], deny: [] },
+    clearanceLevel: resolution.clearanceLevel || persistedAgent.clearanceLevel
+  };
+  let canonicalContextRecall = null;
+  let canonicalBaselineRecall = null;
+  let canonicalRiskBudgetRecall = null;
+  if (!fastLane && options.executionContext?.authSource === 'envelope') {
+    const recallOptions = {
+      executionContext: options.executionContext,
+      credentialUseContext: options.credentialUseContext || options.executionContext,
+      nativeToolInputs,
+      clearanceLevel: runtimeAgent.clearanceLevel,
+      runId,
+      userPrompt,
+      intent: options.intent || resolution.intent || options.taskType || 'chat',
+      autonomous: options.autonomous === true,
+    };
+    canonicalContextRecall = await executeTool('aimos_recall', {
+      query: String(userPrompt || ''),
+      limit: 24,
+      clearance_level: Math.min(12, Number(runtimeAgent.clearanceLevel || 1)),
+    }, runtimeAgent.id, recallOptions);
+    canonicalBaselineRecall = await executeTool('aimos_recall', {
+      key: `behavioral_baseline:${runtimeAgent.id}`,
+      limit: 1,
+      clearance_level: Math.min(12, Number(runtimeAgent.clearanceLevel || 1)),
+    }, runtimeAgent.id, recallOptions);
+    canonicalRiskBudgetRecall = await executeTool('aimos_recall', {
+      key: `risk_budget:${runtimeAgent.id}`,
+      limit: 1,
+      clearance_level: Math.min(12, Number(runtimeAgent.clearanceLevel || 1)),
+    }, runtimeAgent.id, recallOptions);
+    if ([canonicalContextRecall, canonicalBaselineRecall, canonicalRiskBudgetRecall]
+      .some((result) => result?.error || !result?.recall_receipt)) {
+      throw new Error('canonical_pre_model_recall_failed');
+    }
+  }
 
   // ─── WORKSPACE PARTITIONS: initialize B_ctx/B_work/B_sys/B_ans for this run ─
   let workspace = null;
@@ -775,48 +847,32 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
     taskRiskLevel,
     metaDecision,
     psychometricProfile
-  } = await runSecurityGates({ userPrompt, agentId, options, COMPANY });
-
-  const fastLane = options.fastLane === true;
-
-  const persistedAgent = agents.get(agentId);
-  if (!persistedAgent) throw new Error(`Agent not found: ${agentId}`);
+  } = await runSecurityGates({
+    userPrompt,
+    agentId,
+    options: {
+      ...options,
+      nativeToolInputs,
+      canonicalMemories: canonicalContextRecall?.memories || [],
+      canonicalBaselineMemories: canonicalBaselineRecall?.memories || [],
+      canonicalRiskBudgetMemories: canonicalRiskBudgetRecall?.memories || [],
+    },
+    COMPANY,
+  });
+  for (const input of metaDecision?.sourceInputs || []) recordToolContextInput(nativeToolInputs, input);
 
   // ─── TURBOESM: Load long-range reasoning trace from checkpoint ────────────
   let reasoningQuanta = '';
-  if (!fastLane) {
-    try {
-      const checkpoint = await loadCheckpoint(runId, COMPANY);
-      if (checkpoint?.reasoning_quanta) {
-        reasoningQuanta = checkpoint.reasoning_quanta;
-      }
-    } catch (_cErr) {
-      console.warn('[context-renewal] early load failed:', _cErr.message);
-    }
-  }
 
-  const resolution = options.resolution || {};
   const onToken = typeof options.onToken === 'function' ? options.onToken : null;
-  const runtimeAgent = {
-    ...persistedAgent,
-    id: agentId,
-    model: resolution.primaryModel
-      || options.model
-      || options.requestedModel
-      || options.preferredModel
-      || systemConfigStore.readConfigString('DEFAULT_AGENT_MODEL')
-      || systemConfigStore.readConfigString('LLM_MODEL')
-      || systemConfigStore.readConfigString('OLLAMA_MODEL')
-      || '',
-    persona: resolution.persona || persistedAgent.persona,
-    tools: [resolution.toolProfile || (Array.isArray(persistedAgent.tools) ? persistedAgent.tools[0] : persistedAgent.tools || 'full')],
-    toolDeltas: resolution.toolDeltas || persistedAgent.toolDeltas || { allow: [], deny: [] },
-    clearanceLevel: resolution.clearanceLevel || persistedAgent.clearanceLevel
-  };
   const modelPreference = resolveModelForRequest({
     taskType: options.taskType || options.intent || resolution.intent,
     prompt: userPrompt
   });
+  // Keep the signed provider with its model across the native fallback handoff.
+  const preferredModelId = modelPreference.provider && modelPreference.model
+    ? `${modelPreference.provider}:${modelPreference.model}`
+    : null;
   const requestedDiagnosticModel = options.requestedModel
     || options.preferredModel
     || resolution.requestedModel
@@ -825,13 +881,18 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
   const requestedProviderResolution = requestedDiagnosticModel
     ? resolveProviderForModel(requestedDiagnosticModel, '')
     : null;
+  const requestedSelectionIsSigned = Boolean(
+    requestedProviderResolution
+    && requestedProviderResolution.provider === modelPreference.provider
+    && modelsEquivalentForFallback(requestedProviderResolution.model, modelPreference.model)
+  );
   const modelAllocationDiagnostics = requestedDiagnosticModel
     ? buildModelAllocationDiagnostics({
         taskType: options.taskType || options.intent || resolution.intent,
         prompt: userPrompt,
         provider: requestedProviderResolution?.provider || '',
         model: requestedProviderResolution?.model || requestedDiagnosticModel,
-        preferenceFound: false,
+        preferenceFound: requestedSelectionIsSigned,
       })
     : modelPreference.diagnostics;
 
@@ -888,6 +949,15 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
     console.warn('[scoped-state] delegation context init failed (non-fatal):', ssErr.message);
   }
   const scopedStateContext = fastLane ? '' : buildScopedStateContext(delegationScopedState);
+  recordToolContextInput(nativeToolInputs, {
+    kind: 'derived', owner: 'services/orchestration/agent-runner.js#runtimeAgent', ref: runtimeAgent.id,
+    value: { persona: runtimeAgent.persona, name: runtimeAgent.name, tools: runtimeAgent.tools,
+      tool_deltas: runtimeAgent.toolDeltas, clearance: runtimeAgent.clearanceLevel, resolution },
+  });
+  if (scopedStateContext) recordToolContextInput(nativeToolInputs, {
+    kind: 'derived', owner: 'services/context/scoped-state.js', ref: runId,
+    value: { inherited: options.delegationContext || null, text: scopedStateContext },
+  });
 
   const constitutionCheck = evaluateDelegatedDirectiveAgainstConstitution({
     prompt: userPrompt,
@@ -908,10 +978,42 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
     throw err;
   }
 
+  let canonicalSessionRecall = null;
+  if (!fastLane && options.executionContext?.authSource === 'envelope') {
+    canonicalSessionRecall = await executeTool('aimos_recall', {
+      query: 'conversation session history',
+      session_id: conversationSessionKey,
+      memory_type_filter: 'conversation_feed',
+      limit: 40,
+      clearance_level: Math.min(12, Number(runtimeAgent.clearanceLevel || 1)),
+    }, runtimeAgent.id, {
+      executionContext: options.executionContext,
+      credentialUseContext: options.credentialUseContext || options.executionContext,
+      nativeToolInputs,
+      clearanceLevel: runtimeAgent.clearanceLevel,
+      runId,
+      userPrompt,
+      intent: options.intent || resolution.intent || options.taskType || 'chat',
+      autonomous: options.autonomous === true,
+    });
+    if (canonicalSessionRecall?.error || !canonicalSessionRecall?.recall_receipt) {
+      throw new Error('canonical_session_recall_failed');
+    }
+  }
   const conversationHistory = fastLane ? [] : await getConversationHistory(conversationSessionKey, {
     companyId: COMPANY,
     agentId: sourceAgentId,
+    canonicalMemories: canonicalSessionRecall?.memories || [],
+    loadDurable: false,
   });
+  for (const [index, turn] of conversationHistory.entries()) {
+    if (turn.memory_id) producerMemoryInputs.add(turn.memory_id);
+    recordToolContextInput(nativeToolInputs, {
+      kind: turn.memory_id ? 'memory' : 'record', owner: 'services/orchestration/session-runner.js#getConversationHistory',
+      ref: turn.memory_id ? `aimos_memories:${turn.memory_id}` : `${conversationSessionKey}:${index}`,
+      value: turn, memoryIds: turn.memory_id ? [turn.memory_id] : [],
+    });
+  }
   if (!fastLane) {
     try {
       epistemicBlindingGate = buildEpistemicBlindingGate({
@@ -973,9 +1075,44 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
       console.warn('[latent-lookahead] prefetch plan failed (non-fatal):', lookaheadErr.message);
     }
   }
-  const aimosContextPack = fastLane
+  if (!fastLane && options.executionContext?.authSource === 'envelope'
+      && (canonicalContextRecall?.error || !canonicalContextRecall?.recall_receipt)) {
+    throw new Error('canonical_model_context_recall_failed');
+  }
+  const aimosContextPack = fastLane || !canonicalContextRecall
     ? buildEmptyContextPack()
-    : await loadHybridAimosContext(sourceAgentId, runtimeAgent.id, userPrompt, 8);
+    : await loadHybridAimosContext(
+        sourceAgentId,
+        runtimeAgent.id,
+        userPrompt,
+        8,
+        canonicalContextRecall,
+      );
+  const checkpointMemory = (aimosContextPack.memories || []).find((memory) =>
+    memory.key === `context_renewal:${runId}:checkpoint`);
+  if (checkpointMemory) {
+    try {
+      const checkpoint = JSON.parse(checkpointMemory.rawValue || '{}');
+      reasoningQuanta = String(checkpoint.reasoning_quanta || '');
+      if (reasoningQuanta) recordToolContextInput(nativeToolInputs, { kind: 'memory',
+        owner: 'services/context/context-renewal.js#canonicalCheckpointRecall',
+        ref: `aimos_memories:${checkpointMemory.id}`, value: checkpoint,
+        memoryIds: [checkpointMemory.id] });
+    } catch {
+      throw new Error('canonical_context_checkpoint_invalid');
+    }
+  }
+  for (const memory of aimosContextPack.memories || []) {
+    producerMemoryInputs.add(memory.id);
+    recordToolContextInput(nativeToolInputs, { kind: 'memory',
+      owner: 'services/retrieval/native-recall-pipeline.js#executeCanonicalRecall',
+      ref: `aimos_memories:${memory.id}`, value: memory, memoryIds: [memory.id] });
+  }
+  for (const event of aimosContextPack.recentSaveEvents || []) recordVerifiedEventContextInput(nativeToolInputs, {
+    owner: 'services/orchestration/agent-prompts.js#loadRecentSaveEvents',
+    eventId: event.id,
+    mutationSha256: event.mutation_sha256,
+  });
   const canaryRelayObservation = await observeCanariesAtRelayGate(
     aimosContextPack.text,
     runId,
@@ -1011,8 +1148,7 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
       if (shouldRenew(estimatedTokens, maxContextTokens)) {
         const renewalCount = await incrementRenewalCount(runId, COMPANY);
         if (renewalCount > 0) {
-          const checkpoint = await loadCheckpoint(runId, COMPANY);
-          if (!checkpoint) {
+          if (!checkpointMemory) {
             await checkpointProgress(runId, `Pre-LLM checkpoint for ${runtimeAgent.id}`, {
               accumulated_findings: [aimosContextPack.text.slice(0, 500)],
               decisions_made: [],
@@ -1031,7 +1167,9 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
 
   const proceduralSkills = fastLane
     ? { text: '', skillIds: [] }
-    : await loadProceduralSkills(runtimeAgent.id, userPrompt);
+    : await loadProceduralSkills(runtimeAgent.id, userPrompt, canonicalContextRecall);
+  for (const id of proceduralSkills.sourceMemoryIds || []) producerMemoryInputs.add(id);
+  for (const input of proceduralSkills.sourceInputs || []) recordToolContextInput(nativeToolInputs, input);
 
   // ─── DUAL SKILL BANK: augment procedural skills with task + step-level skills ─
   let dualSkillText = '';
@@ -1042,6 +1180,10 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
         retrieveSkills(userPrompt, 'step', 3)
       ]);
       const allSkills = [...(taskSkills || []), ...(stepSkills || [])];
+      for (const skill of allSkills) recordToolContextInput(nativeToolInputs, {
+        kind: 'record', owner: 'services/learning/dual-skill-bank.js#retrieveSkills',
+        ref: `skill_bank:${skill.id}`, value: skill,
+      });
       if (allSkills.length > 0) {
         dualSkillText = '\n### RETRIEVED SKILLS (task + step-level):\n' +
           allSkills.map(s => `- [${s.skill_type || 'skill'}] ${s.principle || s.when_to_apply || ''}`).join('\n');
@@ -1055,16 +1197,17 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
   let reasoningContext = '';
   if (!fastLane) {
     try {
-      const rState = await query(
-        `SELECT value FROM aimos_memories
-         WHERE company_id = $1 AND agent_id = $2 AND memory_type = 'reasoning_state'
-         ORDER BY updated_at DESC LIMIT 1`,
-        [COMPANY, runtimeAgent.id]
-      );
-      if (rState.rows.length > 0) {
-        const parsed = typeof rState.rows[0].value === 'string'
-          ? JSON.parse(rState.rows[0].value)
-          : rState.rows[0].value;
+      const stateMemory = (aimosContextPack.memories || []).find((memory) =>
+        memory.memory_type === 'reasoning_state' && memory.agentId === runtimeAgent.id);
+      if (stateMemory) {
+        producerMemoryInputs.add(stateMemory.id);
+        recordToolContextInput(nativeToolInputs, { kind: 'memory',
+          owner: 'services/orchestration/agent-runner.js#reasoningContinuity',
+          ref: `aimos_memories:${stateMemory.id}`, value: stateMemory.rawValue,
+          memoryIds: [stateMemory.id] });
+        const parsed = typeof stateMemory.rawValue === 'string'
+          ? JSON.parse(stateMemory.rawValue)
+          : stateMemory.rawValue;
         const parts = [];
         if (parsed.hypotheses?.length) parts.push(`Hypotheses: ${parsed.hypotheses.join('; ')}`);
         if (parsed.open_questions?.length) parts.push(`Open questions: ${parsed.open_questions.join('; ')}`);
@@ -1078,8 +1221,13 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
   let advisoryContext = '';
   if (!fastLane) {
     try {
-      const advisories = await checkAdvisability(runtimeAgent.id);
+      const advisories = await checkAdvisability(runtimeAgent.id, aimosContextPack.memories || []);
       if (advisories && advisories.length > 0) {
+        for (const advisory of advisories) producerMemoryInputs.add(advisory.sourceMemoryId);
+        for (const advisory of advisories) recordToolContextInput(nativeToolInputs, { kind: 'memory',
+          owner: 'services/orchestration/agent-runner.js#checkAdvisability',
+          ref: `aimos_memories:${advisory.sourceMemoryId}`, value: advisory,
+          memoryIds: [advisory.sourceMemoryId] });
         const advTexts = advisories.map(a => `[${a.from || 'human'}]: ${a.advice || a.text || JSON.stringify(a)}`);
         advisoryContext = `\n### HUMAN CORRECTIONS (integrate these into your response — they override prior instructions):\n${advTexts.join('\n')}\n`;
       }
@@ -1095,15 +1243,71 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
     taskType,
     sessionId: conversationSessionKey
   });
-  const taskRoute = fastLane ? null : await resolveTaskRoute(runtimeAgent.id, taskType, userPrompt);
+  let taskRouteMemories = aimosContextPack.memories || [];
+  if (!fastLane && options.executionContext?.authSource === 'envelope'
+      && !taskRouteMemories.some((memory) => memory.key === 'procedure_f7_task_router')) {
+    const taskRouteRecall = await executeTool('aimos_recall', {
+      key: 'procedure_f7_task_router',
+      limit: 1,
+      clearance_level: Math.min(12, Number(runtimeAgent.clearanceLevel || 1)),
+    }, runtimeAgent.id, {
+      executionContext: options.executionContext,
+      credentialUseContext: options.credentialUseContext || options.executionContext,
+      nativeToolInputs,
+      clearanceLevel: runtimeAgent.clearanceLevel,
+      runId,
+      userPrompt,
+      intent: options.intent || resolution.intent || taskType,
+      autonomous: options.autonomous === true,
+    });
+    if (!taskRouteRecall?.error && Array.isArray(taskRouteRecall?.memories)) {
+      taskRouteMemories = [...taskRouteMemories, ...taskRouteRecall.memories.map((memory) => ({
+        ...memory,
+        rawValue: memory.value,
+        agentId: memory.agent_id,
+      }))];
+    }
+  }
+  const taskRoute = fastLane ? null : await resolveTaskRoute(
+    runtimeAgent.id,
+    taskType,
+    userPrompt,
+    nativeToolInputs,
+    taskRouteMemories,
+  );
   let investigationContext = '';
   let investigationLoopResult = null;
   if (shouldRunInvestigationLoop({ taskType, userPrompt, fastLane, options })) {
     try {
       const techniques = buildInvestigationTechniques(taskType, taskRoute);
       if (techniques.length > 0) {
+        let retainedInvestigationHistory = [];
+        if (options.executionContext?.authSource === 'envelope') {
+          const investigationRecall = await executeTool('aimos_recall', {
+            query: `investigation ${runId} iteration history`,
+            memory_type_filter: 'event_log',
+            limit: 100,
+            clearance_level: Math.min(12, Number(runtimeAgent.clearanceLevel || 1)),
+          }, runtimeAgent.id, {
+            executionContext: options.executionContext,
+            credentialUseContext: options.credentialUseContext || options.executionContext,
+            nativeToolInputs,
+            clearanceLevel: runtimeAgent.clearanceLevel,
+            runId,
+            userPrompt,
+            intent: options.intent || resolution.intent || taskType,
+            autonomous: options.autonomous === true,
+          });
+          if (investigationRecall?.error || !investigationRecall?.recall_receipt) {
+            throw new Error('canonical_investigation_history_recall_failed');
+          }
+          retainedInvestigationHistory = investigationRecall.memories
+            .filter((memory) => String(memory?.key || '').startsWith(`investigation:${runId}:iter_`))
+            .map((memory) => JSON.parse(memory.value));
+        }
         investigationLoopResult = await runInvestigationLoop(runId, userPrompt, techniques, {
           maxIterations: Math.min(3, techniques.length),
+          initialHistory: retainedInvestigationHistory,
           checkObjective: async (history) => history.some((entry) => entry?.objectiveMet || entry?.status === 'confirmed'),
           executeIteration: async (_taskId, iteration, objective, technique, priorFindings) => {
             const isolatedSessionKey = normalizeConversationSessionKey(
@@ -1115,8 +1319,13 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
               priorFindings,
               taskType
             });
-            const iterationResult = await runAgent(runtimeAgent.id, iterationPrompt, {
+            const iterationInputs = createToolInputState([], nativeToolInputs);
+            let iterationResult;
+            try {
+              iterationResult = await runAgent(runtimeAgent.id, iterationPrompt, {
               ...options,
+              runId: randomUUID(),
+              nativeToolInputs: iterationInputs,
               depth: depth + 1,
               taskType: 'analysis',
               intent: options.intent || resolution.intent || taskType,
@@ -1125,7 +1334,13 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
               skipAimos: true,
               skipChaining: true,
               _investigationLoopActive: true
-            });
+              });
+            } finally {
+              mergeToolInputState(nativeToolInputs, iterationInputs);
+            }
+            recordToolContextInput(nativeToolInputs, { kind: 'derived',
+              owner: 'services/orchestration/agent-runner.js#investigation',
+              ref: `${runId}:${iteration}`, value: iterationResult?.response ?? '' });
             return parseInvestigationIterationResponse(iterationResult?.response, technique);
           }
         });
@@ -1150,18 +1365,22 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
   let frameworkContext = '';
   if (!fastLane && taskRoute && taskRoute.frameworks?.length) {
     try {
-      const fwNames = taskRoute.frameworks;
-      const fwResult = await query(
-        `SELECT key, value FROM aimos_memories
-         WHERE company_id = $1 AND memory_type IN ('procedural', 'tacit_knowledge', 'strategic_directive', 'framework', 'playbook', 'book_extract')
-           AND key ILIKE ANY($2)
-         ORDER BY created_at DESC LIMIT 5`,
-        [COMPANY, fwNames.map(f => `%${f}%`)]
-      );
-      if (fwResult.rows.length > 0) {
-        const fwTexts = fwResult.rows.map(r => {
-          const val = typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
-          return `[${r.key}]: ${val.slice(0, 800)}`;
+      const fwNames = taskRoute.frameworks.map((value) => String(value).toLowerCase());
+      const frameworkMemories = (aimosContextPack.memories || [])
+        .filter((memory) => ['procedural', 'tacit_knowledge', 'strategic_directive', 'framework', 'playbook', 'book_extract']
+          .includes(memory.memory_type))
+        .filter((memory) => fwNames.some((name) => String(memory.key || '').toLowerCase().includes(name)))
+        .slice(0, 5);
+      if (frameworkMemories.length > 0) {
+        for (const memory of frameworkMemories) producerMemoryInputs.add(memory.id);
+        for (const memory of frameworkMemories) recordToolContextInput(nativeToolInputs, { kind: 'memory',
+          owner: 'services/orchestration/agent-runner.js#frameworkContext',
+          ref: `aimos_memories:${memory.id}`, value: memory, memoryIds: [memory.id] });
+        const fwTexts = frameworkMemories.map((memory) => {
+          const value = typeof memory.rawValue === 'string'
+            ? memory.rawValue
+            : JSON.stringify(memory.rawValue);
+          return `[${memory.key}]: ${value.slice(0, 800)}`;
         });
         frameworkContext = `\n### FRAMEWORK INJECTION (Hybrid Reasoning — symbolic priors for this task):\n${fwTexts.join('\n')}\n`;
       }
@@ -1173,6 +1392,11 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
   if (!fastLane && taskType && taskType !== 'chat') {
     try {
       const sharedFails = await getSharedFailures(taskType, runtimeAgent.id, 3);
+      for (const failure of sharedFails) recordVerifiedEventContextInput(nativeToolInputs, {
+        owner: 'services/learning/agent-learning.js#getSharedFailures',
+        eventId: failure.source_event_id,
+        mutationSha256: failure.source_event_mutation_sha256,
+      });
       if (sharedFails.length > 0) {
         const warnings = sharedFails.map(f => `- Agent ${f.agent_id} failed on ${f.taskType}: ${f.error}`).join('\n');
         teamLearningContext = `\n### TEAM LEARNING (other agents failed on this task type recently):\n${warnings}\nAvoid repeating these mistakes.\n`;
@@ -1181,35 +1405,50 @@ async function _runAgentInner(agentId, userPrompt, options = {}) {
   }
 
   // ─── P0-4: META-CONTROLLER context injection ─────────────────────────────
+  // Preserve origin at the point of construction: literal instruction bytes
+  // belong to this native owner; every interpolated value remains data. No
+  // heading or content supplied by a user can select its own origin label.
+  const runtimeContextSections = new Map();
+  const nativeRuntimeContext = (name) => (strings, ...values) => {
+    const sections = strings.flatMap((content, index) => [
+      { origin: 'native_policy', content },
+      ...(index < values.length ? [{ origin: 'derived_context', content: String(values[index]) }] : []),
+    ]);
+    runtimeContextSections.set(name, sections);
+    return sections.map(s => s.content).join('');
+  };
   let metaControllerContext = '';
   if (metaDecision && !fastLane) {
     const { action, speed, reasoning, metaState, speculativeExecution } = metaDecision;
-    metaControllerContext = `\n### META-CONTROLLER (System M — execution strategy):
+    metaControllerContext = nativeRuntimeContext('meta_controller')`\n### META-CONTROLLER (System M — execution strategy):
 Action: ${action} | Speed: ${speed}
 Execution mode: ${speculativeExecution?.execution_mode || 'closed_loop'}
 Verification: ${speculativeExecution?.replan_on_deviation ? `closed-loop deviation check tau=${speculativeExecution.safety_threshold_tau}` : 'standard'}
 Reasoning: ${reasoning}
 Novelty: ${(metaState?.novelty || 0).toFixed(2)} | Mastery: ${(metaState?.mastery || 0).toFixed(2)} | Failures: ${metaState?.failureRecurrence || 0}
 ${action === META_ACTIONS.APPLY_SKILL && metaState?.nearestSkill ? `Nearest skill: ${metaState.nearestSkill}` : ''}
-${action === META_ACTIONS.EXPLORE ? 'IMPORTANT: Abandon current approach. Try a structurally different strategy.' : ''}
-${action === META_ACTIONS.FALLBACK ? 'WARNING: Resource budget critically low. Use best available known approach.' : ''}\n`;
+`;
+    const instruction = { origin: 'native_policy', content:
+      `${action === META_ACTIONS.EXPLORE ? 'IMPORTANT: Abandon current approach. Try a structurally different strategy.' : ''}\n${action === META_ACTIONS.FALLBACK ? 'WARNING: Resource budget critically low. Use best available known approach.' : ''}\n` };
+    runtimeContextSections.get('meta_controller').push(instruction);
+    metaControllerContext += instruction.content;
   }
 
   const turnBudgetContext = turnBudgetPlan && !fastLane
-    ? `\n### TURN-ADAPTIVE BUDGET (TAB — per-turn compute allocation):
+    ? nativeRuntimeContext('turn_budget')`\n### TURN-ADAPTIVE BUDGET (TAB — per-turn compute allocation):
 Difficulty level: ${turnBudgetPlan.turn_difficulty.difficulty_level}/4 | Budget: ${turnBudgetPlan.selected_budget_tokens} tokens | Route hint: ${turnBudgetPlan.route_hint}
 Use concise reasoning for easy turns and reserve deeper reasoning for hard or decisive turns. GRPO budget training is not enabled; this is a runtime allocation contract.\n`
     : '';
 
   const latentLookaheadContext = latentLookaheadPlan && !fastLane
-    ? `\n### LATENT LOOKAHEAD PREFETCH (Thinking into the Future — audited orchestration):
+    ? nativeRuntimeContext('latent_lookahead')`\n### LATENT LOOKAHEAD PREFETCH (Thinking into the Future — audited orchestration):
 tau=${latentLookaheadPlan.latent_horizon_tau} | positions=${latentLookaheadPlan.thinking_positions.join(', ')}
 Prefetch candidates: ${latentLookaheadPlan.prefetch_queries.slice(0, 3).join(' | ')}
 Use this only as visible anticipatory recall guidance. Hidden-state recursion, latent attention-mask training, and multi-token prediction are not enabled.\n`
     : '';
 
   const epistemicBlindingContext = epistemicBlindingGate?.should_blind && !fastLane
-    ? `\n### EPISTEMIC BLINDING (inference-time prior-contamination audit):
+    ? nativeRuntimeContext('epistemic_blinding')`\n### EPISTEMIC BLINDING (inference-time prior-contamination audit):
 Entity identifiers in the current user prompt were replaced with anonymous codes before model inference. Reason only from supplied data/features. Do not infer fame, brand, literature familiarity, or prior reputation from identifiers. The code mapping is withheld from the model prompt and restored only after response generation.\n`
     : '';
 
@@ -1235,7 +1474,7 @@ Entity identifiers in the current user prompt were replaced with anonymous codes
     });
   const toolDefs = fastLane
     ? []
-    : await filterToolsForAgent(runtimeAgent.id, COMPANY, rawToolDefs);
+    : await filterToolsForAgent(runtimeAgent.id, COMPANY, rawToolDefs, options.executionContext || options.credentialUseContext);
   const allowedToolNames = toolDefs
     .map((toolDef) => toolDef?.schema?.function?.name)
     .filter(Boolean);
@@ -1246,9 +1485,16 @@ Entity identifiers in the current user prompt were replaced with anonymous codes
     autonomous: options.autonomous === true
   });
 
-  if (isOperatorAgentId(runtimeAgent.id)) {
+  if (isOperatorAgentId(runtimeAgent.id) || isExecutiveRememberPrompt(userPrompt) || isExecutiveRecallSelfPrompt(userPrompt)) {
     try {
       const deterministic = await runDeterministicExecutiveFastPath(runtimeAgent, userPrompt, {
+        nativeToolInputs,
+        knowledgeGateState,
+        runId,
+        executionContext: options.executionContext || options.credentialUseContext,
+        credentialUseContext: options.credentialUseContext || options.executionContext,
+        clearanceLevel: runtimeAgent.clearanceLevel || 1,
+        sessionKey: conversationSessionKey,
         allowedTools: allowedToolNames,
         intent: options.intent || resolution.intent || 'chat',
         userPrompt,
@@ -1272,6 +1518,8 @@ Entity identifiers in the current user prompt were replaced with anonymous codes
         }
 
         await addConversationTurn(conversationSessionKey, 'user', userPrompt, {
+          nativeToolInputs: requestToolInputs,
+          clearanceLevel: runtimeAgent.clearanceLevel,
           companyId: COMPANY,
           agentId: sourceAgentId,
           turnId: `${runId}:user`,
@@ -1281,6 +1529,8 @@ Entity identifiers in the current user prompt were replaced with anonymous codes
           autonomousHousekeeper: true,
         });
         await addConversationTurn(conversationSessionKey, 'assistant', response, {
+          nativeToolInputs,
+          clearanceLevel: runtimeAgent.clearanceLevel,
           companyId: COMPANY,
           agentId: sourceAgentId,
           turnId: `${runId}:assistant`,
@@ -1315,11 +1565,13 @@ Entity identifiers in the current user prompt were replaced with anonymous codes
           promptPressure,
           confidence: extractConfidence(response, 0, aimosContextPack.contextCompaction?.keptItems || 0),
           response,
+          origin_inputs: readToolInputState(nativeToolInputs),
           delegatedTo: null,
           reviewerNote: null
         };
       }
     } catch (fastPathError) {
+      if (fastPathError?.code === 'NATIVE_TOOL_RESULT_EVIDENCE_INCOMPLETE') throw fastPathError;
       console.warn(`[agent-runner] executive deterministic fast-path skipped: ${fastPathError?.message || fastPathError}`);
     }
   }
@@ -1339,7 +1591,7 @@ Entity identifiers in the current user prompt were replaced with anonymous codes
   }
 
   const robustLengthContext = robustLengthPrediction && !fastLane
-    ? `\n### ROBUST LENGTH PREDICTION (ProD-M median target proxy):
+    ? nativeRuntimeContext('robust_length')`\n### ROBUST LENGTH PREDICTION (ProD-M median target proxy):
 Predicted output length: ${robustLengthPrediction.prediction_tokens} tokens | target: ${robustLengthPrediction.target_functional}
 Use this as a scheduling/budget expectation, not as a content truncation instruction. ProD-M/ProD-D training and hidden-state probes are not enabled.\n`
     : '';
@@ -1356,7 +1608,7 @@ Use this as a scheduling/budget expectation, not as a content truncation instruc
   }
 
   const agscContext = agscGenerationContract && !fastLane
-    ? `\n### AGSC OUTPUT CONTRACT (adaptive granularity, inspectable evidence):
+    ? nativeRuntimeContext('agsc')`\n### AGSC OUTPUT CONTRACT (adaptive granularity, inspectable evidence):
 Preferred shape: ${agscGenerationContract.output_contract.preferred_shape}
 Evidence must remain inspectable; summarize without hiding source-backed details. NLI neutral triggers, UMAP, GMM soft clustering, and uncertainty aggregation are not enabled.\n`
     : '';
@@ -1378,13 +1630,30 @@ Evidence must remain inspectable; summarize without hiding source-backed details
   }
 
   const localInferenceContext = localInferencePlan && !fastLane
-    ? `\n### WAVE 5 LOCAL INFERENCE CONTRACT (native, no proxy):
+    ? nativeRuntimeContext('local_inference')`\n### WAVE 5 LOCAL INFERENCE CONTRACT (native, no proxy):
 MoE scheduling: ${localInferencePlan.moe_scheduling.status}; KV pressure: ${localInferencePlan.kv_cache.kv_cache_estimate.free_memory_pressure_ratio}; small-model sparse ratio: ${localInferencePlan.small_model_efficiency.sparse_memory_control.adaptive_sparse_ratio}
 Use these as runtime constraints only. Do not claim quantization, learned scheduler execution, PIM, SmartSSD, or physical memory migration unless the live status explicitly enables it.\n`
     : '';
 
-  let systemPrompt = fastLane
-    ? buildFastLaneSystemPrompt(runtimeAgent)
+  const contextPayloads = {
+    memory: aimosContextPack.text, procedural: proceduralSkills.text, dual_skill: dualSkillText,
+    reasoning: reasoningContext, investigation: investigationContext, framework: frameworkContext,
+    advisory: advisoryContext, team_learning: teamLearningContext, meta_controller: metaControllerContext,
+    turn_budget: turnBudgetContext, latent_lookahead: latentLookaheadContext, robust_length: robustLengthContext,
+    agsc: agscContext, local_inference: localInferenceContext, epistemic_blinding: epistemicBlindingContext,
+    scoped_state: scopedStateContext,
+  };
+  for (const [section, text] of Object.entries({ ...contextPayloads, reasoning_quanta: reasoningQuanta })) {
+    if (text) recordToolContextInput(nativeToolInputs, { kind: 'derived',
+      owner: 'services/orchestration/agent-runner.js#contextAssembly', ref: `${runId}:${section}`, value: text });
+  }
+  const contextSections = Object.entries(contextPayloads).flatMap(([name, content]) =>
+    runtimeContextSections.get(name) || [{ origin: 'derived_context', content }]);
+  contextSections.push({ origin: 'derived_context', content:
+    (complexity === 'simple' ? '\ncomplexity:simple' : '')
+    + (taskRoute ? `\n### TASK ROUTE (F7): ${taskType} → frameworks: [${(taskRoute.frameworks || []).join(', ')}], threshold: ${taskRoute.confidence_threshold || 0.8}` : '') });
+  let systemPromptSections = fastLane
+    ? [{ origin: 'derived_context', content: buildFastLaneSystemPrompt(runtimeAgent) }]
     : buildSystemPrompt(
         runtimeAgent,
         toolDefs,
@@ -1392,6 +1661,8 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           + (complexity === 'simple' ? '\ncomplexity:simple' : '')
           + (taskRoute ? `\n### TASK ROUTE (F7): ${taskType} → frameworks: [${(taskRoute.frameworks || []).join(', ')}], threshold: ${taskRoute.confidence_threshold || 0.8}` : ''),
         {
+          contextSections,
+          nativeToolInputs,
           modelId: runtimeAgent.model,
           userPrompt: llmUserPrompt,
           reasoningQuanta,
@@ -1417,6 +1688,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           promptPressureRatio: getPromptPressureTelemetry().ratio || 0
         }
       );
+  let systemPrompt = systemPromptSections.map((section) => section.content).join('');
   const basePromptChars = (systemPrompt?.length || 0)
     + String(userPrompt || '').length
     + aimosContextPack.text.length;
@@ -1467,10 +1739,11 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
       const roleSlot = runtimeAgent.role || runtimeAgent.id || 'executor';
       const constraintType = getConstraintForRole(roleSlot);
       if (constraintType === 'no-have') {
-        systemPrompt = applyNoHaveConstraint(systemPrompt);
+        systemPromptSections.push({ origin: 'native_policy', content: applyNoHaveConstraint('') });
       } else if (constraintType === 'e-prime') {
-        systemPrompt = applyEPrimeConstraint(systemPrompt);
+        systemPromptSections.push({ origin: 'native_policy', content: applyEPrimeConstraint('') });
       }
+      systemPrompt = systemPromptSections.map((section) => section.content).join('');
     } catch (lcErr) {
       console.warn('[linguistic-constraints] constraint application failed (non-fatal):', lcErr.message);
     }
@@ -1482,14 +1755,17 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
   // invoke the semantic analyst. Full review fails closed if that verdict is
   // unavailable or inconclusive.
   {
-    const conversationSecurityContext = contextGuard.messages
-      .map((message, index) => `=== CONVERSATION TURN ${index + 1} (${message.role}) ===\n${message.content}`)
-      .join('\n\n');
-    const assembledSecurityPrompt = [
-      `=== SYSTEM INSTRUCTIONS ===\n${systemPrompt}`,
-      conversationSecurityContext,
-      `=== USER INPUT ===\n${llmUserPrompt}`,
-    ].filter(Boolean).join('\n\n');
+    const securitySections = [
+      { origin: 'native_framing', content: '=== SYSTEM INSTRUCTIONS ===\n' },
+      ...systemPromptSections,
+      ...contextGuard.messages.flatMap((message, index) => [
+        { origin: 'native_framing', content: `\n\n=== CONVERSATION TURN ${index + 1} (${message.role}) ===\n` },
+        { origin: 'conversation', content: String(message.content) },
+      ]),
+      { origin: 'native_framing', content: '\n\n=== USER INPUT ===\n' },
+      { origin: 'user_request', content: String(llmUserPrompt) },
+    ];
+    const assembledSecurityPrompt = securitySections.map((section) => section.content).join('');
     const memoryValues = (aimosContextPack.text || '').split('\n').filter(Boolean);
     const effectiveReviewTier = fastLane ? 'se_gate_only' : reviewTier;
     try {
@@ -1501,6 +1777,10 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           runId,
           reviewTier: effectiveReviewTier,
           availableTools: allowedToolNames,
+          model: runtimeAgent.model,
+          executionContext: options.executionContext || options.credentialUseContext || null,
+          nativeToolInputs,
+          securitySections,
         }
       );
       const authority = options.executionContext || options.credentialUseContext || null;
@@ -1509,6 +1789,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
         recalledMemoryValues: memoryValues,
         result: secResult,
         reviewTier: effectiveReviewTier,
+        securitySections,
       });
       try {
         securityDecisionReceipt = await logEvent(
@@ -1551,34 +1832,6 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
         throw err;
       }
       console.warn('[security-classifier] pipeline error:', secErr.message);
-    }
-  }
-
-  // ─── SCHEMA MAPPER: extract structured facts before LLM call ──────────────
-  if (!fastLane && toolDefs.length > 0) {
-    try {
-      const toolSchemaForMapper = toolDefs.map(td => ({
-        name: td?.schema?.function?.name || '',
-        description: td?.schema?.function?.description || '',
-        parameters: td?.schema?.function?.parameters || {}
-      })).filter(t => t.name);
-      const toolSchema = getToolSchema(toolSchemaForMapper);
-      if (toolSchema.tools.length > 0) {
-        const extractedFacts = await extractStructuredFacts(llmUserPrompt, toolSchemaForMapper);
-        if (extractedFacts.length > 0) {
-          const mappedCalls = mapFactsToToolCalls(extractedFacts, toolSchema);
-          const validCalls = mappedCalls.filter(c => c.valid);
-          const invalidCalls = mappedCalls.filter(c => !c.valid);
-          if (invalidCalls.length > 0) {
-            console.warn(`[schema-mapper] ${invalidCalls.length} invalid tool calls rejected: ${invalidCalls.map(c => `${c.tool}: ${c.violations.join(', ')}`).join('; ')}`);
-          }
-          if (workspace) {
-            setPartition(workspace, 'B_work', { schemaMappedCalls: validCalls.length, invalidCalls: invalidCalls.length });
-          }
-        }
-      }
-    } catch (smErr) {
-      console.warn('[schema-mapper] extraction failed:', smErr.message);
     }
   }
 
@@ -1644,12 +1897,17 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
       : null);
     const result = await runAgentWithFallback(runtimeAgent, systemPrompt, llmUserPrompt, toolDefs, {
       requestedModel: options.requestedModel || resolution.requestedModel || null,
-      preferredModel: options.preferredModel || modelPreference.model || null,
+      preferredModel: options.preferredModel || preferredModelId,
       strictRequestedModel: !!options.strictRequestedModel,
       modelPlan: Array.isArray(options.modelPlan)
         ? options.modelPlan
-        : [options.model, options.requestedModel, options.preferredModel, modelPreference.model, runtimeAgent.model].filter(Boolean),
+        : [options.model, options.requestedModel, options.preferredModel, preferredModelId, runtimeAgent.model].filter(Boolean),
       toolExecutionOptions: {
+        signal: options.signal,
+        nativeToolInputs,
+        canonicalMemories: canonicalContextRecall?.memories || [],
+        sourceMemoryIds: normalizeSourceMemoryIds([...producerMemoryInputs]),
+        depth,
         allowedTools: allowedToolNames,
         agentId: runtimeAgent.id,
         intent: options.intent || resolution.intent || 'chat',
@@ -1672,7 +1930,6 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           return getProofForSession(knowledgeGateState);
         },
         onToolResult: (event) => {
-          recordKnowledgeToolEvent(knowledgeGateState, event);
           try {
             const scratReflection = evaluateScratToolReflection(event, {
               runId,
@@ -1728,7 +1985,12 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
         if (warningSigns.length > 0) {
           console.warn(`[scheming-monitor] warning signs for ${runtimeAgent.id}: ${warningSigns.join(', ')}`);
         }
-        const auditResult = await auditTrajectory(runtimeAgent.id, trajectoryEvents, {});
+        const auditResult = await auditTrajectory(runtimeAgent.id, trajectoryEvents, {
+          nativeToolInputs,
+          provider: modelPreference.provider,
+          model: modelPreference.model,
+          executionContext: options.executionContext || options.credentialUseContext || null,
+        });
         if (auditResult.alert) {
           console.error(`[scheming-monitor] ALERT for ${runtimeAgent.id}: score=${auditResult.score}, signs=${auditResult.warning_signs.join(', ')}`);
           logEvent('hom', runtimeAgent.id, 'scheming_alert', `scheming:${runtimeAgent.id}`, {
@@ -1783,12 +2045,16 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
       runtimeAgent.id === 'smith-coder' && runtimeAgent.model.includes('qwen3-coder');
 
     if (needsReview && agents.has('backend')) {
+      const reviewInputs = createToolInputState([], nativeToolInputs);
       try {
         const reviewPrompt = `Peer review the following output for correctness, missed edge cases, and needed fixes. Respond with a concise review + fixes:\n\n${response}`;
         const review = await runAgent('backend', reviewPrompt, {
           skipAimos: true,
           autonomous: false,
           depth: depth + 1,
+          runId: randomUUID(),
+          parentRunId: runId,
+          nativeToolInputs: reviewInputs,
           executionContext: options.executionContext || options.credentialUseContext || null,
           securityParentEventId: options.securityParentEventId || null,
         });
@@ -1796,6 +2062,8 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
         response = `${response}\n\n${reviewerNote}`;
       } catch (e) {
         reviewerNote = `Review failed: ${e.message}`;
+      } finally {
+        mergeToolInputState(nativeToolInputs, reviewInputs);
       }
     }
 
@@ -1808,6 +2076,8 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
     }
 
     await addConversationTurn(conversationSessionKey, 'user', userPrompt, {
+      nativeToolInputs: requestToolInputs,
+      clearanceLevel: runtimeAgent.clearanceLevel,
       companyId: COMPANY,
       agentId: sourceAgentId,
       turnId: `${runId}:user`,
@@ -1817,6 +2087,8 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
       autonomousHousekeeper: true,
     });
     await addConversationTurn(conversationSessionKey, 'assistant', response, {
+      nativeToolInputs,
+      clearanceLevel: runtimeAgent.clearanceLevel,
       companyId: COMPANY,
       agentId: sourceAgentId,
       turnId: `${runId}:assistant`,
@@ -1843,6 +2115,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
             tags: usedTools,
             observation: 'success',
             parentEventId: securityDecisionReceipt?.event_id || options._parentEventId || null,
+            nativeToolInputs,
           });
         }
       } catch { /* skill learning is best-effort */ }
@@ -1850,7 +2123,35 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
 
     // ─── F7 EVAL PROTOCOL: criteria-based confidence scoring ────────────────
     const heuristicConf = extractConfidence(response, 0, aimosContextPack.contextCompaction?.keptItems || 0);
-    const f7Confidence = await evaluateWithF7Protocol(runtimeAgent.id, taskType, heuristicConf, response);
+    let canonicalF7Memories = (canonicalContextRecall?.memories || [])
+      .filter((memory) => memory?.key === 'procedure_f7_evaluation_protocol');
+    if (!fastLane && !canonicalF7Memories.length && options.executionContext?.authSource === 'envelope') {
+      const f7Recall = await executeTool('aimos_recall', {
+        key: 'procedure_f7_evaluation_protocol',
+        limit: 1,
+        clearance_level: Math.min(12, Number(runtimeAgent.clearanceLevel || 1)),
+      }, runtimeAgent.id, {
+        executionContext: options.executionContext,
+        credentialUseContext: options.credentialUseContext || options.executionContext,
+        nativeToolInputs,
+        clearanceLevel: runtimeAgent.clearanceLevel,
+        runId,
+        userPrompt,
+        intent: options.intent || resolution.intent || taskType,
+        autonomous: options.autonomous === true,
+      });
+      if (f7Recall?.error || !f7Recall?.recall_receipt) {
+        throw new Error('canonical_f7_protocol_recall_failed');
+      }
+      canonicalF7Memories = f7Recall.memories || [];
+    }
+    const f7Confidence = await evaluateWithF7Protocol(
+      runtimeAgent.id,
+      taskType,
+      heuristicConf,
+      response,
+      canonicalF7Memories,
+    );
     // ─── Feature 10: Antifragile Confidence Calibration ──────────────────────
     const calibrationFactor = await getCalibrationFactor(runtimeAgent.id, taskType);
     const finalConfidence = Math.max(0.05, Math.min(0.99, f7Confidence * calibrationFactor));
@@ -2009,11 +2310,12 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
             agent_id: runtimeAgent.id,
             key: chainKey,
             value: chainValue,
-            scope: 'system',
+            scope: 'private',
             memory_type: 'reasoning_chain',
-            clearance_level: 3,
+            clearance_level: 12,
+            data_class: 'restricted',
             source: 'agent-runner',
-          });
+          }, { nativeToolInputs });
         }
       } catch { /* reasoning capture is best-effort */ }
     }
@@ -2035,11 +2337,12 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           agent_id: runtimeAgent.id,
           key: stateKey,
           value: stateValue,
-          scope: 'system',
+          scope: 'private',
           memory_type: 'reasoning_state',
-          clearance_level: 3,
+          clearance_level: 12,
+          data_class: 'restricted',
           source: 'agent-runner',
-        });
+        }, { nativeToolInputs });
       } catch (err) { console.warn(`[agent-runner] reasoning state write failed: ${err.message}`); }
     }
 
@@ -2104,7 +2407,8 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
       confidence: finalConfidence,
       latencyMs: runEndTime - runStartTime,
       promptSnippet: String(userPrompt).slice(0, 120),
-      parentEventId: options._parentEventId || null
+      parentEventId: options._parentEventId || null,
+      nativeToolInputs,
     });
 
     const fallbackComparisonModel = resolution.primaryModel || runtimeAgent.model;
@@ -2215,6 +2519,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           tags: ['lifelong_learning', taskType],
           observation: 'success',
           parentEventId: _successTraceEvent || securityDecisionReceipt?.event_id || options._parentEventId || null,
+          nativeToolInputs,
         });
       } catch { /* skill deposit is best-effort */ }
     }
@@ -2233,7 +2538,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
 
     // ─── SENGE #1: PERSONAL MASTERY — self-reflection after run ─────────
     try {
-      await selfReflect(runtimeAgent.id);
+      await selfReflect(runtimeAgent.id, { nativeToolInputs });
     } catch { /* self-reflection is best-effort */ }
 
     // ─── AFTER-ACTION REVIEW ─────────────────────────────────────────────────
@@ -2245,13 +2550,14 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           taskType,
           confidence: finalConfidence,
           model: executedModel,
-          latencyMs: runEndTime - runStartTime
+          latencyMs: runEndTime - runStartTime,
+          nativeToolInputs,
         });
       } catch { /* AAR is best-effort */ }
     }
 
     // ─── Phase 7 wiring: learning + observe post-run hooks ─────────────────
-    try { await runQualityLoop(String(response || '').slice(0, 500)); } catch (e) { console.warn('[agent-runner] batch reflection failed (non-fatal):', e.message?.slice(0, 80)); }
+    try { await runQualityLoop(String(response || '').slice(0, 500), undefined, COMPANY, { nativeToolInputs, subjectAgentId: runtimeAgent.id }); } catch (e) { console.warn('[agent-runner] batch reflection failed (non-fatal):', e.message?.slice(0, 80)); }
     try { await computeOverallConsistency([]); } catch (e) { console.warn('[agent-runner] cognitive consistency check failed (non-fatal):', e.message?.slice(0, 80)); }
     try { await reflectOnTrajectory([{ taskType, model: executedModel, confidence: finalConfidence }]); } catch (e) { console.warn('[agent-runner] reflection finetuner failed (non-fatal):', e.message?.slice(0, 80)); }
     try { await trackSessionEnergy(conversationSessionKey || `session_${runtimeAgent.id}_${runStartTime}`, 0); } catch (e) { console.warn('[agent-runner] energy tracking failed (non-fatal):', e.message?.slice(0, 80)); }
@@ -2299,7 +2605,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           for (const m of String(response).matchAll(pat)) { if (m[1]) facts.push(m[1].trim()); }
           if (facts.length >= 5) break;
         }
-        if (facts.length > 0) await updateWorkingContext(runtimeAgent.id, facts.join('\n'));
+        if (facts.length > 0) await updateWorkingContext(runtimeAgent.id, facts.join('\n'), nativeToolInputs);
       } catch { /* best-effort */ }
     }
 
@@ -2331,11 +2637,12 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
             agent_id: runtimeAgent.id,
             key: knowledgeKey,
             value: knowledgeValue,
-            scope: 'system',
+            scope: 'private',
             memory_type: 'tacit_knowledge',
-            clearance_level: 5,
+            clearance_level: 12,
+            data_class: 'restricted',
             source: 'agent-runner',
-          });
+          }, { nativeToolInputs });
         }
       } catch { /* cortex extraction is best-effort */ }
     }
@@ -2356,11 +2663,12 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
             type: 'low_confidence',
             timestamp: new Date().toISOString()
           }),
-          scope: 'system',
+          scope: 'private',
           memory_type: 'shared_failure',
-          clearance_level: 3,
+          clearance_level: 12,
+          data_class: 'restricted',
           source: 'agent-runner',
-        });
+        }, { nativeToolInputs });
       } catch { /* soft failure tracking is best-effort */ }
     }
 
@@ -2372,7 +2680,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           taskType,
           promptSnippet: String(userPrompt).slice(0, 150),
           confidence: finalConfidence
-        }, { messageType: 'directive' });
+        }, { messageType: 'directive' }, { nativeToolInputs });
       } catch { /* messaging is best-effort */ }
       // Phase 4: Wire DIG auto-healing into delegation delivery
       try {
@@ -2393,7 +2701,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           type: 'escalation',
           reason: `Low confidence ${finalConfidence.toFixed(2)} on ${taskType}`,
           promptSnippet: String(userPrompt).slice(0, 150)
-        }, { messageType: 'escalation' });
+        }, { messageType: 'escalation' }, { nativeToolInputs });
       } catch { /* messaging is best-effort */ }
       // Phase 4: Wire DIG auto-healing into escalation delivery
       try {
@@ -2460,9 +2768,12 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
       const continuation = detectContinuationSignal(response, mergedIntentions, finalConfidence);
       if (continuation) {
         console.info(`[agent-runner:chain] Chaining run for ${runtimeAgent.id} (depth ${chainDepth + 1}/${MAX_CHAIN_DEPTH}), source: ${continuation.source}`);
+        const chainInputs = createToolInputState([], nativeToolInputs);
         try {
           chainResult = await runAgent(runtimeAgent.id, continuation.prompt, {
             ...options,
+            runId: randomUUID(),
+            nativeToolInputs: chainInputs,
             depth: depth + 1,
             _chainDepth: chainDepth + 1,
             _chainSource: continuation.source,
@@ -2471,6 +2782,8 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           });
         } catch (chainErr) {
           console.warn(`[agent-runner:chain] Chain run failed: ${chainErr.message}`);
+        } finally {
+          mergeToolInputState(nativeToolInputs, chainInputs);
         }
       }
     }
@@ -2649,6 +2962,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
         : null,
       response,
       delegatedTo,
+      origin_inputs: readToolInputState(nativeToolInputs),
       explanation: explanationArtifact
         ? {
             id: explanationArtifact.explanation_id,
@@ -2777,7 +3091,8 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
       latencyMs: runEndTime - runStartTime,
       error: err?.message,
       promptSnippet: String(userPrompt).slice(0, 120),
-      parentEventId: options._parentEventId || null
+      parentEventId: options._parentEventId || null,
+      nativeToolInputs,
     });
 
     // ─── LIFELONG LEARNING: record failure for skill tracking ───────────────
@@ -2794,6 +3109,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           tags: ['lifelong_learning', 'failure', failTaskType],
           observation: 'failure',
           parentEventId: _errorTraceEvent || options._parentEventId || null,
+          nativeToolInputs,
         });
       } catch { /* skill fail tracking is best-effort */ }
     }
@@ -2806,7 +3122,7 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           error: err?.message || String(err),
           taskType: failTaskType,
           promptSnippet: String(userPrompt).slice(0, 150)
-        }, { messageType: 'report' });
+        }, { messageType: 'report' }, { nativeToolInputs });
       } catch { /* messaging is best-effort */ }
       // Phase 4: Wire DIG auto-healing into failure escalation delivery
       try {
@@ -2835,11 +3151,12 @@ Use these as runtime constraints only. Do not claim quantization, learned schedu
           prompt_hint: String(userPrompt).slice(0, 100),
           timestamp: new Date().toISOString()
         }),
-        scope: 'system',
+        scope: 'private',
         memory_type: 'shared_failure',
-        clearance_level: 3,
+        clearance_level: 12,
+        data_class: 'restricted',
         source: 'agent-runner',
-      });
+      }, { nativeToolInputs });
     } catch { /* team learning write is best-effort */ }
 
     // ─── Phase 7 wiring: error-path learning hooks ──────────────────────────

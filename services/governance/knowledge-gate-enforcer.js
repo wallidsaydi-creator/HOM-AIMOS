@@ -17,6 +17,8 @@
 
 // Knowledge Gate retired 2026-07-07 — gating functions removed; diagnostics below are pure-data (no DB/event-ledger imports).
 
+import { memoryCreditValue } from '../security/protocol/memory-credit.js';
+
 const ALLOWED_SOURCE_TYPES = [
   'tacit_knowledge',
   'procedural',
@@ -33,7 +35,8 @@ export function buildSourceEvidenceRequirements({
   contradictions = [],
 } = {}) {
   const evidenceRows = Array.isArray(rows) ? rows : [];
-  const topCredit = evidenceRows.reduce((max, row) => Math.max(max, Number(row.credit_score || 0)), 0);
+  const credits = evidenceRows.map(memoryCreditValue).filter(value => value !== null);
+  const topCredit = credits.length ? Math.max(...credits) : null;
   const hasCitation = evidenceRows.some((row) => row.source || row.key);
   const isArchitectureSensitive = /\b(architecture|security|governance|memory|recall|write|delete|unlearn|ranking|calibration)\b/i
     .test(`${component} ${proposedChange?.description || ''}`);
@@ -51,7 +54,7 @@ export function buildSourceEvidenceRequirements({
     allowed_memory_types: ALLOWED_SOURCE_TYPES,
     citation_present: hasCitation,
     contradiction_count: Array.isArray(contradictions) ? contradictions.length : 0,
-    top_source_confidence: Number(topCredit.toFixed(3)),
+    top_source_reported_usefulness: topCredit == null ? null : Number(topCredit.toFixed(3)),
     high_impact_change: isArchitectureSensitive,
     status: evidenceRows.length >= (isArchitectureSensitive ? 2 : 1) && hasCitation && !contradictions.length
       ? 'source_requirements_satisfied'

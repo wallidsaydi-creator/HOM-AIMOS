@@ -1,15 +1,14 @@
 import { AIMOS_COMPANY_ID } from '../services/core/runtime-config.js';
 import express from 'express';
 import {
-  imessageSend,
   imessageSearchContact,
   imessageListChats,
-  imessageRequestAccess,
   listIntegrationStatus,
 } from '../services/integrations/integration-tools.js';
 import { peekCachedCredential } from '../services/security/credential-cache.js';
 import { systemConfigStore } from '../services/security/system-config-store.js';
-import { telegramSendMessage } from '../services/integrations/telegram-tools.js';
+import { executeTool } from '../services/orchestration/tool-registry.js';
+import { requireCapability } from '../services/security/require-capability.js';
 
 const router = express.Router();
 
@@ -61,24 +60,22 @@ router.get('/status', async (_req, res, next) => {
   }
 });
 
-router.post('/telegram/send', async (req, res, next) => {
+router.post('/telegram/send', requireCapability('email'), async (req, res, next) => {
   const chatId = String(req.body?.chat_id || systemConfigStore.readConfigString('TELEGRAM_CHAT_ID') || '').trim();
   const text = String(req.body?.text || '').trim();
 
   if (!chatId || !text) return res.status(400).json({ success: false, error: 'chat_id and text are required' });
 
   try {
-    const payload = await telegramSendMessage({
-      chatId,
+    const payload = await executeTool('telegram_send', {
+      chat_id: chatId,
       text,
-      useContext: {
-        actorAgentId: req.executionContext?.actorAgentId,
-        requestReceiptId: req.executionContext?.requestReceiptId,
-        requestReceiptMutationHash: req.executionContext?.requestReceiptMutationHash,
-        requestAdmissionEventId: req.executionContext?.requestAdmissionEventId,
-        requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash,
-      },
+      parse_mode: null,
+    }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
     });
+    if (payload?.blocked || payload?.requiresApproval) return res.status(403).json(payload);
     res.json({ success: true, message: payload.result || payload });
   } catch (error) {
     error.statusCode = 500;
@@ -87,10 +84,16 @@ router.post('/telegram/send', async (req, res, next) => {
 });
 
 // Request Automation permission — first call triggers macOS TCC prompt
-router.post('/imessage/request-access', async (req, res, next) => {
+router.post('/imessage/request-access', requireCapability('email'), async (req, res, next) => {
   try {
-    const chatCount = await imessageRequestAccess(req.executionContext || {});
-    res.json({ success: true, connected: true, chatCount });
+    const result = await executeTool('imessage_request_access', {
+      request_access: true,
+    }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
+    });
+    if (result?.blocked || result?.requiresApproval) return res.status(403).json(result);
+    res.json({ ...result, connected: result?.success === true });
   } catch (err) {
     err.statusCode = 500;
     next(err);
@@ -109,11 +112,15 @@ router.get('/imessage/chats', async (req, res, next) => {
 });
 
 // Send a message
-router.post('/imessage/send', async (req, res, next) => {
+router.post('/imessage/send', requireCapability('email'), async (req, res, next) => {
   const { to, message } = req.body || {};
   if (!to || !message) return res.status(400).json({ error: 'to and message required' });
   try {
-    const result = await imessageSend({ to, message }, req.executionContext || {});
+    const result = await executeTool('imessage_send', { to, message }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
+    });
+    if (result?.blocked || result?.requiresApproval) return res.status(403).json(result);
     res.json(result);
   } catch (err) {
     err.statusCode = 500;

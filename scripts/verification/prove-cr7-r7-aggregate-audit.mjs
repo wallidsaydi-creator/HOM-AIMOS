@@ -49,7 +49,7 @@ export function proveCr7R7AggregateAudit() {
   const manifest = JSON.parse(read('hom-architecture-manifest.json'));
   const open = census.effects.filter((effect) => effect.ownership_status === 'OPEN_UNRECONCILED');
   const statusTotal = Object.values(census.by_ownership_status).reduce((sum, count) => sum + Number(count), 0);
-  assert(census.effect_site_count === 104 && census.unclassified_effect_site_count === 0, 'census_totality');
+  assert(census.effect_site_count === 103 && census.unclassified_effect_site_count === 0, 'census_totality');
   assert(open.length === 0 && statusTotal === census.effect_site_count, 'effect_partition');
   assert(r1.verdict_counts.ATOMIC === 23 && r1.verdict_counts.COMPLETE_START_TERMINAL === 14
     && r1.verdict_counts.PARTIAL === 0 && r1.verdict_counts.OPEN === 0, 'r1_ownership');
@@ -58,8 +58,10 @@ export function proveCr7R7AggregateAudit() {
   assert(r4.current_open_database_effect_count === 0 && r4.paper_authority.formulas_changed === false, 'r4_operational');
   assert(r5.current_open_effect_count === 0 && r5.paper_authority.formulas_changed === false, 'r5_material');
   assert(r6.reconstruction.exactSetEquality === true && r6.boot_recovery_precedes_listen === true, 'r6_recovery');
-  assert(genesis.version === 26 && genesis.corpusRoot === template.genesis_corpus.corpus_root, 'genesis_authority');
-  assert(services.serviceCount === 295 && services.digest === template.service_inventory.census_sha256
+  assert(genesis.version === template.genesis_corpus.version
+    && genesis.corpusRoot === template.genesis_corpus.corpus_root, 'genesis_authority');
+  assert(services.serviceCount === template.service_inventory.counted_service_files
+    && services.digest === template.service_inventory.census_sha256
     && services.digest === manifest.service_inventory.census_sha256, 'service_inventory');
 
   const isolatedRunner = read('scripts/test/run-isolated-security.mjs');

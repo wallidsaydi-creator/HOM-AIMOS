@@ -59,12 +59,14 @@
 
 import { createHash } from 'node:crypto';
 import { contentHash } from './identity-chain.js';
+import { projectSignedEventLogMemory } from '../write/canonical-save-contract.js';
 import {
   canonicalJson,
   verifyStoredPayloadSig,
   verifyStoredPayloadSigV2,
   verifyStoredPayloadSigWithContext,
   verifyStoredPayloadSigWithEnvelopeClaims,
+  verifyStoredPayloadSigWithRequestTarget,
   verifyCertChain,
   verifyAgentRevocationProof,
   resolveCertificateAuthorityPubkey,
@@ -75,6 +77,8 @@ import {
   retainedProvenanceMerkleRoot,
 } from './protocol/mutmem-protocol.js';
 import { signedMemoryValueMatchesRetained } from './protocol/memory-value.js';
+import { buildCompactionSavePayload } from './protocol/compaction-record.js';
+import { buildPostCompactionSummaryPayload, postCompactionInputFromMemory } from './protocol/post-compaction-record.js';
 import {
   CONTENT_STATE_OCCURRENCE_V3,
   computeLegacyOccurrenceReference,
@@ -661,8 +665,35 @@ function signedSessionFinalizeIntent(body, row) {
 }
 
 function signedSaveIntent(body, row) {
-  const signedPath = String(row.signed_path || '');
+  // Route selection is pathname-based; signature verification keeps the full target.
+  const signedPath = String(row.signed_path || '').split('?')[0];
   if (signedPath === '/aimos/save' || !signedPath) return body;
+  if (signedPath === '/aimos/log-event') {
+    try {
+      const intent = projectSignedEventLogMemory(body, {
+        companyId: row.live_company_id,
+        agentId: row.provenance_agent_id,
+        signedTs: row.ts_signed,
+      });
+      return intent.agent_id === row.live_agent_id && intent.key === row.live_key
+        && signedMemoryValueMatchesRetained(intent.value, row.live_value) ? intent : null;
+    } catch { return null; }
+  }
+  if (signedPath === '/aimos/compaction/save' || signedPath === '/aimos/compaction/post') {
+    try {
+      const agentId = row.provenance_agent_id;
+      if ((body.agent_id && body.agent_id!==agentId)
+        || (body.company_id && body.company_id!==row.live_company_id)) return null;
+      const input = signedPath === '/aimos/compaction/save'
+        ? {...body,agent_id:agentId,origin:body.origin || 'app_context_window'}
+        : postCompactionInputFromMemory(body,row.compaction_source_memory,agentId);
+      const payload = signedPath === '/aimos/compaction/save'
+        ? buildCompactionSavePayload(input) : buildPostCompactionSummaryPayload(input);
+      if (!payload.validation.ok || payload.key!==row.live_key
+        || !signedMemoryValueMatchesRetained(payload.value,row.live_value)) return null;
+      return {company_id:row.live_company_id,agent_id:agentId,key:payload.key,value:payload.value};
+    } catch { return null; }
+  }
   if (signedPath === '/aimos/session/turn') return signedSessionTurnIntent(body, row);
   if (signedPath === '/aimos/session/finalize') return signedSessionFinalizeIntent(body, row);
   if (signedPath === '/aimos/mcp/tools/call') {
@@ -752,14 +783,15 @@ export function verifyRecallEvidenceRow(row = {}) {
   }
   const provenanceSigForm = Number(row.sig_form_version || 1);
   const requestSigForm = Number(row.request_sig_form || 1);
+  if (requestSigForm === 5 && provenanceSigForm === 2) return { valid: false, reason: 'request_signature_form_invalid' };
   const signedClaims = parseJsonObject(row.signed_claims);
   if (Boolean(row.is_genesis) !== (row.prev_mutation_hash == null)) {
     return { valid: false, reason: 'provenance_genesis_shape_invalid' };
   }
-  if (['T2', 'T3'].includes(String(row.identity_tier)) && requestSigForm !== 4) {
+  if (['T2', 'T3'].includes(String(row.identity_tier)) && ![4, 5].includes(requestSigForm)) {
     return { valid: false, reason: 'elevated_provenance_requires_form4' };
   }
-  if (requestSigForm === 4) {
+  if (requestSigForm === 4 || (requestSigForm === 5 && ['T2', 'T3'].includes(String(row.identity_tier)))) {
     const prevClaim = signedClaims?.prev_chain_hash;
     let prevBytes = null;
     try { prevBytes = Buffer.from(String(prevClaim || ''), 'base64url'); } catch { /* malformed below */ }
@@ -776,8 +808,9 @@ export function verifyRecallEvidenceRow(row = {}) {
     signature = verifyStoredPayloadSigV2(
       row.signer_pubkey, body, nonce, signedTs, originatedAt, sigB64u,
     );
-  } else if (requestSigForm === 4) {
-    signature = verifyStoredPayloadSigWithEnvelopeClaims(
+  } else if ([4, 5].includes(requestSigForm)) {
+    const verifyRequest = requestSigForm === 5 ? verifyStoredPayloadSigWithRequestTarget : verifyStoredPayloadSigWithEnvelopeClaims;
+    signature = verifyRequest(
       row.signer_pubkey,
       body,
       row.signed_method,
@@ -997,7 +1030,7 @@ export function createMemoryProvenanceLedger(deps = {}) {
     return _agentValidFromColumn;
   }
 
-  async function getLatestOccurrenceReference(memoryId, companyId, client) {
+  async function getLatestOccurrenceRow(memoryId, companyId, client) {
     const run = runner(client);
     const result = await run(
       `SELECT provenance_id, memory_id, agent_id, agent_id AS provenance_agent_id,
@@ -1008,16 +1041,20 @@ export function createMemoryProvenanceLedger(deps = {}) {
       [memoryId],
     );
     const ordered = orderProvenanceRowsByOccurrenceTopology(result.rows || [], companyId);
-    if (!ordered.length) return null;
-    return occurrenceReferenceForProvenanceRow(ordered[ordered.length - 1], companyId);
+    return ordered[ordered.length - 1] || null;
+  }
+
+  async function getLatestOccurrenceReference(memoryId, companyId, client) {
+    const row=await getLatestOccurrenceRow(memoryId,companyId,client);
+    return row ? occurrenceReferenceForProvenanceRow(row,companyId) : null;
   }
 
   async function getLatestMutationHash(memoryId, client) {
     const run = runner(client);
     const legacyTopology = await run(
-      `SELECT mutation_hash
+      `SELECT provenance_id,mutation_hash
          FROM (
-           SELECT candidate.mutation_hash
+           SELECT candidate.provenance_id,candidate.mutation_hash
              FROM aimos_memory_provenance candidate
             WHERE candidate.memory_id = $1
               AND NOT EXISTS (
@@ -1034,9 +1071,10 @@ export function createMemoryProvenanceLedger(deps = {}) {
     if (!legacyTopology || !Array.isArray(legacyTopology.rows)) {
       throw new Error('provenance_topology_read_invalid');
     }
-    if (legacyTopology.rows.length === 0) return { prevMutationHash: null, isGenesis: true };
+    if (legacyTopology.rows.length === 0) return { prevMutationHash: null, isGenesis: true, predecessorKind: 'genesis', predecessorId: null };
     if (legacyTopology.rows.length === 1) {
-      return { prevMutationHash: legacyTopology.rows[0].mutation_hash, isGenesis: false };
+      return { prevMutationHash: legacyTopology.rows[0].mutation_hash, isGenesis: false,
+        predecessorKind: 'mutation_hash', predecessorId: String(legacyTopology.rows[0].provenance_id) };
     }
     // A mixed v1/v2/v3 stream has two apparent heads under the legacy hash
     // namespace because the first v3 predecessor is a derived occurrence
@@ -1044,13 +1082,14 @@ export function createMemoryProvenanceLedger(deps = {}) {
     // one indexed query.
     const memory = await run('SELECT company_id FROM aimos_memories WHERE id = $1', [memoryId]);
     if (!memory?.rows?.[0]) throw new Error('provenance_memory_missing');
-    const latest = await getLatestOccurrenceReference(
+    const latestRow = await getLatestOccurrenceRow(
       memoryId,
       memory.rows[0].company_id,
       client,
     );
-    if (!latest) throw new Error('provenance_occurrence_topology_no_head');
-    return { prevMutationHash: Buffer.from(latest, 'hex'), isGenesis: false };
+    if (!latestRow) throw new Error('provenance_occurrence_topology_no_head');
+    return { prevMutationHash: Buffer.from(occurrenceReferenceForProvenanceRow(latestRow,memory.rows[0].company_id), 'hex'),
+      isGenesis: false, predecessorKind: 'occurrence_ref', predecessorId: String(latestRow.provenance_id) };
   }
 
   function _validate(args) {
@@ -1064,10 +1103,11 @@ export function createMemoryProvenanceLedger(deps = {}) {
     if (typeof nonce !== 'string' || nonce.length === 0) return 'malformed_input';
     if (!Buffer.isBuffer(sigBytes) || sigBytes.length !== 64) return 'malformed_input';
     if (identityTier !== 'T1' && identityTier !== 'T2' && identityTier !== 'T3') return 'malformed_input';
-    if (![1, 3, 4].includes(requestSigForm)) return 'malformed_input';
+    if (![1, 3, 4, 5].includes(requestSigForm)) return 'malformed_input';
     if (requestSigForm === 1 && (signedMethod !== null || signedPath !== null || signedClaims !== null)) return 'malformed_input';
     if (requestSigForm === 3 && (!signedMethod || !signedPath || signedClaims !== null)) return 'malformed_input';
     if (requestSigForm === 4 && (!signedMethod || !signedPath || !signedClaims?.prev_chain_hash)) return 'malformed_input';
+    if (requestSigForm === 5 && (!signedMethod || !signedPath || !signedClaims)) return 'malformed_input';
     // BIND is the housekeeper commit receipt that cryptographically attaches a
     // request signature to the database-generated memory id and live snapshot.
     // Default 'SAVE' (backward compat with /save path which passes no eventType).
@@ -1095,8 +1135,9 @@ export function createMemoryProvenanceLedger(deps = {}) {
     // a non-NULL value is enforced against agent_identity(agent_id, valid_from).
     const includeEpoch = await hasAgentValidFromColumn((sql, params = []) => client.query(sql, params));
     const validFromValue = agentValidFrom || null;
+    let insertRow = null;
     if (includeEpoch) {
-      await client.query(
+      insertRow = (await client.query(
         `INSERT INTO aimos_memory_provenance
             (provenance_id, memory_id, agent_id, agent_valid_from, cert_fingerprint, content_hash,
              mutation_hash, prev_mutation_hash, ts_signed, nonce, sig,
@@ -1104,7 +1145,8 @@ export function createMemoryProvenanceLedger(deps = {}) {
              event_type, body_json, live_content_hash, binding_schema_version,
              memory_originated_at, request_sig_form, signed_method, signed_path, signed_claims,
              sig_form_version)
-         VALUES (COALESCE($18::uuid, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, false, $13, $14, $15, $16, $17, $20, $21, $22, $23, $19)`,
+         VALUES (COALESCE($18::uuid, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, false, $13, $14, $15, $16, $17, $20, $21, $22, $23, $19)
+         RETURNING provenance_id, content_hash`,
         [
           memoryId, agentId, validFromValue, certFingerprint, cHash,
           mutationHash, prevMutationHash, signedTs, nonce, sigBytes,
@@ -1118,9 +1160,9 @@ export function createMemoryProvenanceLedger(deps = {}) {
           requestSigForm, signedMethod, signedPath,
           signedClaims ? JSON.stringify(signedClaims) : null,
         ]
-      );
+      )).rows[0] || null;
     } else {
-      await client.query(
+      insertRow = (await client.query(
         `INSERT INTO aimos_memory_provenance
             (provenance_id, memory_id, agent_id, cert_fingerprint, content_hash,
              mutation_hash, prev_mutation_hash, ts_signed, nonce, sig,
@@ -1128,7 +1170,8 @@ export function createMemoryProvenanceLedger(deps = {}) {
              event_type, body_json, live_content_hash, binding_schema_version,
              memory_originated_at, request_sig_form, signed_method, signed_path, signed_claims,
              sig_form_version)
-         VALUES (COALESCE($17::uuid, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false, $12, $13, $14, $15, $16, $19, $20, $21, $22, $18)`,
+         VALUES (COALESCE($17::uuid, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, false, $12, $13, $14, $15, $16, $19, $20, $21, $22, $18)
+         RETURNING provenance_id, content_hash`,
         [
           memoryId, agentId, certFingerprint, cHash,
           mutationHash, prevMutationHash, signedTs, nonce, sigBytes,
@@ -1142,8 +1185,14 @@ export function createMemoryProvenanceLedger(deps = {}) {
           requestSigForm, signedMethod, signedPath,
           signedClaims ? JSON.stringify(signedClaims) : null,
         ]
-      );
+      )).rows[0] || null;
     }
+    // OB-2: return the committed row identity so the origin binding can
+    // reference the exact occurrence. Both INSERT variants use RETURNING.
+    return {
+      provenanceId: insertRow?.provenance_id || null,
+      contentHash: insertRow?.content_hash || null,
+    };
   }
 
   // ─── commitProvenance ──────────────────────────────────────────────────────
@@ -1231,7 +1280,7 @@ export function createMemoryProvenanceLedger(deps = {}) {
       const { prevMutationHash, isGenesis } = await getLatestMutationHash(memoryId, client);
       const mutationHash = computeMutationHash(cHash, prevMutationHash, nonce, signedTs);
       try {
-        await _insert(client, {
+        const inserted = await _insert(client, {
           memoryId, agentId, agentValidFrom, certFingerprint, cHash,
           mutationHash, prevMutationHash, signedTs, nonce, sigBytes,
           identityTier: storedIdentityTier, isGenesis, eventType, bodyJson, liveContentHash,
@@ -1239,7 +1288,10 @@ export function createMemoryProvenanceLedger(deps = {}) {
           requestSigForm, signedMethod, signedPath, signedClaims,
         });
         // No COMMIT here — the caller's withTransaction owns the boundary.
-        return { ok: true, contentHash: cHash, mutationHash, prevMutationHash, isGenesis };
+        return {
+          ok: true, contentHash: cHash, mutationHash, prevMutationHash, isGenesis,
+          provenanceId: inserted?.provenanceId || null,
+        };
       } catch (err) {
         // Do NOT swallow: the injected transaction is now aborted and the caller
         // must roll it back. Map the known unique-violations to reasons; rethrow
@@ -1854,12 +1906,37 @@ export function createMemoryProvenanceLedger(deps = {}) {
     const verified = new Set();
     const proofs = new Map();
     const rejected = [];
+    const compactionSources = new Map();
     for (const memoryId of uniqueIds) {
       const rows = rowsById.get(memoryId) || [];
       const base = rows[0];
       if (!base) {
         rejected.push({ memory_id: memoryId, reason: 'memory_missing' });
         continue;
+      }
+      if (rows.some(row => row.event_type==='SAVE' && row.signed_path?.split('?')[0]==='/aimos/compaction/post')) {
+        // Verify the immutable full source before reconstructing the signed
+        // reference command. A handoff is never its own source authority.
+        const record = parseJsonObject(base.live_value);
+        const sourceId = record?.source?.memory_id;
+        if (record?.kind!=='post_compaction_summary_save' || !/^[0-9a-f-]{36}$/.test(sourceId || '')) {
+          rejected.push({memory_id:memoryId,reason:'post_compaction_source_evidence_invalid'});continue;
+        }
+        if (!compactionSources.has(sourceId)) {
+          const source = (await run(`SELECT id::text AS memory_id,key,value,memory_type,content_hash
+            FROM aimos_memories WHERE id=$1 AND company_id=$2`,[sourceId,base.live_company_id])).rows[0];
+          const sourceRecord = parseJsonObject(source?.value);
+          // This kind check bounds recursion to one full-record source; a
+          // handoff-to-handoff or self-reference is not a valid full source.
+          const sourceProof = sourceRecord?.kind==='compaction_save'
+            ? await verifyRecallEvidence({memoryIds:[sourceId],client}) : null;
+          compactionSources.set(sourceId,sourceProof?.verified.has(sourceId)
+            ? {memory_id:source.memory_id,key:source.key,value:source.value,memory_type:source.memory_type,
+              metadata:{content_hash:Buffer.from(source.content_hash).toString('hex')}} : null);
+        }
+        const source = compactionSources.get(sourceId);
+        if (!source) {rejected.push({memory_id:memoryId,reason:'post_compaction_source_evidence_invalid'});continue;}
+        for (const row of rows) row.compaction_source_memory=source;
       }
       if (!base.predecessor_valid
         || Number(base.successor_count) > 1
@@ -1925,7 +2002,6 @@ export function createMemoryProvenanceLedger(deps = {}) {
       const portableBindings = orderedRows.filter(
         (row) => row.event_type === 'BIND' && [3, 4].includes(Number(row.binding_schema_version)),
       );
-      if (!nodeFailure && portableBindings.length > 1) nodeFailure = 'portable_binding_multiple_current';
       const v3Binding = portableBindings.find(
         (row) => Number(row.binding_schema_version) === 3,
       ) || null;
@@ -1935,6 +2011,33 @@ export function createMemoryProvenanceLedger(deps = {}) {
       if (!nodeFailure && retainedAttestRows.length > 1) nodeFailure = 'retained_attestation_multiple';
       const retainedAttestRow = retainedAttestRows[0] || null;
       const retainedAttestIndex = retainedAttestRow ? orderedRows.indexOf(retainedAttestRow) : -1;
+      // A retained review can succeed a native v4 BIND; it cannot erase it or
+      // invent a second current authority. Both new nodes must be Housekeeper
+      // signed, adjacent in the no-fork chain, and cover the entire old prefix.
+      // The exact prefix/root/authority commitments are verified below.
+      const retainedBindingSuccessor = portableBindings.length === 2
+        && Number(portableBindings[0].binding_schema_version) === 4
+        && portableBindings[1] === v3Binding
+        && permitsLegacyPrefix
+        && retainedAttestRow?.provenance_agent_id === 'housekeeper'
+        && v3Binding.provenance_agent_id === 'housekeeper'
+        && new Date(v3Binding.agent_valid_from).getTime() === new Date(retainedAttestRow.agent_valid_from).getTime()
+        && v3Binding.cert_fingerprint === retainedAttestRow.cert_fingerprint
+        && orderedRows.indexOf(portableBindings[0]) < retainedAttestIndex
+        && orderedRows.indexOf(v3Binding) === retainedAttestIndex + 1
+        && buffersEqual(v3Binding.prev_mutation_hash, retainedAttestRow.mutation_hash);
+      if (!nodeFailure && portableBindings.length > 1 && !retainedBindingSuccessor) {
+        nodeFailure = 'portable_binding_multiple_current';
+      }
+      if (!nodeFailure && retainedBindingSuccessor && !verifyMemoryOriginBindingV4({
+        bindingSchemaVersion: 4,
+        eventType: portableBindings[0].event_type,
+        body: parseJsonObject(portableBindings[0].body_json),
+        memoryOriginatedAt: portableBindings[0].memory_originated_at,
+        liveCreatedAt: base.live_created_at,
+      }).valid) {
+        nodeFailure = 'retained_binding_original_timestamp_invalid';
+      }
       let legacyUnverifiedNodes = 0;
       const v3AuthorityByProvenance = new Map();
       if (!nodeFailure) {
@@ -2036,7 +2139,9 @@ export function createMemoryProvenanceLedger(deps = {}) {
           }
           const verification = verifyRecallEvidenceRow(row);
           if (!verification.valid) {
-            if (permitsLegacyPrefix && retainedAttestIndex >= 0 && index < retainedAttestIndex) {
+            if (permitsLegacyPrefix && retainedAttestIndex >= 0 && index < retainedAttestIndex
+              && (!retainedBindingSuccessor
+                || verification.reason === 'signed_save_intent_missing_or_ambiguous')) {
               legacyUnverifiedNodes += 1;
               continue;
             }
@@ -2044,6 +2149,9 @@ export function createMemoryProvenanceLedger(deps = {}) {
             break;
           }
         }
+      }
+      if (!nodeFailure && retainedBindingSuccessor && legacyUnverifiedNodes !== 1) {
+        nodeFailure = 'retained_binding_successor_reason_invalid';
       }
       if (nodeFailure) {
         rejected.push({ memory_id: memoryId, reason: nodeFailure });
@@ -2063,6 +2171,8 @@ export function createMemoryProvenanceLedger(deps = {}) {
           && attestationBody.retained_provenance_merkle_root === retainedRoot
           && Number(attestationBody.retained_provenance_node_count) === retainedPrefix.length
           && attestationBody.attested_predecessor_mutation_hash === retainedHead
+          && (!retainedBindingSuccessor || new Date(attestationBody.observed_memory_originated_at).getTime()
+            === new Date(base.live_created_at).getTime())
           && attestationBody.supersedes_id === (base.supersedes_id ? String(base.supersedes_id) : null)
           && attestationBody.supersession_event_id === (base.supersession_event_id == null ? null : Number(base.supersession_event_id))
           && attestationBody.predecessor_live_content_hash === (base.predecessor_live_content_hash
@@ -2086,6 +2196,7 @@ export function createMemoryProvenanceLedger(deps = {}) {
       }
       const saveRow = saveRows[0] || null;
       const bindingRow = bindingRows.find((row) => {
+        if (retainedBindingSuccessor && row !== v3Binding) return false;
         const body = parseJsonObject(row.body_json);
         if (!body) return false;
         const liveHashHex = Buffer.from(row.live_content_hash || []).toString('hex');
@@ -2180,7 +2291,9 @@ export function createMemoryProvenanceLedger(deps = {}) {
       const successorOccurrences = orderedRows.filter(
         (row) => Number(row.sig_form_version || 1) === 3,
       );
-      const occurrenceRow = successorOccurrences.at(-1) || saveRow || retainedAttestRow || bindingRow;
+      const occurrenceRow = successorOccurrences.at(-1)
+        || (retainedBindingSuccessor ? retainedAttestRow : saveRow)
+        || retainedAttestRow || bindingRow;
       const occurrenceAuthority = v3AuthorityByProvenance.get(String(occurrenceRow.provenance_id)) || null;
       const occurrenceSignedSessionId = occurrenceAuthority?.kind === 'verified_request'
         ? occurrenceAuthority.sessionBinding?.session_id
@@ -2228,7 +2341,9 @@ export function createMemoryProvenanceLedger(deps = {}) {
         binding_schema_version: Number(bindingRow.binding_schema_version),
         memory_originated_at: bindingRow.memory_originated_at
           ? new Date(bindingRow.memory_originated_at).toISOString()
-          : null,
+          : retainedBindingSuccessor
+            ? new Date(portableBindings[0].memory_originated_at).toISOString()
+            : null,
         historical_signature_status: retainedAttestRow
           ? 'retrospectively_attested'
           : 'original_save_verified',

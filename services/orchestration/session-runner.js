@@ -7,46 +7,139 @@
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { sessionMemoryOwner } from './session-memory-owner.js';
 import { logEvent, readVerifiedEventHistory } from '../observe/event-ledger.js';
+import { performance } from 'node:perf_hooks';
+import { beginServingWork } from '../runtime/serving-control.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 const MAX_CONCURRENT_RUNS = 6;
+// Admission policy, not retained-history limits: at most six waiting turns per
+// session and six waves of globally waiting work. Running capacity is unchanged.
+const MAX_QUEUED_PER_SESSION = MAX_CONCURRENT_RUNS;
+const MAX_QUEUED_RUNS = MAX_CONCURRENT_RUNS * MAX_CONCURRENT_RUNS;
+const MAX_QUEUE_WAIT_MS = 30_000;
 const CONVERSATION_TTL_MS = 5 * 60 * 1000;
 const CONVERSATION_MAX_TURNS = 20;
 const SESSION_TURNS_CHAR_BUDGET = 30_000;
-const MAX_RECOVERY_EVENTS = 100_000;
 export const AGENTPULSE_SOURCE = 'AgentPulse: A Continuous Multi-Signal Framework for Evaluating AI Agents in Deployment';
 export const AGENTICCACHE_SOURCE = 'AGENTICCACHE: Cache-Driven Asynchronous Planning for Embodied AI Agents';
 
 let activeRuns = 0;
-const waiters = [];
+const waiters = new Map();
 const conversationSessions = new Map();
-const sessionLaneTails = new Map();
+const sessionLanes = new Map();
+const readySessions = new Map();
+const idleWaiters = new Set();
+let admissionOpen = true;
 let cleanupTimer = null;
 
-async function acquireGlobalSlot() {
-  if (activeRuns < MAX_CONCURRENT_RUNS) {
-    activeRuns += 1;
-    return;
+function admissionError(code, statusCode = 503) {
+  return Object.assign(new Error(code), { code, statusCode, executionStarted: false });
+}
+
+function removeWaiting(entry) {
+  entry.lane.queue.delete(entry);
+  waiters.delete(entry);
+  clearTimeout(entry.timer);
+  entry.signal?.removeEventListener('abort', entry.cancel);
+}
+
+function refreshReady(lane) {
+  if (!lane.active && lane.queue.size) readySessions.set(lane.key, lane);
+  if (!lane.queue.size) {
+    readySessions.delete(lane.key);
+    if (!lane.active) sessionLanes.delete(lane.key);
   }
-
-  await new Promise((resolve) => waiters.push({ resolve, queuedAt: Date.now() }));
-  activeRuns += 1;
 }
 
-function releaseGlobalSlot() {
-  activeRuns = Math.max(0, activeRuns - 1);
-  const next = waiters.shift();
-  if (next?.resolve) next.resolve();
+function cancelWaiting(entry, error) {
+  if (!waiters.has(entry)) return;
+  removeWaiting(entry);
+  refreshReady(entry.lane);
+  entry.reject(error);
+  dispatchReady();
 }
 
-function getWaiterStats(now = Date.now()) {
-  if (!waiters.length) {
+function dispatchReady() {
+  while (admissionOpen && activeRuns < MAX_CONCURRENT_RUNS && readySessions.size) {
+    const lane = readySessions.values().next().value;
+    readySessions.delete(lane.key);
+    const entry = lane.queue.keys().next().value;
+    if (entry.signal?.aborted || performance.now() >= entry.deadlineAt) {
+      removeWaiting(entry);
+      entry.reject(admissionError(entry.signal?.aborted ? 'session_queue_cancelled' : 'session_queue_timed_out', 408));
+      refreshReady(lane);
+      continue;
+    }
+    removeWaiting(entry);
+    lane.active = true;
+    activeRuns += 1;
+    let released = false;
+    entry.resolve({
+      queueWaitMs: performance.now() - entry.queuedAt,
+      assertReady() {
+        if (!admissionOpen || entry.signal?.aborted) throw admissionError('session_queue_cancelled', 408);
+        if (performance.now() >= entry.deadlineAt) throw admissionError('session_queue_timed_out', 408);
+      },
+      release() {
+        if (released) throw new Error('session_slot_double_release');
+        released = true;
+        lane.active = false;
+        activeRuns -= 1;
+        refreshReady(lane);
+        dispatchReady();
+        if (!activeRuns && !waiters.size) for (const done of idleWaiters) done();
+      },
+    });
+  }
+}
+
+function acquireSessionSlot(companyId, sessionKey, signal, deadlineAt) {
+  if (!admissionOpen) return Promise.reject(admissionError('session_admission_draining'));
+  if (signal?.aborted) return Promise.reject(admissionError('session_queue_cancelled', 408));
+  const now = performance.now();
+  if (deadlineAt !== undefined && !Number.isFinite(deadlineAt)) return Promise.reject(admissionError('session_queue_deadline_invalid', 400));
+  const deadline = Math.min(now + MAX_QUEUE_WAIT_MS, deadlineAt ?? Infinity);
+  if (deadline <= now) return Promise.reject(admissionError('session_queue_timed_out', 408));
+  const key = JSON.stringify([companyId, sessionKey]);
+  const lane = sessionLanes.get(key) || { key, active: false, queue: new Map() };
+  if (waiters.size >= MAX_QUEUED_RUNS || lane.queue.size >= MAX_QUEUED_PER_SESSION) {
+    return Promise.reject(admissionError('session_queue_overloaded', 429));
+  }
+  sessionLanes.set(key, lane);
+  return new Promise((resolve, reject) => {
+    const entry = { lane, resolve, reject, queuedAt: now, deadlineAt: deadline, signal };
+    entry.cancel = () => cancelWaiting(entry, admissionError('session_queue_cancelled', 408));
+    entry.timer = setTimeout(() => cancelWaiting(entry, admissionError('session_queue_timed_out', 408)), Math.ceil(deadline - now));
+    signal?.addEventListener('abort', entry.cancel, { once: true });
+    lane.queue.set(entry, entry);
+    waiters.set(entry, entry);
+    refreshReady(lane);
+    dispatchReady();
+  });
+}
+
+export function stopSessionAdmission() {
+  admissionOpen = false;
+  for (const entry of waiters.values()) cancelWaiting(entry, admissionError('session_admission_draining'));
+  stopConversationSessionCleanup();
+}
+
+export function waitForSessionIdle() {
+  if (!activeRuns && !waiters.size) return Promise.resolve();
+  return new Promise(resolve => {
+    const done = () => { idleWaiters.delete(done); resolve(); };
+    idleWaiters.add(done);
+  });
+}
+
+function getWaiterStats(now = performance.now()) {
+  if (!waiters.size) {
     return {
       waitingOldestMs: 0,
       waitingAverageMs: 0
     };
   }
-  const waits = waiters
+  const waits = [...waiters.values()]
     .map((entry) => Number(now - Number(entry?.queuedAt || now)))
     .filter((value) => Number.isFinite(value) && value >= 0);
   const waitingOldestMs = waits.length ? Math.max(...waits) : 0;
@@ -106,6 +199,27 @@ function trimConversationTurns(turns = []) {
 export async function getConversationHistory(sessionKey, options = {}) {
   const key = normalizeSessionKey(sessionKey);
   let session = conversationSessions.get(key);
+  if (Array.isArray(options.canonicalMemories)) {
+    const canonicalized = sessionMemoryOwner.canonicalizeRetainedTurns
+      ? sessionMemoryOwner.canonicalizeRetainedTurns(options.canonicalMemories, key)
+      : null;
+    if (canonicalized?.canonical?.length) {
+      session = {
+        turns: canonicalized.canonical.map((turn) => ({
+          memory_id: String(turn.row.id),
+          role: turn.record.role,
+          content: turn.record.content,
+          at: turn.record.observed_at,
+        })),
+        lastActivityAt: nowMs(),
+      };
+      session.turns = trimConversationTurns(session.turns);
+      conversationSessions.set(key, session);
+    } else {
+      session = null;
+      conversationSessions.delete(key);
+    }
+  }
   if (!session && options.loadDurable !== false) {
     const durableTurns = await sessionMemoryOwner.loadVerifiedTurns({ session_id: key }, {
       companyId: options.companyId || COMPANY,
@@ -114,6 +228,7 @@ export async function getConversationHistory(sessionKey, options = {}) {
     if (durableTurns.length) {
       session = {
         turns: durableTurns.map((turn) => ({
+          memory_id: turn.memory_id,
           role: turn.role,
           content: turn.content,
           at: turn.observed_at,
@@ -130,7 +245,7 @@ export async function getConversationHistory(sessionKey, options = {}) {
   session.turns = turns;
   return turns
     .filter((turn) => turn && typeof turn.role === 'string' && typeof turn.content === 'string')
-    .map((turn) => ({ role: turn.role, content: turn.content }));
+    .map((turn) => ({ role: turn.role, content: turn.content, memory_id: turn.memory_id || null }));
 }
 
 export async function addConversationTurn(sessionKey, role, content, options = {}) {
@@ -156,10 +271,12 @@ export async function addConversationTurn(sessionKey, role, content, options = {
       agentId: options.agentId,
       requestAuthority: options.requestAuthority || null,
       autonomousHousekeeper: options.autonomousHousekeeper === true,
+      nativeToolInputs: options.nativeToolInputs || null,
     });
   }
   const session = ensureConversationSession(sessionKey);
   session.turns.push({
+    memory_id: persistence?.memory_id || null,
     role: normalizedRole,
     content: normalizedContent,
     at: observedAt,
@@ -219,7 +336,7 @@ export function buildSessionRunQueueDiagnostics({
 } = {}) {
   const waiterStats = getWaiterStats();
   const effectiveActiveRuns = activeRunsOverride == null ? activeRuns : Number(activeRunsOverride);
-  const effectiveWaitingRuns = waitingRunsOverride == null ? waiters.length : Number(waitingRunsOverride);
+  const effectiveWaitingRuns = waitingRunsOverride == null ? waiters.size : Number(waitingRunsOverride);
   const wait = Math.max(0, Number(queueWaitMs || waiterStats.waitingOldestMs || 0));
   const charPressure = Math.min(1, Math.max(0, Number(conversationCharCount || 0) / SESSION_TURNS_CHAR_BUDGET));
   const queuePressure = Math.min(1, Math.max(0, effectiveActiveRuns / MAX_CONCURRENT_RUNS));
@@ -264,34 +381,6 @@ export function stopConversationSessionCleanup() {
   if (!cleanupTimer) return;
   clearInterval(cleanupTimer);
   cleanupTimer = null;
-}
-
-async function withSessionMutex(sessionKey, fn) {
-  const laneKey = normalizeSessionKey(sessionKey);
-  const previousTail = sessionLaneTails.get(laneKey) || Promise.resolve();
-  let releaseCurrent = null;
-  const currentTail = new Promise((resolve) => {
-    releaseCurrent = resolve;
-  });
-  const chainedTail = previousTail
-    .catch(() => {})
-    .then(() => currentTail);
-
-  // Chain this run behind the previous run for the same session key.
-  sessionLaneTails.set(laneKey, chainedTail);
-
-  const queuedAt = Date.now();
-
-  try {
-    await previousTail.catch(() => {});
-    const queueWaitMs = Date.now() - queuedAt;
-    return await fn({ queueWaitMs, sessionKey: laneKey });
-  } finally {
-    releaseCurrent?.();
-    if (sessionLaneTails.get(laneKey) === chainedTail) {
-      sessionLaneTails.delete(laneKey);
-    }
-  }
 }
 
 async function markSessionLane({ companyId, sessionKey, runId, agentId, model, authority }) {
@@ -343,7 +432,7 @@ function sessionEventMutationHash(event) {
 }
 
 export function reconstructSessionLaneTraces(events = []) {
-  if (!Array.isArray(events) || events.length > MAX_RECOVERY_EVENTS) throw new Error('session_lane_recovery_limit');
+  if (!Array.isArray(events)) throw new Error('session_lane_recovery_input_invalid');
   const lanes = new Map();
   for (const event of events) {
     if (!['session_lane_started', 'session_lane_terminal'].includes(event?.operation)) continue;
@@ -425,12 +514,26 @@ export async function withSessionLane({
   agentId,
   model,
   authority = null,
+  signal = null,
+  deadlineAt,
 }, fn) {
-  const effectiveSessionKey = sessionKey || `agent:${agentId || 'unknown'}`;
-  await acquireGlobalSlot();
+  const finishWork = beginServingWork('session_run');
+  try {
+  const effectiveSessionKey = normalizeSessionKey(sessionKey || `agent:${agentId || 'unknown'}`);
+  let slot;
+  try {
+    slot = await acquireSessionSlot(companyId, effectiveSessionKey, signal, deadlineAt);
+  } catch (error) {
+    await logEvent(companyId, agentId || 'housekeeper', 'session_lane_admission_denied', `${effectiveSessionKey}:${runId}`, {
+      run_id: runId, session_key: effectiveSessionKey, disposition: error.code,
+      execution_started: false, reasoning: 'The bounded native session queue did not admit a callback; no session execution started.',
+    }, authority?.requestAdmissionEventId || null, { authority });
+    throw error;
+  }
 
   try {
-    return await withSessionMutex(effectiveSessionKey, async ({ queueWaitMs, sessionKey: lockedSessionKey }) => {
+      const queueWaitMs = slot.queueWaitMs;
+      const lockedSessionKey = effectiveSessionKey;
       const startReceipt = await markSessionLane({
         companyId,
         sessionKey: lockedSessionKey,
@@ -442,6 +545,7 @@ export async function withSessionLane({
 
       let disposition = 'FAILED';
       try {
+        slot.assertReady();
         const result = await fn({ queueWaitMs, sessionKey: lockedSessionKey });
         disposition = 'COMPLETED';
         return {
@@ -450,7 +554,8 @@ export async function withSessionLane({
           sessionKey: lockedSessionKey
         };
       } catch (error) {
-        disposition = String(error?.message || '').includes('timed out') ? 'TIMEOUT' : 'FAILED';
+        disposition = error.executionStarted === false ? 'CANCELLED_BEFORE_EXECUTION'
+          : String(error?.message || '').includes('timed out') ? 'TIMEOUT' : 'FAILED';
         throw error;
       } finally {
         await clearSessionLane({
@@ -465,10 +570,10 @@ export async function withSessionLane({
           startMutationHash: startReceipt.mutation_hash,
         });
       }
-    });
   } finally {
-    releaseGlobalSlot();
+    slot.release();
   }
+  } finally { finishWork(); }
 }
 
 export async function getSessionRunnerStats(companyId = COMPANY) {
@@ -476,11 +581,15 @@ export async function getSessionRunnerStats(companyId = COMPANY) {
   return {
     maxConcurrency: MAX_CONCURRENT_RUNS,
     activeGlobalRuns: activeRuns,
-    waitingGlobalRuns: waiters.length,
+    waitingGlobalRuns: waiters.size,
+    admissionOpen,
+    maxQueuedRuns: MAX_QUEUED_RUNS,
+    maxQueuedPerSession: MAX_QUEUED_PER_SESSION,
+    maxQueueWaitMs: MAX_QUEUE_WAIT_MS,
     waitingOldestMs: waiterStats.waitingOldestMs,
     waitingAverageMs: waiterStats.waitingAverageMs,
-    activeSessionMutexes: sessionLaneTails.size,
-    trackedSessionLanes: sessionLaneTails.size,
+    activeSessionMutexes: activeRuns,
+    trackedSessionLanes: sessionLanes.size,
     runningSessionLanes: activeRuns,
     conversationSessions: conversationSessions.size,
     conversationTtlMs: CONVERSATION_TTL_MS,

@@ -40,7 +40,7 @@ import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { query, withTransaction } from '../../db/connection.js';
 import { logEvent } from '../observe/event-ledger.js';
 import { W_MIN, W_MAX } from '../learning/stdp-kernel.js';
-import { enforceEnergyBound } from '../governance/cohen-grossberg-energy-governor.js';
+import { enforceEnergyBound, readEnergyWindowSnapshot } from '../governance/cohen-grossberg-energy-governor.js';
 import { governorConfigLedger } from '../governance/governor-config-ledger.js';
 import { commitGovernorMutation } from '../governance/governor-provenance.js';
 import { resolvePrincipalStateMutationTargets } from '../learning/mutation-composition/target-resolver.js';
@@ -536,23 +536,25 @@ export async function selectConsolidationCandidates(limit = TOP_K) {
       companyId: COMPANY,
       targets: targets.targets,
     });
-    const selected = activation.targetRows
+    const ranked = activation.targetRows
       .filter((row) => row.receipt_count >= HEBBIAN_CONSTANTS.minimum_supported_receipts
         && row.neighbor_count >= HEBBIAN_CONSTANTS.minimum_distinct_neighbors
         && row.association_strength > 0)
       .sort((left, right) => right.association_strength - left.association_strength
         || right.coactivation_count - left.coactivation_count
-        || left.representative_memory_id.localeCompare(right.representative_memory_id))
-      .slice(0, effectiveLimit);
-    if (!selected.length) return [];
+        || left.representative_memory_id.localeCompare(right.representative_memory_id));
+    if (!ranked.length) return [];
     const memories = await client.query(
       `SELECT id,key,value,retrieval_weight,access_count,last_accessed_at
          FROM aimos_memories
         WHERE company_id=$1 AND id=ANY($2::uuid[])
           AND retrieval_weight >= $3 AND retrieval_weight < $4`,
-      [COMPANY, selected.map((row) => row.representative_memory_id), CONFIDENCE_GATE, CONSOLIDATION_CAP],
+      [COMPANY, ranked.map((row) => row.representative_memory_id), CONFIDENCE_GATE, CONSOLIDATION_CAP],
     );
     const byId = new Map(memories.rows.map((row) => [String(row.id), row]));
+    // Saturated leaders retain their evidence/associations but cannot exhaust
+    // the work limit ahead of genuinely promotable lower-ranked candidates.
+    const selected = ranked.filter(row => byId.has(row.representative_memory_id)).slice(0, effectiveLimit);
     return selected.map((row) => ({
       ...byId.get(row.representative_memory_id),
       spiced_activation: {
@@ -629,6 +631,9 @@ async function amplifyConsolidated(memoryIds, gammaDampen = 1.0) {
         [`cognitive-reweight:${COMPANY}:${memoryId}`]
       );
     }
+    const energyBefore = orderedMemoryIds.length
+      && await governorConfigLedger.readFlag('COHEN_GROSSBERG_GOVERNOR')
+      ? await readEnergyWindowSnapshot(orderedMemoryIds, { client }) : null;
     const targets = await client.query(`
       SELECT id, retrieval_weight AS old_weight
         FROM aimos_memories
@@ -713,29 +718,14 @@ async function amplifyConsolidated(memoryIds, gammaDampen = 1.0) {
         source_knowledge: 'HOM adaptation of SPICED Eq. 5 s_prime=gamma*s: connection-strength promotion mapped to the retained retrieval-frequency projection, capped at 3',
       }, null, { client });
     }
-    return mutations.length;
+    const energy = await enforceEnergyBound(orderedMemoryIds, { client, before: energyBefore });
+    return { amplified: mutations.length, energy,
+      delta_milli: mutations.reduce((sum, m) => sum
+        + Math.abs(Math.round(m.new_weight * 1000) - Math.round(m.old_weight * 1000)), 0) };
   }, { restricted: true, client_id: COMPANY, agent_id: 'housekeeper' });
 
-  const gatedOut = requestedMemoryIds.length - res;
-  return { amplified: res, gatedOut };
-}
-
-/**
- * FIX #5: Compute total weight delta for a cycle (convergence detection).
- * Returns sum of absolute weight changes for the given memory IDs.
- */
-async function computeCycleDelta(memoryIds, gammaDampen) {
-  if (!memoryIds.length) return 0;
-  const effectiveGamma = computeConsolidationAmplificationFactor(gammaDampen);
-  const res = await query(`
-    SELECT COALESCE(SUM(ABS(
-      retrieval_weight - GREATEST(retrieval_weight, LEAST($3, retrieval_weight * $2))
-    )), 0) as total_delta
-    FROM aimos_memories
-    WHERE company_id = $1 AND id = ANY($4)
-  `, [COMPANY, effectiveGamma, CONSOLIDATION_CAP, memoryIds]);
-
-  return parseFloat(res.rows[0]?.total_delta || '0');
+  const gatedOut = requestedMemoryIds.length - res.amplified;
+  return { ...res, gatedOut };
 }
 
 /**
@@ -773,39 +763,19 @@ export async function runDreamConsolidation() {
     for (let cycle = 0; cycle < DREAM_CYCLES; cycle++) {
       const candidates = await selectConsolidationCandidates(TOP_K);
       if (!candidates.length) break;
-      const candidateIds = candidates.map((candidate) => candidate.id);
-      const cycleDelta = await computeCycleDelta(candidateIds, cycleGamma);
-
-      let previousWeights = null;
-      if (await governorConfigLedger.readFlag('COHEN_GROSSBERG_GOVERNOR')) {
-        const preRows = await query(
-          `SELECT id,retrieval_weight FROM aimos_memories WHERE company_id=$1 AND id=ANY($2::uuid[])`,
-          [COMPANY, candidateIds],
-        );
-        previousWeights = new Map((preRows?.rows || [])
-          .map((row) => [row.id, Number(row.retrieval_weight)]));
-      }
-
-      const { amplified: ampCount, gatedOut } = await amplifyConsolidated(candidates, cycleGamma);
+      const { amplified: ampCount, gatedOut, energy, delta_milli } = await amplifyConsolidated(candidates, cycleGamma);
       results.amplified += ampCount;
       results.gatedOut += gatedOut;
-
-      try {
-        const cg = await enforceEnergyBound(candidateIds, { previousWeights });
-        cycleGamma = cg.gamma_dampen;
-        if (cg.gate_logic_unchanged === false) {
-          results.cg_governor = results.cg_governor || { cycles: 0, dampens: 0 };
-          results.cg_governor.cycles += 1;
-          if (cycleGamma < 1.0) results.cg_governor.dampens += 1;
-        }
-      } catch (error) {
-        cycleGamma = 1.0;
-        results.cg_governor_error = String(error?.message || error);
+      cycleGamma = energy.gamma_dampen;
+      if (energy.gate_logic_unchanged === false) {
+        results.cg_governor = results.cg_governor || { cycles: 0, dampens: 0 };
+        results.cg_governor.cycles += 1;
+        if (cycleGamma < 1.0) results.cg_governor.dampens += 1;
       }
 
       results.edgesFormed += await formEdgesBatch(candidates);
       results.cycles += 1;
-      if (cycleDelta < CONVERGENCE_THRESHOLD) {
+      if (delta_milli / 1000 < CONVERGENCE_THRESHOLD) {
         results.convergedEarly = true;
         break;
       }

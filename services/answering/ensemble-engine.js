@@ -57,7 +57,8 @@ async function runVariant(variant, query, evidence, opts = {}) {
     systemPrompt: system,
     userPrompt: user,
     provider: opts.provider,
-    model: opts.model
+    model: opts.model,
+    useContext: opts.useContext,
   });
 
   return typeof answer === 'string' ? answer.trim() : String(answer || '').trim();

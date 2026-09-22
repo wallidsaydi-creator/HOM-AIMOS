@@ -76,7 +76,7 @@ envelopes; bearer-only authentication is not an AIMOS authority path.
 ## Canonical pipelines
 
 `services/pipeline-manifest.js` declares the critical wiring for six pipelines.
-It declares 116 service connections across 6 pipelines.
+It declares 115 service connections across 6 pipelines.
 
 | Pipeline | Entrypoint | Responsibility |
 |---|---|---|
@@ -138,7 +138,7 @@ The externally visible path has eight principal stages:
 | 2 | Embedding and candidate opening | `services/core/embeddings.js` |
 | 3 | Similarity statistics | `services/retrieval/similarity-stats.js` |
 | 4 | Trust scoring | `services/learning/trust-score.js` |
-| 5 | Permanent dense, sparse, temporal, entity, QuIM, QMD, HyDE, and concept gears plus one bounded Reconstructed-Graph G2 family channel with central deterministic RRF | `services/retrieval/native-recall-pipeline.js`, `services/retrieval/native-retrieval-fusion.js`, `services/retrieval/reconstructed-graph-native-candidate.js` |
+| 5 | Permanent dense, sparse, temporal, entity, QuIM, internal QMD candidate logic, HyDE, and concept gears plus one bounded Reconstructed-Graph G2 family channel with central deterministic RRF. The former standalone QMD route/parser/planner was removed because it duplicated disclosure authority. | `services/retrieval/native-recall-pipeline.js`, `services/retrieval/native-retrieval-fusion.js`, `services/retrieval/reconstructed-graph-native-candidate.js` |
 | 6 | Verified epistemic projection and selection | `services/retrieval/epistemic-trust-retrieval.js` |
 | 7 | Pre-disclosure calibration | `services/retrieval/recall-calibrator.js` |
 | 8 | Bounded evidence and signed receipt | `services/retrieval/native-recall.js` |
@@ -199,6 +199,33 @@ signed unchanged event remain retained, but no fictitious projection is
 appended. The complete byte layout, proofs, and verification contract are in
 `docs/security/cognitive-weight-chain-SPEC.md`.
 
+## Native origin and consequential-action authority
+
+Every post-activation canonical SAVE commits one versioned origin/family
+binding inside the owning memory transaction. Classification is derived by the
+native monitor from the verified request/action, complete retained inputs, and
+the frozen family profile; caller or model labels have no authority. Derived
+memory conservatively retains family closure, restrictive confidentiality,
+least integrity, and least action class.
+
+Canonical RECALL is the only model-visible memory disclosure owner and binds
+the effective origin/family label into its signed receipt. Historical unbound
+memory remains retained and recall-visible as
+`unknown_protected/restricted/untrusted/none`, but cannot authorize a
+consequential action. Consequential tools require a database-bound origin
+verdict before dispatch. Untrusted influence requires either an exact
+single-use operator authorization or a fresh threshold elevation from distinct
+trusted principals, administrative domains, and upstream sources. The
+Housekeeper owns policy and signing but cannot count as a corroborating source.
+
+Phase 1 closed on 2026-09-22 after two canonical live passes across restart,
+measured scale/storage, and independent reconstruction. Its closure manifest
+and independent verifier are immutable point-in-time canonical operator
+records; they are not a hash constraint over later system releases. Current
+releases instead rerun the current Origin Binding protocol, ledger, propagation,
+recall, consequential-action, and portable-verifier regression gates. The
+original OB1 protocol artifacts remain frozen separately.
+
 ## Service inventory
 
 The census counts top-level `services/<group>/*.js`, excluding `index.js`
@@ -209,7 +236,7 @@ barrels, hidden directories, and the root infrastructure file
 |---|---:|---|
 | retrieval | 63 | Query modes, vector/sparse retrieval, temporal and graph paths, epistemic selection and calibration |
 | orchestration | 43 | Agent execution, tools, governance, scheduling, model selection and run state |
-| security | 49 | Identity, signed envelopes, authorization, provenance, credentials, canaries, purpose-bound non-memory authority, typed epistemic evidence assertions, graph-edge evidence, dormant edit certification and signed certificate custody |
+| security | 50 | Identity, signed envelopes, authorization, provenance, credentials, canaries, database-bound origin/family authority, purpose-bound non-memory authority, typed epistemic evidence assertions, graph-edge evidence, dormant edit certification and signed certificate custody |
 | temporal | 22 | Freshness, event order, supersession, time-aware retrieval and retained frequency |
 | learning | 23 | Calibration, reflection, skill consolidation, STDP and bounded plasticity |
 | observe | 22 | Event ledger, explanation, drift, routing, quantitative gates and diagnostics |

@@ -4,12 +4,16 @@
 // ───────────────────────────────────────────────────────────────────────────────
 import crypto from 'crypto';
 
+import { performance } from 'node:perf_hooks';
 import { fetchWithTimeout } from '../orchestration/http.js';
 import { checkoutCachedCredential, peekCachedCredential } from '../security/credential-cache.js';
 import { credentialLedger, credentialUseEvidenceHash } from '../security/credential-ledger.js';
+import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
+import { verifyToolActionAuthority } from '../orchestration/tool-action-ledger.js';
 
 const X_API_BASES = ['https://api.x.com', 'https://api.twitter.com'];
 let cachedBearerFromKeys = null;
+const X_REQUEST_TIMEOUT_MS = 30_000;
 
 function sameCredentialVersion(left, right) {
   return left?.slotId === right?.slotId
@@ -90,7 +94,7 @@ function buildOAuth1Header(method, url, credentials) {
     .join(', ');
 }
 
-async function mintBearerFromKeySecret(useContext = {}) {
+async function mintBearerFromKeySecret(useContext = {}, deadlineAt = useContext.deadlineAt) {
   if (!peekCachedCredential('x_api_key') || !peekCachedCredential('x_api_secret')) return null;
 
   for (const base of X_API_BASES) {
@@ -133,6 +137,7 @@ async function mintBearerFromKeySecret(useContext = {}) {
     }
 
     let response;
+    let data;
     try {
       const basic = Buffer.from(`${key.value}:${secret.value}`).toString('base64');
       response = await fetchWithTimeout(`${base}/oauth2/token`, {
@@ -141,9 +146,16 @@ async function mintBearerFromKeySecret(useContext = {}) {
           Authorization: `Basic ${basic}`,
           'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8'
         },
-        body: requestBody
-      });
-    } catch (error) {
+        body: requestBody,
+      signal: useContext?.signal,
+      deadlineAt,
+      destinationPolicy: 'public',
+    });
+      data = await response.json();
+      if (response.ok && (typeof data?.access_token !== 'string' || !data.access_token)) {
+        throw new Error('x_oauth_response_invalid');
+      }
+  } catch (error) {
       const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
         credentialLedger.finalizeCredentialUse({
           reservation,
@@ -155,10 +167,12 @@ async function mintBearerFromKeySecret(useContext = {}) {
       )));
       const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
       if (terminalFailure) throw terminalFailure.reason;
-      continue;
-    }
+      throw error;
+    } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
+  }
 
-    const data = await response.json().catch(() => ({}));
+
     const responseSucceeded = response.ok && Boolean(data.access_token);
     const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
       credentialLedger.finalizeCredentialUse({
@@ -176,7 +190,7 @@ async function mintBearerFromKeySecret(useContext = {}) {
     const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
     if (terminalFailure) throw terminalFailure.reason;
 
-    if (!responseSucceeded) continue;
+    if (!responseSucceeded) throw new Error(`X token request rejected (${response.status})`);
     cachedBearerFromKeys = Object.freeze({
       value: data.access_token,
       credentials: Object.freeze([key, secret]),
@@ -186,20 +200,20 @@ async function mintBearerFromKeySecret(useContext = {}) {
   return null;
 }
 
-async function resolveAppBearerAuthorization(useContext = {}) {
+async function resolveAppBearerAuthorization(useContext = {}, deadlineAt = useContext.deadlineAt) {
   if (peekCachedCredential('x_bearer_token')) {
     const credential = checkoutCachedCredential('x_bearer_token');
     if (credential) return { value: credential.value, credentials: [credential] };
   }
-  return currentCachedDerivedBearer() || mintBearerFromKeySecret(useContext);
+  return currentCachedDerivedBearer() || mintBearerFromKeySecret(useContext, deadlineAt);
 }
 
-async function resolveReadAuthorization(useContext = {}) {
+async function resolveReadAuthorization(useContext = {}, deadlineAt = useContext.deadlineAt) {
   if (peekCachedCredential('x_access_token')) {
     const credential = checkoutCachedCredential('x_access_token');
     if (credential) return { value: credential.value, credentials: [credential] };
   }
-  const authorization = await resolveAppBearerAuthorization(useContext);
+  const authorization = await resolveAppBearerAuthorization(useContext, deadlineAt);
   if (authorization) return authorization;
   throw new Error('X not configured. Set X_BEARER_TOKEN or X_API_KEY/X_API_SECRET.');
 }
@@ -226,7 +240,8 @@ function resolvePostAuthorization(url) {
   return null;
 }
 
-async function xGet(path, useContext = {}) {
+async function xGet(path, useContext = {}, inheritedDeadline = useContext.deadlineAt) {
+  const deadlineAt = Math.min(inheritedDeadline ?? Infinity, performance.now() + X_REQUEST_TIMEOUT_MS);
   const parsedPath = new URL(path, 'https://x.invalid');
   const requestHash = credentialUseEvidenceHash({
     method: 'GET',
@@ -235,7 +250,7 @@ async function xGet(path, useContext = {}) {
   let lastError = null;
 
   for (const base of X_API_BASES) {
-    const authorization = await resolveReadAuthorization(useContext);
+    const authorization = await resolveReadAuthorization(useContext, deadlineAt);
     const useGroupId = authorization.credentials.length > 1 ? crypto.randomUUID() : null;
     const reservationResults = await Promise.allSettled(authorization.credentials.map((credential) => (
       credentialLedger.reserveCredentialUse({
@@ -269,11 +284,16 @@ async function xGet(path, useContext = {}) {
     }
 
     let response;
+    let payload;
     try {
       response = await fetchWithTimeout(`${base}${path}`, {
-        headers: { Authorization: `Bearer ${authorization.value}` }
-      });
-    } catch (error) {
+        headers: { Authorization: `Bearer ${authorization.value}` },
+      signal: useContext?.signal,
+      deadlineAt,
+      destinationPolicy: 'public',
+    });
+      payload = await response.json();
+  } catch (error) {
       const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
         credentialLedger.finalizeCredentialUse({
           reservation,
@@ -286,8 +306,10 @@ async function xGet(path, useContext = {}) {
       const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
       if (terminalFailure) throw terminalFailure.reason;
       lastError = error?.message || String(error);
-      continue;
-    }
+      throw error;
+    } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
+  }
 
     const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
       credentialLedger.finalizeCredentialUse({
@@ -296,6 +318,7 @@ async function xGet(path, useContext = {}) {
         outcomeHash: credentialUseEvidenceHash({
           status: response.status,
           x_request_id: response.headers.get('x-request-id') || null,
+          response_hash: credentialUseEvidenceHash(payload),
         }),
         outcomeClass: `http_${response.status}`,
       })
@@ -303,7 +326,7 @@ async function xGet(path, useContext = {}) {
     const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
     if (terminalFailure) throw terminalFailure.reason;
 
-    const payload = await response.json().catch(() => ({}));
+
     if (!response.ok) {
       lastError = payload?.detail || payload?.title || `X API error (${response.status})`;
       continue;
@@ -339,9 +362,11 @@ export async function xGetMyProfile(useContext = {}) {
 }
 
 export async function xGetMyTimeline({ max = 20, useContext = {} } = {}) {
+  const deadlineAt = Math.min(useContext.deadlineAt ?? Infinity, performance.now() + X_REQUEST_TIMEOUT_MS);
   const profileData = await xGet(
     '/2/users/me?user.fields=description,profile_image_url,public_metrics,verified',
     useContext,
+    deadlineAt,
   );
   const userId = String(profileData?.data?.id || '').trim();
   if (!userId) throw new Error('Unable to resolve authenticated X user.');
@@ -351,7 +376,7 @@ export async function xGetMyTimeline({ max = 20, useContext = {} } = {}) {
     max_results: String(capped),
     'tweet.fields': 'created_at,public_metrics'
   });
-  const timeline = await xGet(`/2/users/${encodeURIComponent(userId)}/tweets?${params}`, useContext);
+  const timeline = await xGet(`/2/users/${encodeURIComponent(userId)}/tweets?${params}`, useContext, deadlineAt);
 
   const tweets = (timeline?.data || []).map((tweet) => ({
     id: tweet.id,
@@ -373,6 +398,15 @@ export async function xGetMyTimeline({ max = 20, useContext = {} } = {}) {
 }
 
 export async function xPostTweet({ text, useContext = {} }) {
+  const deadlineAt = Math.min(useContext.deadlineAt ?? Infinity, performance.now() + X_REQUEST_TIMEOUT_MS);
+  const authorizedArgs = useContext.toolActionArguments || { text };
+  if (authorizedArgs.text !== text) throw new Error('x_action_argument_substitution');
+  await verifyToolActionAuthority(useContext.toolActionAuthority, {
+    expectedCompanyId: AIMOS_COMPANY_ID,
+    expectedTool: 'x_post',
+    expectedActorAgentId: useContext.actorAgentId,
+    expectedArguments: authorizedArgs,
+  });
   const bodyText = String(text || '').trim();
   if (!bodyText) throw new Error('text is required');
   if (!hasOAuth1Credentials() && !peekCachedCredential('x_access_token')) {
@@ -419,6 +453,7 @@ export async function xPostTweet({ text, useContext = {} }) {
     }
 
     let response;
+    let payload;
     try {
       response = await fetchWithTimeout(url, {
         method: 'POST',
@@ -426,9 +461,16 @@ export async function xPostTweet({ text, useContext = {} }) {
           Authorization: authorization.header,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(requestBody)
-      });
-    } catch (error) {
+        body: JSON.stringify(requestBody),
+      signal: useContext?.signal,
+      deadlineAt,
+      destinationPolicy: 'public',
+    });
+      payload = await response.json();
+      if (response.ok && (typeof payload?.data?.id !== 'string' || !payload.data.id)) {
+        throw new Error('x_post_response_invalid');
+      }
+  } catch (error) {
       const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
         credentialLedger.finalizeCredentialUse({
           reservation,
@@ -441,8 +483,10 @@ export async function xPostTweet({ text, useContext = {} }) {
       const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
       if (terminalFailure) throw terminalFailure.reason;
       lastError = error?.message || String(error);
-      continue;
-    }
+      throw error;
+    } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
+  }
 
     const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
       credentialLedger.finalizeCredentialUse({
@@ -451,16 +495,17 @@ export async function xPostTweet({ text, useContext = {} }) {
         outcomeHash: credentialUseEvidenceHash({
           status: response.status,
           x_request_id: response.headers.get('x-request-id') || null,
+          response_hash: credentialUseEvidenceHash(payload),
         }),
         outcomeClass: `http_${response.status}`,
       })
     )));
     const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
     if (terminalFailure) throw terminalFailure.reason;
-    const payload = await response.json().catch(() => ({}));
+
     if (!response.ok) {
       lastError = payload?.detail || payload?.title || `X API error (${response.status})`;
-      continue;
+      throw new Error(lastError);
     }
     return {
       success: true,
@@ -475,6 +520,17 @@ export async function xPostTweet({ text, useContext = {} }) {
 }
 
 export async function xReplyToTweet({ text, replyToTweetId, useContext = {} }) {
+  const deadlineAt = Math.min(useContext.deadlineAt ?? Infinity, performance.now() + X_REQUEST_TIMEOUT_MS);
+  const authorizedArgs = useContext.toolActionArguments || { text, replyToTweetId };
+  if (authorizedArgs.text !== text || authorizedArgs.replyToTweetId !== replyToTweetId) {
+    throw new Error('x_action_argument_substitution');
+  }
+  await verifyToolActionAuthority(useContext.toolActionAuthority, {
+    expectedCompanyId: AIMOS_COMPANY_ID,
+    expectedTool: 'x_reply',
+    expectedActorAgentId: useContext.actorAgentId,
+    expectedArguments: authorizedArgs,
+  });
   const bodyText = String(text || '').trim();
   const targetId = String(replyToTweetId || '').trim();
   if (!bodyText) throw new Error('text is required');
@@ -523,6 +579,7 @@ export async function xReplyToTweet({ text, replyToTweetId, useContext = {} }) {
     }
 
     let response;
+    let payload;
     try {
       response = await fetchWithTimeout(url, {
         method: 'POST',
@@ -530,9 +587,16 @@ export async function xReplyToTweet({ text, replyToTweetId, useContext = {} }) {
           Authorization: authorization.header,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(requestBody)
-      });
-    } catch (error) {
+        body: JSON.stringify(requestBody),
+      signal: useContext?.signal,
+      deadlineAt,
+      destinationPolicy: 'public',
+    });
+      payload = await response.json();
+      if (response.ok && (typeof payload?.data?.id !== 'string' || !payload.data.id)) {
+        throw new Error('x_post_response_invalid');
+      }
+  } catch (error) {
       const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
         credentialLedger.finalizeCredentialUse({
           reservation,
@@ -545,8 +609,10 @@ export async function xReplyToTweet({ text, replyToTweetId, useContext = {} }) {
       const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
       if (terminalFailure) throw terminalFailure.reason;
       lastError = error?.message || String(error);
-      continue;
-    }
+      throw error;
+    } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
+  }
 
     const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
       credentialLedger.finalizeCredentialUse({
@@ -555,16 +621,17 @@ export async function xReplyToTweet({ text, replyToTweetId, useContext = {} }) {
         outcomeHash: credentialUseEvidenceHash({
           status: response.status,
           x_request_id: response.headers.get('x-request-id') || null,
+          response_hash: credentialUseEvidenceHash(payload),
         }),
         outcomeClass: `http_${response.status}`,
       })
     )));
     const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
     if (terminalFailure) throw terminalFailure.reason;
-    const payload = await response.json().catch(() => ({}));
+
     if (!response.ok) {
       lastError = payload?.detail || payload?.title || `X API error (${response.status})`;
-      continue;
+      throw new Error(lastError);
     }
     return {
       success: true,
@@ -579,6 +646,17 @@ export async function xReplyToTweet({ text, replyToTweetId, useContext = {} }) {
 }
 
 export async function xQuoteTweet({ text, quoteTweetId, useContext = {} }) {
+  const deadlineAt = Math.min(useContext.deadlineAt ?? Infinity, performance.now() + X_REQUEST_TIMEOUT_MS);
+  const authorizedArgs = useContext.toolActionArguments || { text, quote_tweet_id: quoteTweetId };
+  if (authorizedArgs.text !== text || authorizedArgs.quote_tweet_id !== quoteTweetId) {
+    throw new Error('x_action_argument_substitution');
+  }
+  await verifyToolActionAuthority(useContext.toolActionAuthority, {
+    expectedCompanyId: AIMOS_COMPANY_ID,
+    expectedTool: 'x_quote',
+    expectedActorAgentId: useContext.actorAgentId,
+    expectedArguments: authorizedArgs,
+  });
   const bodyText = String(text || '').trim();
   const targetId = String(quoteTweetId || '').trim();
   if (!bodyText) throw new Error('text is required');
@@ -627,6 +705,7 @@ export async function xQuoteTweet({ text, quoteTweetId, useContext = {} }) {
     }
 
     let response;
+    let payload;
     try {
       response = await fetchWithTimeout(url, {
         method: 'POST',
@@ -634,9 +713,16 @@ export async function xQuoteTweet({ text, quoteTweetId, useContext = {} }) {
           Authorization: authorization.header,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(requestBody)
-      });
-    } catch (error) {
+        body: JSON.stringify(requestBody),
+      signal: useContext?.signal,
+      deadlineAt,
+      destinationPolicy: 'public',
+    });
+      payload = await response.json();
+      if (response.ok && (typeof payload?.data?.id !== 'string' || !payload.data.id)) {
+        throw new Error('x_post_response_invalid');
+      }
+  } catch (error) {
       const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
         credentialLedger.finalizeCredentialUse({
           reservation,
@@ -649,8 +735,10 @@ export async function xQuoteTweet({ text, quoteTweetId, useContext = {} }) {
       const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
       if (terminalFailure) throw terminalFailure.reason;
       lastError = error?.message || String(error);
-      continue;
-    }
+      throw error;
+    } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
+  }
 
     const terminalResults = await Promise.allSettled(reservations.map((reservation) => (
       credentialLedger.finalizeCredentialUse({
@@ -659,16 +747,17 @@ export async function xQuoteTweet({ text, quoteTweetId, useContext = {} }) {
         outcomeHash: credentialUseEvidenceHash({
           status: response.status,
           x_request_id: response.headers.get('x-request-id') || null,
+          response_hash: credentialUseEvidenceHash(payload),
         }),
         outcomeClass: `http_${response.status}`,
       })
     )));
     const terminalFailure = terminalResults.find((result) => result.status === 'rejected');
     if (terminalFailure) throw terminalFailure.reason;
-    const payload = await response.json().catch(() => ({}));
+
     if (!response.ok) {
       lastError = payload?.detail || payload?.title || `X API error (${response.status})`;
-      continue;
+      throw new Error(lastError);
     }
     return {
       success: true,

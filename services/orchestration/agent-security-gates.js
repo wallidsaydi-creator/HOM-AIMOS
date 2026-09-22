@@ -98,7 +98,9 @@ export async function runSecurityGates({ userPrompt, agentId, options = {}, COMP
   results.behavioralCheck = await updateBehavioralBaseline(agentId, {
     prompt: userPrompt,
     taskType: options.taskType || options.intent || 'chat',
-    toolsUsed: 0
+    toolsUsed: 0,
+    nativeToolInputs: options.nativeToolInputs || null,
+    canonicalBaselineMemories: options.canonicalBaselineMemories || [],
   });
   if (results.behavioralCheck.anomalyScore > 0.6) {
     console.warn(`[behavioral] HIGH anomaly for ${agentId}: score=${results.behavioralCheck.anomalyScore.toFixed(2)}`);
@@ -171,7 +173,8 @@ export async function runSecurityGates({ userPrompt, agentId, options = {}, COMP
         statedConfidence: options.confidence,
         lastRunSuccess: options.lastRunSuccess,
         resourceBudget: options.resourceBudget || 1.0,
-        errorSignature: options.errorSignature
+        errorSignature: options.errorSignature,
+        canonicalMemories: options.canonicalMemories || [],
       });
     } catch (metaErr) {
       console.warn('[meta-controller] evaluation failed:', metaErr.message);
@@ -185,7 +188,7 @@ export async function runSecurityGates({ userPrompt, agentId, options = {}, COMP
         errorCount: 0,
         tokenEstimate: String(userPrompt || '').length * 4,
         latencyMs: 0
-      });
+      }, options.canonicalRiskBudgetMemories || []);
       if (riskCheck.exceeded) {
         await logEvent(COMPANY, agentId, 'risk_budget_exceeded', `risk_block:${agentId}`, {
           reasoning: `Risk budget exceeded: ${riskCheck.reason}. Agent accumulated too many errors/tokens/latency within budget window. Blocking prevents cascading failures and runaway costs.`,

@@ -30,6 +30,7 @@ import { logEvent } from '../observe/event-ledger.js';
 import { beginToolAction, finishToolAction } from '../orchestration/tool-action-ledger.js';
 import { recallAuthorizationService } from '../security/recall-authorization.js';
 import { sessionKeyPrefix } from '../shared/session-scope.js';
+import { normalizeSourceMemoryIds } from '../write/canonical-save-contract.js';
 
 function sha256Canonical(value) {
   return createHash('sha256').update(canonicalJson(value ?? null), 'utf8').digest('hex');
@@ -82,8 +83,13 @@ export async function asmrAnswerFromEvidence(query, admittedEvidence, opts = {})
     model:    opts.model,
     provider: opts.provider,
     llmFn:    opts.llmFn,
-    variants: opts.variants
+    variants: opts.variants,
+    useContext: opts.useContext,
   });
+  if (ensembleResult.totalVariants > 0
+      && ensembleResult.variantResults.every((variant) => variant.error)) {
+    throw new Error('asmr_model_provider_unavailable');
+  }
   const ensembleMs = Date.now() - ensembleStart;
 
   return {
@@ -208,6 +214,8 @@ async function persistDerivedFacet(spec, { executionContext, parentEventId }) {
 
 export async function asmrIngest(content, opts = {}) {
   const executionContext = opts.executionContext || null;
+  const sourceMemoryIds = opts.sourceMemoryIds === undefined
+    ? undefined : normalizeSourceMemoryIds(opts.sourceMemoryIds);
   let clearanceLevel = null;
   let ingestionAction = null;
   let ingestionOutcomeReceipt = null;
@@ -241,6 +249,9 @@ export async function asmrIngest(content, opts = {}) {
         source: opts.source || 'asmr-pipeline',
         session_id: opts.sessionId || null,
         metadata: opts.metadata || {},
+        ...(sourceMemoryIds === undefined ? {} : { source_memory_ids: sourceMemoryIds }),
+        provider: opts.provider || null,
+        model: opts.model || null,
       },
       runtimeAgentId: 'housekeeper',
       executionContext,
@@ -256,6 +267,10 @@ export async function asmrIngest(content, opts = {}) {
       metadata: opts.metadata || {},
       provider: opts.provider,
       model: opts.model,
+      useContext: executionContext ? {
+        ...executionContext,
+        autonomousActionEventId: ingestionAction?.receipt.event_id || null,
+      } : undefined,
     });
 
     const savedMemories = [];
@@ -264,10 +279,12 @@ export async function asmrIngest(content, opts = {}) {
       const source = result.sourceProvenance?.source || opts.source || 'asmr-pipeline';
       const specs = [];
       for (const entity of result.entities || []) {
+        const entityKey = `${sessPrefix}entity:${entity.type || 'unknown'}:${entity.value}`;
         specs.push({
           company_id: executionContext.companyId,
           agent_id: executionContext.actorAgentId,
-          key: `${sessPrefix}entity:${entity.type || 'unknown'}:${entity.value}`,
+          key: entityKey.length <= 255 && /^[a-zA-Z0-9_:\-]+$/.test(entityKey)
+            ? entityKey : `${sessPrefix}entity:${sha256Canonical([entity.type || 'unknown', entity.value])}`,
           value: entity.context || `${entity.value} is a ${entity.type || 'entity'} mentioned in: ${content.slice(0, 300)}`,
           memory_type: 'declarative',
           source,
@@ -277,10 +294,12 @@ export async function asmrIngest(content, opts = {}) {
         });
       }
       for (const marker of result.temporalMarkers || []) {
+        const markerKey = `${sessPrefix}event:${marker.entity || 'unknown'}:${marker.date || 'undated'}`;
         specs.push({
           company_id: executionContext.companyId,
           agent_id: executionContext.actorAgentId,
-          key: `${sessPrefix}event:${marker.entity || 'unknown'}:${marker.date || 'undated'}`,
+          key: markerKey.length <= 255 && /^[a-zA-Z0-9_:\-]+$/.test(markerKey)
+            ? markerKey : `${sessPrefix}event:${sha256Canonical([marker.entity || 'unknown', marker.date || 'undated'])}`,
           value: marker.description || marker.value || JSON.stringify(marker),
           memory_type: 'episodic',
           source,
@@ -290,6 +309,7 @@ export async function asmrIngest(content, opts = {}) {
         });
       }
       for (const spec of specs) {
+        if (sourceMemoryIds !== undefined) spec.source_memory_ids = sourceMemoryIds;
         savedMemories.push(await persistDerivedFacet(spec, {
           executionContext,
           parentEventId: ingestionAction.receipt.event_id,

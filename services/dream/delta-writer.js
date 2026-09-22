@@ -30,6 +30,22 @@ import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 const DEDUP_THRESHOLD = 0.92; // cosine similarity threshold for deduplication
+const DATA_CLASS_ORDER = Object.freeze(['public', 'internal', 'confidential', 'restricted']);
+
+async function readRetainedInputFloor(memoryIds, companyId) {
+  if (!memoryIds.length) return Object.freeze({ clearance_level: 5, data_class: 'public' });
+  const row = (await query(
+    `SELECT max(clearance_level)::integer AS clearance_level,
+            max(array_position(ARRAY['public','internal','confidential','restricted'], data_class))::integer AS data_class_rank
+       FROM aimos_memories
+      WHERE company_id = $1 AND id = ANY($2::uuid[])`,
+    [companyId, memoryIds]
+  )).rows[0];
+  return Object.freeze({
+    clearance_level: Math.max(5, Number(row?.clearance_level || 1)),
+    data_class: DATA_CLASS_ORDER[Math.max(0, Number(row?.data_class_rank || 1) - 1)],
+  });
+}
 
 /**
  * @typedef {Object} DeltaBullet
@@ -98,11 +114,12 @@ export async function flagMemoryUsage(usedMemoryIds, flags, companyId = COMPANY)
  * @param {string} llmOutput - raw LLM output containing bullet candidates
  * @returns {DeltaBullet[]}
  */
-export function parseLLMDeltas(llmOutput) {
+export function parseLLMDeltas(llmOutput, sourceMemoryIds = []) {
   const bullets = [];
   const lines = String(llmOutput || '').split('\n').filter(Boolean);
 
-  for (const line of lines) {
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
     // Try to parse structured output: [CATEGORY] content
     const match = line.match(/^\[?(strategy|code_snippet|troubleshoot|pitfall|insight|correction)\]?\s*[:\-–]\s*(.+)/i);
     if (match) {
@@ -116,7 +133,8 @@ export function parseLLMDeltas(llmOutput) {
           helpful_count: 0,
           harmful_count: 0,
           created_at: new Date().toISOString(),
-          last_used: new Date().toISOString()
+          last_used: new Date().toISOString(),
+          source_memory_ids: sourceMemoryIds[index] ? [sourceMemoryIds[index]] : [],
         });
       }
     }
@@ -161,6 +179,8 @@ export async function curatorMerge(deltas, companyId = COMPANY) {
 
     // No duplicate — insert the exact structured ACE delta bullet.
     const key = `delta:${delta.category}:${delta.id}`;
+    const sourceMemoryIds = delta.source_memory_ids || [];
+    const retainedInputFloor = await readRetainedInputFloor(sourceMemoryIds, companyId);
     const value = JSON.stringify({
       category: delta.category,
       content: delta.content,
@@ -175,8 +195,9 @@ export async function curatorMerge(deltas, companyId = COMPANY) {
       value,
       scope: 'system',
       memory_type: 'procedural',
-      clearance_level: 5,
+      ...retainedInputFloor,
       source: 'delta-writer',
+      source_memory_ids: sourceMemoryIds,
     });
     if (!saveResult.rejected) added++;
   }
@@ -200,7 +221,7 @@ export async function runDeltaPipeline(generatorOutput, reflectorOutput, company
   );
 
   // Phase 2: Reflector parse
-  const deltas = parseLLMDeltas(reflectorOutput);
+  const deltas = parseLLMDeltas(reflectorOutput, generatorOutput.usedMemoryIds || []);
 
   // Phase 3: Curator merge
   const mergeResult = await curatorMerge(deltas, companyId);

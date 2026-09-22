@@ -584,9 +584,9 @@ export function buildInsufficientRecallResponse(plan, reason, extras = {}) {
     working_memory: [],
     cache_hit: false,
     recall_meta: {
-      qmd_activated: false,
       top_rerank: 0,
       avg_rerank: 0,
+      qmd_activated: false,
       total_results: 0,
       confidence_distribution: { high: 0, medium: 0, low: 0 },
       temporal_truth: null,

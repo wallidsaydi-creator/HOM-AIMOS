@@ -73,6 +73,7 @@ export function classifyIntent(prompt, toolsInvoked = []) {
 }
 
 function inferScopeFromTools(tools = []) {
+  if (tools.includes('aimos_save') || tools.includes('delegate_task')) return 'read-write';
   const adminTools = ['reset_state', 'clear_cache'];
   const writeTools = ['create', 'update', 'insert', 'write', 'store'];
   const readTools = ['query', 'search', 'fetch', 'get'];

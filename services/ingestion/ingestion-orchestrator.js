@@ -95,11 +95,12 @@ async function runIngestionInner(input) {
     sessionId,
     metadata,
     provider,
-    model
+    model,
+    useContext
   } = input || {};
 
   const start = Date.now();
-  const observerOpts = { provider, model };
+  const observerOpts = { provider, model, useContext };
 
   // Smart observer routing: skip observers whose output adds no value for
   // short content where relationship and temporal signals are unlikely.

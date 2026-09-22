@@ -64,7 +64,7 @@ export async function scheduleRepetition(memoryId, companyId) {
     const result = await query(
       `SELECT m.repetition_count, m.ease_factor, m.next_review_at,
               latest.metadata AS latest_schedule,
-              EXTRACT(EPOCH FROM (NOW() - m.last_review_at)) / 86400 as last_interval_days
+              COALESCE((latest.metadata->>'interval_days')::double precision, 1) AS last_interval_days
          FROM aimos_memories m
          LEFT JOIN LATERAL (
            SELECT metadata

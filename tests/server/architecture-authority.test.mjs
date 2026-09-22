@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import { collectServiceCensus } from '../../scripts/architecture/sync-service-inventory.mjs';
 import { PIPELINES } from '../../services/pipeline-manifest.js';
+import { verifyGenesisManifest } from '../../scripts/verify-genesis-manifest.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const template = JSON.parse(fs.readFileSync(path.join(root, 'architecture-authority.template.json'), 'utf8'));
@@ -20,7 +21,7 @@ test('service manifest is exact set-equality with the live 295-service census', 
 
   assert.equal(census.groupCount, 17);
   assert.equal(census.serviceCount, 295);
-  assert.equal(census.digest, 'e71c332413b495b57e2349fe3f76dc98bacc66cc2b0dcc8b3c32ad05a7bff720');
+  assert.equal(census.digest, 'a001876ec9e5f503247b55479ec9ad7d4a8bab65f01582fd3060321bdb3ded4c');
   assert.deepEqual(manifestFiles, census.files);
   assert.equal(manifest.total_services, census.serviceCount);
   assert.equal(manifest.service_inventory.counted_service_files, census.serviceCount);
@@ -35,8 +36,6 @@ test('current public architecture accounting matches the live service and pipeli
   const connectionCount = Object.values(PIPELINES)
     .reduce((total, pipeline) => total + pipeline.services.length, 0);
   const architectureMap = fs.readFileSync(path.join(root, 'ARCHITECTURE-MAP.md'), 'utf8');
-  const tier4 = fs.readFileSync(path.join(root, 'Guide', 'aimos-guide-tier4-debug.md'), 'utf8');
-  const llmGuide = fs.readFileSync(path.join(root, 'Guide', 'aimos-llm-guide.md'), 'utf8');
   const pipelineSource = fs.readFileSync(path.join(root, 'services', 'pipeline-manifest.js'), 'utf8');
 
   assert.match(architectureMap, new RegExp(`Service census: ${census.serviceCount} JavaScript services across ${census.groupCount} groups`));
@@ -45,14 +44,12 @@ test('current public architecture accounting matches the live service and pipeli
   assert.equal(manifest.architecture.pipeline_manifest.validated_connections, connectionCount);
   assert.equal(manifest.architecture.pipeline_manifest.pipelines, pipelineCount);
 
-  for (const guide of [tier4, llmGuide]) {
-    assert.match(guide, new RegExp(`binds ${census.serviceCount} service files`));
-    for (const pipeline of Object.values(PIPELINES)) {
-      const entry = pipeline.entry.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      assert.match(guide, new RegExp(`\\| [^\\n|]*${entry}[^\\n|]* \\| ${pipeline.services.length} \\|`));
-    }
-    assert.doesNotMatch(guide, /runWeeklyReflection|weekly-reflection/);
-  }
+  // The installed Guide is a signed, versioned corpus, not a mutable service
+  // counter. Current code is checked above; Guide byte integrity is checked
+  // independently so adding a service cannot force an unadmitted corpus edit.
+  const guide = verifyGenesisManifest({ brainRoot: root });
+  assert.equal(guide.version, template.genesis_corpus.version);
+  assert.equal(guide.corpusRoot, template.genesis_corpus.corpus_root);
   assert.match(pipelineSource, new RegExp(`\\b${pipelineCount === 6 ? 'six' : pipelineCount} canonical runtime pipelines\\b`));
 });
 

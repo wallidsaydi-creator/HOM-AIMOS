@@ -4,25 +4,7 @@
 
 Recall is available only as envelope-signed `POST /aimos/recall`. The signature covers the exact JSON body, method, and path. Unsigned/query-string GET recall is rejected.
 
-## One Canonical Recall Owner
-
-Every REST, MCP, V1, and native-tool recall enters
-`executeCanonicalRecall`. That owner resolves the exact signed command, locks
-the active actor epoch and effective grant, and performs all candidate reads
-and provenance admission in one restricted `REPEATABLE READ` transaction.
-Optional gears use serialized savepoints inside that same snapshot; an
-unavailable optional index can roll back its own read without poisoning the
-required recall path.
-
-For lane `l`, let `P_l` be its bounded proposal set and `A_l(P_l)` its verified
-provenance/authorization admission. A successful request requires
-`|A_l(P_l)| = |P_l|`; otherwise the request fails. Only
-`D = union_l A_l(P_l)` may enter deduplication, graph expansion, scoring,
-calibration, context, or cache state. RRF is then evaluated over `D` using the
-paper formula `score(d) = sum_l 1 / (60 + rank_l(d))`. An unadmitted proposal
-therefore has exactly zero influence on another memory's rank.
-
-## Two Recall Ordering Modes
+## Two Recall Modes
 
 Aimos supports two parallel recall paths, modeled as **navigating a house**:
 
@@ -98,7 +80,7 @@ The `temporal_scope` field in `recall_meta` shows what the prelude found:
  8. reranking ──────────── Term overlap + recency boost (≤24h: +0.15, ≤7d: +0.10, ≤30d: +0.05)
  9. qmd_activation ─────── Low confidence? → structured FTS + key/metadata search
 10. hyde_expansion ─────── Still low? → HyDE expands query + multi-stage retrieval
-11. graph_family_g2 ────── Bounded G2 evidence → central native RRF; MAGMA is retained dormant research
+11. magma_native_gear ──── Bounded lineage evidence → central native RRF
 12. early_exit_decision ── High confidence? → skip optional enrichment, retain security closure
 13. salience_frequency_evaluation ── Annotate low-frequency evidence; never drop memories
 14. trust_scoring ──────── Rank by credit_score + access patterns
@@ -213,12 +195,11 @@ The `temporal_scope.dayBuckets` in the response tells you which days matched, so
 
 ## Post-Recall Side Effects
 
-- Recall access and final disclosure are recorded as signed append-only receipt events; canonical memory rows are not updated.
+- Recall access is recorded as a signed append-only receipt event; canonical memory rows are not updated.
 - Recall responses expose derived `retrieval_frequency_band = quiet | normal | high`
 - Specific cue override is non-destructive: exact key, strong identifier, or high-specificity semantic matches get `salience_penalty=0` and remain rank-eligible
 - Frequency metadata is non-destructive: no decay, suppression, pruning, deletion, or canonical content mutation
-- Online recall does not update similarity statistics or pheromone projections; those require a separately signed durable action owner.
-- If enabled, the semantic cache retains only post-admission state references and commitments; every hit is rehydrated and reverified in a new request snapshot.
+- Result cached for similar future queries (if cache enabled)
 
 ## When Recall Fails
 

@@ -117,7 +117,7 @@ export function createSaveEnvelopeOrchestrator(deps = {}) {
     if (identityTier !== 'T2' && identityTier !== 'T3') {
       return { ok: false, reason: 'malformed_input' };
     }
-    if (requestSigForm !== 4 || !signedMethod || !signedPath || !signedClaims?.prev_chain_hash) {
+    if (![4, 5].includes(requestSigForm) || !signedMethod || !signedPath || !signedClaims?.prev_chain_hash) {
       return { ok: false, reason: 'signature_context_missing' };
     }
     if (signedClaims.prev_chain_hash !== claimedPrev.toString('base64url')) {

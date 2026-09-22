@@ -232,6 +232,12 @@ canonical database fingerprint did not change, and drops the scratch database.
 Fresh installs do not need these commands. Existing retained brains use them
 append-only:
 
+The v1.0.5 source accepts the exact v1.0.4 checksum for migration 029 through
+the shipped one-file security-transition contract. The database retains the
+checksum of the bytes it actually applied; no checksum is rewritten, every
+other byte change still fails closed, and current source contains no public
+runtime-role password. Keychain remains the runtime credential authority.
+
 ```sh
 node scripts/ceremony/attest-orphaned-memories.mjs --aimos-db aimos
 node scripts/ceremony/attest-orphaned-memories.mjs --aimos-db aimos --live

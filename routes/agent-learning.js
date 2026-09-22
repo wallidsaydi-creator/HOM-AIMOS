@@ -33,6 +33,7 @@ import {
   markMessageRead,
   postAdvisory
 } from '../services/orchestration/agent-runner.js';
+import { executeTool } from '../services/orchestration/tool-registry.js';
 
 const router = express.Router();
 
@@ -141,7 +142,22 @@ router.get('/:id/inbox', async (req, res, next) => {
       return res.status(403).json({ error: 'verified_inbox_recipient_mismatch' });
     }
     const limit = parseInt(req.query.limit, 10) || 10;
-    const messages = await getAgentInbox(req.agentId, limit);
+    const recall = await executeTool('aimos_recall', {
+      query: 'agent inbox messages',
+      memory_type_filter: 'agent_message',
+      limit,
+      clearance_level: 12,
+    }, req.agentId, {
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
+      clearanceLevel: 12,
+      userPrompt: 'agent inbox messages',
+      intent: 'agent_inbox',
+    });
+    if (recall?.error || !recall?.recall_receipt) {
+      return res.status(403).json({ success: false, error: 'canonical_inbox_recall_denied' });
+    }
+    const messages = await getAgentInbox(req.agentId, limit, recall.memories || []);
     res.json({ success: true, count: messages.length, messages });
   } catch (err) {
     err.statusCode = 500;

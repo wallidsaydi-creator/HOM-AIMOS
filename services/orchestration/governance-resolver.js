@@ -4,7 +4,10 @@
 // ─── PIPELINE CONNECTIONS ────────────────────────────────────────────────────
 import { query } from '../../db/connection.js';
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
-import { ensureAgent, agents } from './agent-store.js';
+import { agents } from './agent-store.js';
+import { getAgentCert, pubkeyFingerprint } from '../security/agent-identity.js';
+import { recallAuthorizationService } from '../security/recall-authorization.js';
+import { getPermissions } from '../core/permissions.js';
 import { getEmbedding } from '../core/embeddings.js';
 import { getProviderRegistry } from '../core/providers.js';
 import { createHash } from 'crypto';
@@ -169,21 +172,39 @@ export async function ensureGovernanceSchema() {
 }
 
 export async function hydrateAgentStoreFromGovernance(companyId = COMPANY) {
-  const profilesRes = await query(`SELECT * FROM agent_profiles WHERE company_id = $1`, [companyId]);
+  if (companyId !== COMPANY) throw new Error('governance_company_mismatch');
+  // Enrollment is authoritative. Profiles are optional presentation/routing
+  // data, not a second identity registry or an enrollment prerequisite.
+  const identities = await query(
+    `SELECT DISTINCT identity.agent_id FROM agent_identity identity
+      WHERE identity.valid_from <= NOW() AND identity.valid_until > NOW()
+        AND NOT EXISTS (SELECT 1 FROM aimos_agent_revocation_events revocation
+          WHERE revocation.agent_id = identity.agent_id
+            AND revocation.agent_valid_from = identity.valid_from)
+      ORDER BY identity.agent_id`
+  );
   const selected = getModelPreference('chat');
-  const selectedModel = selected.authority === 'signed_task_preference' ? selected.model : '';
+  const selectedModel = selected.authority === 'signed_task_preference'
+    ? `${selected.provider}:${selected.model}` : null;
   const hydrated = [];
-  for (const row of profilesRes.rows) {
-    const modelId = selectedModel;
-    if (!modelId) continue;
-    const agent = ensureAgent(row.agent_id, {
-      name: row.name, tier: row.tier, model: modelId,
-      tools: [row.tool_profile || 'full'], persona: row.persona, clearanceLevel: row.clearance_level
-    });
-    agent.isActive = true;
-    agents.set(agent.id, agent);
+  for (const identity of identities.rows) {
+    const row = await getProfile(companyId, identity.agent_id);
+    if (!row) continue;
+    const previous = agents.get(row.agent_id);
+    const agent = {
+      id: row.agent_id, name: row.name, tier: row.tier, model: selectedModel,
+      tools: [row.tool_profile], toolDeltas: row.tool_deltas,
+      persona: row.persona, personaVersion: row.persona_version,
+      clearanceLevel: row.clearance_level, enrollment: row.enrollment,
+      modelSelectionState: selectedModel ? 'selected' : 'unconfigured',
+      isActive: previous?.isActive === true, lastSeen: previous?.lastSeen || null,
+    };
     hydrated.push(agent);
   }
+  // Replace only this ephemeral projection after every identity/grant verifies.
+  // This does not remove a profile, enrollment, event or retained memory.
+  agents.clear();
+  for (const agent of hydrated) agents.set(agent.id, agent);
   return hydrated;
 }
 
@@ -191,12 +212,45 @@ export async function getAgentModelCandidates(companyId, agentId) {
   if (String(companyId || '') !== COMPANY || !String(agentId || '').trim()) return [];
   return [...new Set(Object.values(getModelPreferences())
     .filter((preference) => preference.authority === 'signed_task_preference' && preference.model)
-    .map((preference) => preference.model))];
+    .map((preference) => `${preference.provider}:${preference.model}`))];
 }
 
 async function getProfile(companyId, agentId) {
+  if (companyId !== COMPANY) throw new Error('governance_company_mismatch');
+  const active = await query(
+    `SELECT valid_from FROM agent_identity identity WHERE agent_id = $1
+      AND valid_from <= NOW() AND valid_until > NOW()
+      AND NOT EXISTS (SELECT 1 FROM aimos_agent_revocation_events revocation
+        WHERE revocation.agent_id = identity.agent_id AND revocation.agent_valid_from = identity.valid_from)
+      ORDER BY valid_from DESC LIMIT 1`, [agentId]);
+  if (!active.rows.length) return null;
+  const cert = await getAgentCert(agentId);
+  const subject = JSON.parse(Buffer.from(cert, 'base64url').toString('utf8')).body;
+  const validFrom = new Date(Number(subject.valid_from) * 1000).toISOString();
+  if (subject.agent_id !== agentId || validFrom !== new Date(active.rows[0].valid_from).toISOString()) {
+    throw new Error('governance_identity_epoch_mismatch');
+  }
+  const grant = await recallAuthorizationService.getEffective({ companyId, subjectAgentId: agentId, subjectValidFrom: validFrom });
+  if (!grant?.allowed) return null;
+  const permissions = await getPermissions(agentId, companyId);
   const result = await query(`SELECT * FROM agent_profiles WHERE company_id = $1 AND agent_id = $2`, [companyId, agentId]);
-  return result.rows[0] || null;
+  const profile = result.rows[0];
+  const clearance = profile ? Number(profile.clearance_level) : grant.clearanceCeiling;
+  if (!Number.isInteger(clearance) || clearance < 0 || clearance > 12) throw new Error('governance_profile_clearance_invalid');
+  return {
+    ...(profile || {}), company_id: companyId, agent_id: agentId,
+    name: profile?.name ?? agentId, persona: profile?.persona ?? '',
+    tier: profile?.tier ?? null, persona_version: profile?.persona_version ?? null,
+    clearance_level: Math.min(clearance, grant.clearanceCeiling),
+    tool_profile: profile?.tool_profile ?? 'full',
+    tool_deltas: profile?.tool_deltas ?? { allow: [], deny: [] },
+    allow_delegation: profile?.allow_delegation === true && permissions.delegate === true,
+    enrollment: {
+      agent_id: agentId, valid_from: validFrom, pubkey_fingerprint: pubkeyFingerprint(subject.pubkey),
+      cert_sha256: createHash('sha256').update(cert).digest('hex'),
+      recall_grant_event_id: grant.eventId, recall_grant_mutation_sha256: grant.mutationHash.toString('hex'),
+    },
+  };
 }
 
 async function getRoutingRules(companyId, sourceAgentId) {
@@ -262,13 +316,21 @@ export async function resolveExecutionContext({
     }
   }
 
+  const targetProfile = await getProfile(companyId, resolvedAgentId);
+  if (!targetProfile) {
+    const error = new Error(`No enrolled authorized agent for ${resolvedAgentId}`);
+    error.statusCode = 403;
+    throw error;
+  }
   const modelCandidates = await getAgentModelCandidates(companyId, resolvedAgentId);
   let primaryModel = findRequestedModelCandidate(modelCandidates, requestedModel) || requestedModel || modelCandidates[0];
   if (!primaryModel || !modelCandidates.some((candidate) => modelsEquivalent(candidate, primaryModel))) {
-    throw new Error(`model_policy_unavailable:${resolvedAgentId}`);
+    const error = new Error(`model_policy_unavailable:${resolvedAgentId}`);
+    error.code = 'MODEL_POLICY_UNAVAILABLE';
+    error.statusCode = 503;
+    throw error;
   }
 
-  const targetProfile = await getProfile(companyId, resolvedAgentId);
   let capabilityProbe = null;
   try {
     const taskHorizon = estimateStateUpdateDepth(prompt);

@@ -30,6 +30,8 @@ import { query } from '../../db/connection.js';
 import { executeHousekeeperCanonicalSave } from '../write/canonical-save-owner.js';
 import { runProvider } from '../core/providers.js';
 import { logEvent } from '../observe/event-ledger.js';
+import { createToolInputState, recordToolContextInput,
+  recordVerifiedEventContextInput } from '../orchestration/tool-action-ledger.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 
@@ -157,7 +159,7 @@ export async function replayFailuresBatch(companyId, since) {
   let rows;
   try {
     const result = await query(
-      `SELECT id, operation, key, metadata, ts
+      `SELECT id, encode(mutation_hash, 'hex') AS mutation_sha256, operation, key, metadata, ts
        FROM aimos_events
        WHERE company_id = $1
          AND operation IN ('error', 'failure', 'tool_failure', 'task_failure')
@@ -192,7 +194,8 @@ export async function replayFailuresBatch(companyId, since) {
     }
     const cluster = clusters.get(signature);
     cluster.count++;
-    cluster.failures.push({ id: row.id, operation: row.operation, key: row.key, metadata, ts: row.ts });
+    cluster.failures.push({ id: row.id, mutation_sha256: row.mutation_sha256,
+      operation: row.operation, key: row.key, metadata, ts: row.ts });
   }
 
   // Sort clusters by frequency descending, extract cross-task patterns
@@ -246,6 +249,12 @@ export async function generateAntiSkill(failureCluster, companyId) {
   if (!failureCluster?.signature) {
     return { key: null, saved: false };
   }
+  const nativeToolInputs = createToolInputState();
+  for (const failure of failureCluster.failures || []) recordVerifiedEventContextInput(nativeToolInputs, {
+    owner: 'services/learning/failure-replay.js#generateAntiSkill',
+    eventId: failure.id,
+    mutationSha256: failure.mutation_sha256,
+  });
 
   const prompt = `You are a skill consolidation engine. Create an anti-skill from a failure pattern.
 
@@ -266,6 +275,12 @@ Output format:
   let raw = '';
   try {
     raw = await runProvider({ prompt });
+    recordToolContextInput(nativeToolInputs, {
+      kind: 'derived',
+      owner: 'services/learning/failure-replay.js#generateAntiSkill',
+      ref: `anti-skill-model-output:${failureCluster.signature}`,
+      value: raw,
+    });
   } catch (err) {
     console.error('[failure-replay] generateAntiSkill LLM call failed:', err.message);
   }
@@ -308,7 +323,8 @@ Output format:
       memory_type: 'procedural',
       clearance_level: 3,
       source: 'failure-replay',
-    });
+      source_memory_ids: [],
+    }, { nativeToolInputs });
 
     await logEvent(cid, 'failure-replay', 'anti_skill_generated', key, {
       reasoning: `Anti-skill generated from ${failureCluster.count} failure(s). Pattern: ${failureCluster.pattern?.slice(0, 100) || failureCluster.signature}`,

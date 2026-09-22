@@ -15,7 +15,7 @@ import { randomUUID } from 'crypto';
 import { agents } from '../services/orchestration/agent-store.js';
 import { runAgent, runAgentStream, extractConfidence } from '../services/orchestration/agent-runner.js';
 import { executeCanonicalSave } from '../services/write/canonical-save-owner.js';
-import { providerStatus } from '../services/core/providers.js';
+import { providerStatus, resolveProviderForModel } from '../services/core/providers.js';
 import { resolveExecutionContext } from '../services/orchestration/governance-resolver.js';
 import { withSessionLane } from '../services/orchestration/session-runner.js';
 import {
@@ -52,7 +52,12 @@ import { getPermissions } from '../services/core/permissions.js';
 import { verifiedRequestAuthorityFromRequest } from '../services/security/auth-gate.js';
 
 const router = express.Router();
-const AGENT_RUN_TIMEOUT_MS = 120_000;
+
+function sameResolvedModel(left, right) {
+  const leftModel = resolveProviderForModel(String(left || ''), '').model;
+  const rightModel = resolveProviderForModel(String(right || ''), '').model;
+  return Boolean(leftModel && rightModel && leftModel.toLowerCase() === rightModel.toLowerCase());
+}
 
 async function authorizeExecutionTarget(req, targetAgentId) {
   const actorAgentId = req.executionContext?.actorAgentId || req.agentId || null;
@@ -807,6 +812,7 @@ async function executeAgentRun(params) {
     credentialUseContext = {},
     requestAuthority,
     prompt,
+    admissionSignal,
     routingPrompt,
     userPrompt,
     skipAimos = false,
@@ -994,14 +1000,16 @@ async function executeAgentRun(params) {
       }
     }
 
-    const timeoutMs = AGENT_RUN_TIMEOUT_MS;
-    const laneResult = await withSessionLane({
+    let laneResult;
+    try {
+      laneResult = await withSessionLane({
       companyId: COMPANY,
       sessionKey: normalizedSessionKey,
       runId,
       agentId: sourceAgentId,
       model: FAST_LANE_MODEL,
       authority: credentialUseContext,
+      signal: admissionSignal,
     }, async ({ queueWaitMs, sessionKey: lockedSessionKey }) => {
       runningAt = new Date().toISOString();
       onFastLaneClaimed({ runId, sourceAgentId, queueWaitMs });
@@ -1035,8 +1043,7 @@ async function executeAgentRun(params) {
         authority: credentialUseContext,
       });
 
-      return Promise.race([
-        agentRunner(sourceAgentId, prompt, {
+      return agentRunner(sourceAgentId, prompt, {
           skipAimos: true,
           fastLane: true,
           taskType: inferredTaskType || inferredIntent,
@@ -1057,13 +1064,15 @@ async function executeAgentRun(params) {
           autonomous: Boolean(directiveId),
           credentialUseContext,
           executionContext: credentialUseContext,
-        }),
-        new Promise((_, reject) => {
-          setTimeout(() => reject(new Error(`Agent run timed out after ${timeoutMs}ms`)), timeoutMs);
-        })
-      ]);
+        });
     });
 
+    } catch (error) {
+      error.runId = runId;
+      error.acceptedAt = acceptedAt;
+      error.runningAt = runningAt;
+      throw error;
+    }
     const result = laneResult.result;
     const payload = {
       success: true,
@@ -1243,20 +1252,22 @@ async function executeAgentRun(params) {
     }
   }
 
-  const timeoutMs = AGENT_RUN_TIMEOUT_MS;
   const executionModelPlan = [
     effectiveRequestedModel,
     executionResolution.primaryModel,
     ...(executionResolution.fallbackChain || [])
   ].filter(Boolean);
 
-  const laneResult = await withSessionLane({
+  let laneResult;
+  try {
+    laneResult = await withSessionLane({
     companyId: COMPANY,
     sessionKey: executionResolution.sessionKey || normalizedSessionKey,
     runId,
     agentId: intelligenceMode ? specialistAgentId : executionResolution.resolvedAgentId,
     model: executionResolution.primaryModel,
     authority: credentialUseContext,
+    signal: admissionSignal,
   }, async ({ queueWaitMs, sessionKey: lockedSessionKey }) => {
     runningAt = new Date().toISOString();
     onRunning({ runId, sourceAgentId, queueWaitMs });
@@ -1283,8 +1294,10 @@ async function executeAgentRun(params) {
       authority: credentialUseContext,
     });
 
-    return Promise.race([
-      intelligenceMode
+    // Keep the session lane until the real operation settles. A racing timer
+    // does not cancel inference/SAVE and previously released it before writes.
+    // Provider-native abort deadlines and bounded tool loops own execution.
+    return intelligenceMode
         ? runIntelligencePipeline({
             sourceAgentId,
             sourceAgent,
@@ -1319,16 +1332,19 @@ async function executeAgentRun(params) {
             autonomous: Boolean(directiveId),
             credentialUseContext,
             executionContext: credentialUseContext,
-          }),
-      new Promise((_, reject) => {
-        setTimeout(() => reject(new Error(`Agent run timed out after ${timeoutMs}ms`)), timeoutMs);
-      })
-    ]);
+            requestAuthority,
+          });
   });
 
+  } catch (error) {
+    error.runId = runId;
+    error.acceptedAt = acceptedAt;
+    error.runningAt = runningAt;
+    throw error;
+  }
   const result = laneResult.result;
   const modelResolved = result.modelResolved || result.model || executionResolution.primaryModel;
-  const fallbackUsed = Boolean(result.fallbackUsed || modelResolved !== executionResolution.primaryModel);
+  const fallbackUsed = Boolean(result.fallbackUsed || !sameResolvedModel(modelResolved, executionResolution.primaryModel));
   const delegatedTo = result.delegatedTo || (
     intelligenceMode
       ? specialistAgentId
@@ -1405,7 +1421,7 @@ async function executeAgentRun(params) {
     response: deliveryResponse,
     directiveClaimStatus
   };
-  const finalPayload = attachLifecycle(payload, {
+  let finalPayload = attachLifecycle(payload, {
     status: 'completed',
     runId,
     acceptedAt,
@@ -1436,7 +1452,7 @@ async function executeAgentRun(params) {
   });
 
   if (!effectiveSkipAimos) {
-    await saveIdempotentResponse({
+    finalPayload = await saveIdempotentResponse({
       companyId: COMPANY,
       agentId: sourceAgentId,
       idempotencyKey,
@@ -1474,6 +1490,10 @@ async function executeAgentRun(params) {
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 router.post('/:id/run', async (req, res, next) => {
+  const admissionController = new AbortController();
+  res.once('close', () => { if (!res.writableFinished) admissionController.abort(); });
+  const requestAuthority = verifiedRequestAuthorityFromRequest(req);
+  const credentialUseContext = requestAuthority;
   const body = req.body || {};
   const {
     prompt,
@@ -1500,12 +1520,13 @@ router.post('/:id/run', async (req, res, next) => {
 
   try {
     const outcome = await executeAgentRun({
+      ...body,
       agentIdFromRoute: req.params.id,
       actorAgentId: targetAuthorization.actorAgentId,
-      credentialUseContext: req.executionContext,
-      requestAuthority: verifiedRequestAuthorityFromRequest(req),
-      ...body,
-      agentRunner: runAgent
+      credentialUseContext,
+      requestAuthority,
+      agentRunner: runAgent,
+      admissionSignal: admissionController.signal,
       // No hooks needed — JSON route has no lifecycle event side-effects
     });
 
@@ -1550,6 +1571,11 @@ router.post('/:id/run', async (req, res, next) => {
       return next(err);
     }
 
+    if (err.code === 'MODEL_POLICY_UNAVAILABLE' && !runId) {
+      err.publicMessage = 'Agent identity is available, but no matching signed model selection is configured.';
+      return next(err);
+    }
+
     const isToolApproval = err?.code === 'TOOL_APPROVAL_REQUIRED';
     const isConstitutionBlock = err?.code === 'HOM_CONSTITUTION_VIOLATION';
     const isKnowledgeGate = err?.code === 'KNOWLEDGE_ACQUISITION_REQUIRED';
@@ -1564,7 +1590,7 @@ router.post('/:id/run', async (req, res, next) => {
         approvalRequestId: err?.toolApproval?.approvalRequestId || null,
         authority: credentialUseContext,
       });
-    } else if (runId) {
+    } else if (runId && err.executionStarted !== false) {
       await markRunFailed({
         runId,
         companyId: COMPANY,
@@ -1615,12 +1641,19 @@ router.post('/:id/run', async (req, res, next) => {
       const statusCode = isToolApproval ? 409 : (isConstitutionBlock ? 409 : (isKnowledgeGate ? 428 : 504));
       return res.status(statusCode).json(errorPayload);
     }
+    if (['session_queue_overloaded', 'session_queue_cancelled', 'session_queue_timed_out', 'session_admission_draining'].includes(err.code)) {
+      return res.status(err.statusCode).json(errorPayload);
+    }
     err.statusCode = 500;
     next(err);
   }
 });
 
 router.post('/:id/stream', async (req, res, next) => {
+  const admissionController = new AbortController();
+  res.once('close', () => { if (!res.writableFinished) admissionController.abort(); });
+  const requestAuthority = verifiedRequestAuthorityFromRequest(req);
+  const credentialUseContext = requestAuthority;
   const body = req.body || {};
   const { prompt, directiveId } = body;
 
@@ -1643,7 +1676,7 @@ router.post('/:id/stream', async (req, res, next) => {
   let streamedAny = false;
   let streamBuffer = '';
   let streamLastFlushAt = Date.now();
-  req.on('close', () => { clientClosed = true; });
+  res.once('close', () => { clientClosed = true; });
 
   function flushStreamBuffer(force = false) {
     if (clientClosed || !streamBuffer) return;
@@ -1679,12 +1712,13 @@ router.post('/:id/stream', async (req, res, next) => {
 
   try {
     const outcome = await executeAgentRun({
+      ...body,
       agentIdFromRoute: req.params.id,
       actorAgentId: targetAuthorization.actorAgentId,
-      credentialUseContext: req.executionContext,
-      requestAuthority: verifiedRequestAuthorityFromRequest(req),
-      ...body,
+      credentialUseContext,
+      requestAuthority,
       agentRunner: makeStreamRunner,
+      admissionSignal: admissionController.signal,
       hooks: {
         onFastLaneAccepted: ({ runId: rid, sourceAgentId: sid }) => {
           emitLifecycleSse(res, 'accepted', { runId: rid, sourceAgentId: sid });
@@ -1761,6 +1795,13 @@ router.post('/:id/stream', async (req, res, next) => {
       return;
     }
 
+    if (err.code === 'MODEL_POLICY_UNAVAILABLE' && !runId) {
+      writeSse(res, { code: err.code, error: 'Agent identity is available, but no matching signed model selection is configured.',
+        status: 'failed', lifecycleStatus: 'failed', http_status: 503 });
+      res.end();
+      return;
+    }
+
     const isToolApproval = err?.code === 'TOOL_APPROVAL_REQUIRED';
     const isConstitutionBlock = err?.code === 'HOM_CONSTITUTION_VIOLATION';
     const isKnowledgeGate = err?.code === 'KNOWLEDGE_ACQUISITION_REQUIRED';
@@ -1775,7 +1816,7 @@ router.post('/:id/stream', async (req, res, next) => {
         approvalRequestId: err?.toolApproval?.approvalRequestId || null,
         authority: credentialUseContext,
       });
-    } else if (runId) {
+    } else if (runId && err.executionStarted !== false) {
       await markRunFailed({
         runId,
         companyId: COMPANY,

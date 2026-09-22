@@ -52,6 +52,32 @@ function sha256Hex(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
+// One signed finalization can persist multiple canonical memories. Their
+// operation IDs must differ while remaining bound to the same request and
+// stable across an uncertain-result retry. RFC 9562 UUIDv8 reserves the
+// version/variant bits; the other 122 bits are a domain-separated SHA-256
+// commitment to the exact native authority and output key.
+function sessionSaveSuboperationId(context, sessionId, key) {
+  const authority = context.requestAuthority || context.mutationAuthority;
+  if (!authority) return null;
+  const authorityId = authority.kind === 'verified_request' ? authority.requestReceiptId
+    : authority.kind === 'verified_housekeeper_action' ? authority.actionEventId
+      : authority.kind === 'verified_tool_action' ? authority.eventId : null;
+  if (typeof authorityId !== 'string'
+      || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(authorityId)) {
+    throw new Error('session_save_suboperation_authority_invalid');
+  }
+  const bytes = createHash('sha256')
+    .update('hom.aimos.session-save-suboperation/v1\0', 'utf8')
+    .update(canonicalJson({ authority_kind: authority.kind,
+      authority_id: authorityId.toLowerCase(), session_id: sessionId, key }), 'utf8')
+    .digest().subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x80;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 function asHex(value) {
   if (Buffer.isBuffer(value)) return value.toString('hex');
   const text = String(value || '').trim().toLowerCase();
@@ -398,7 +424,7 @@ export function createSessionMemoryOwner(deps = {}) {
       return executeSaveFn({ ...spec, mutation_authority: requestAuthority });
     }
     if (autonomousHousekeeper) {
-      return executeHousekeeperSaveFn(spec);
+      return executeHousekeeperSaveFn(spec, { nativeToolInputs: context.nativeToolInputs || null });
     }
     throw new Error('session_save_authority_required');
   }
@@ -419,7 +445,7 @@ export function createSessionMemoryOwner(deps = {}) {
     const speaker = normalizeSpeaker(input.speaker);
     const imageContext = normalizeImageContext(input.image_context ?? input.imageContext);
     const source = String(input.source || context.source || 'session-runtime').trim() || 'session-runtime';
-    const clearanceLevel = Number(input.clearance_level ?? context.clearanceLevel ?? 1);
+    const clearanceLevel = Number(input.clearance_level ?? ((context.requestAuthority || context.mutationAuthority) ? 1 : context.clearanceLevel) ?? 1);
     if (!Number.isInteger(clearanceLevel) || clearanceLevel < 1 || clearanceLevel > 12) {
       throw new Error('session_turn_clearance_invalid');
     }
@@ -605,7 +631,13 @@ export function createSessionMemoryOwner(deps = {}) {
     const expectedTurnIdHashesSha256 = normalizeExpectedTurnIdHashesSha256(
       input.expected_turn_id_hashes_sha256 ?? input.expectedTurnIdHashesSha256,
     );
-    const clearanceLevel = Number(input.clearance_level ?? context.clearanceLevel ?? 1);
+    // Native provenance verifies this exact signed input root. Reject an
+    // unbound finalization before any exchange SAVE can commit.
+    if ((context.requestAuthority || context.mutationAuthority)
+      && (expectedTurnCount == null || expectedTurnIdHashesSha256 == null)) {
+      throw new Error('session_finalization_signed_input_root_required');
+    }
+    const clearanceLevel = Number(input.clearance_level ?? ((context.requestAuthority || context.mutationAuthority) ? 1 : context.clearanceLevel) ?? 1);
     if (!Number.isInteger(clearanceLevel) || clearanceLevel < 1 || clearanceLevel > 12) {
       throw new Error('session_finalization_clearance_invalid');
     }
@@ -708,6 +740,8 @@ export function createSessionMemoryOwner(deps = {}) {
           company_id: companyId,
           agent_id: agentId,
           key: spec.key,
+          ...(context.requestAuthority || context.mutationAuthority
+            ? { save_operation_id: sessionSaveSuboperationId(context, sessionId, spec.key) } : {}),
           value: canonicalJson(spec.record),
           scope: 'global',
           clearance_level: clearanceLevel,
@@ -816,6 +850,8 @@ export function createSessionMemoryOwner(deps = {}) {
         company_id: companyId,
         agent_id: agentId,
         key,
+        ...(context.requestAuthority || context.mutationAuthority
+          ? { save_operation_id: sessionSaveSuboperationId(context, sessionId, key) } : {}),
         value: canonicalJson(manifest),
         scope: 'global',
         clearance_level: clearanceLevel,
@@ -911,7 +947,7 @@ export function createSessionMemoryOwner(deps = {}) {
     });
   }
 
-  return Object.freeze({ appendTurn, finalizeSession, loadVerifiedTurns });
+  return Object.freeze({ appendTurn, finalizeSession, loadVerifiedTurns, canonicalizeRetainedTurns });
 }
 
 export const sessionMemoryOwner = createSessionMemoryOwner();

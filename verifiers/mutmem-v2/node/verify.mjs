@@ -4,6 +4,7 @@ import { readFile, stat } from 'node:fs/promises';
 
 import { verifyMutationBundle } from './mutation-verifier.mjs';
 import { verifyRecallEnvelope } from './recall-verifier.mjs';
+import { parseJsonWire } from './crypto-kernel.mjs';
 
 function cli(name) {
   const inline = process.argv.find((value) => value.startsWith(`${name}=`));
@@ -16,7 +17,7 @@ const readJson = async (file) => {
   if (!metadata.isFile() || metadata.size > 64 * 1024 * 1024) {
     throw new Error('input_size_invalid');
   }
-  return JSON.parse(await readFile(file, 'utf8'));
+  return parseJsonWire(await readFile(file, 'utf8'));
 };
 
 async function main() {
@@ -47,6 +48,7 @@ async function main() {
     trustContext,
     expectedMasterFingerprint,
     verifyCryptography: !structural,
+    requireAncestry: process.argv.includes('--require-ancestry'),
   }));
   console.log(JSON.stringify({
     schema: 'hom.aimos.mutmem-independent-mutation-result-set/v2',

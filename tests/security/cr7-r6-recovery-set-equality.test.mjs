@@ -6,7 +6,8 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { createMaterialEffectOwner, reconstructMaterialEffectTraces } from '../../services/security/material-effect-owner.js';
-import { reconcileOpenToolActions, reconstructToolActionTraces } from '../../services/orchestration/tool-action-ledger.js';
+import { reconcileOpenToolActions, reconstructToolActionTraces,
+  reconcileOpenModelContexts, reconstructModelContextTraces } from '../../services/orchestration/tool-action-ledger.js';
 import { reconcileCredentialUseReservations } from '../../services/security/credential-ledger.js';
 import { reconcileOpenCanonicalSaveActionsWithDeps, reconstructCanonicalSaveActionTraces } from '../../services/write/canonical-save-contract.js';
 import { reconcileOpenRuns, reconstructRunTraces } from '../../services/orchestration/run-metadata.js';
@@ -76,6 +77,30 @@ test('tool actions reconcile once without invoking the tool', async () => {
   assert.throws(() => reconstructToolActionTraces(substituted), /start_binding_invalid/);
 });
 
+test('model contexts reconcile once without replaying inference or fabricating a result', async () => {
+  const rows = [event({
+    id: 'context-start', operation: 'tool_context_prepared', key: HASH_A, agent: 'codex-auditor',
+    metadata: { schema: 'hom.aimos.tool-context/v1', invocation_input_sha256: HASH_A },
+  })];
+  const logEventFn = async (_company, agent, operation, key, metadata, parent) => {
+    if (rows.some((row) => row.operation === operation && row.key === key)) throw new Error('event_operation_key_exists');
+    const row = event({ id: 'context-terminal', operation, key, metadata, parent, mutation: HASH_B, agent });
+    rows.push(row);
+    return { event_id: row.id, mutation_hash: row.mutation_hash };
+  };
+  const first = await reconcileOpenModelContexts({ rows, logEventFn });
+  const second = await reconcileOpenModelContexts({ rows, logEventFn });
+  assert.equal(first.reconciled.length, 1);
+  assert.equal(first.remainingOpen, 0);
+  assert.equal(first.modelInvocationsReplayed, 0);
+  assert.equal(second.reconciled.length, 0);
+  assert.equal(reconstructModelContextTraces([...rows].reverse()).complete.length, 1);
+  assert.throws(() => reconstructModelContextTraces([...rows, structuredClone(rows[1])]), /terminal_fork/);
+  const substituted = structuredClone(rows);
+  substituted[1].metadata.context_mutation_sha256 = '0'.repeat(64);
+  assert.throws(() => reconstructModelContextTraces(substituted), /start_binding_invalid/);
+});
+
 test('credential-use recovery appends indeterminate only and is an exact second-pass no-op', async () => {
   let open = [{
     useId: 'credential-use-1', useGroupId: null, serviceName: 'example', slotId: 'slot',
@@ -118,7 +143,7 @@ test('autonomous SAVE orphan recovery closes the action without repeating SAVE o
   assert.equal(first.remainingOpen, 0);
   assert.equal(second.reconciled.length, 0);
   assert.equal(reconstructCanonicalSaveActionTraces([...rows].reverse()).complete.length, 1);
-  assert.throws(() => reconstructCanonicalSaveActionTraces([...rows, structuredClone(rows[1])]), /terminal_fork/);
+  assert.throws(() => reconstructCanonicalSaveActionTraces([...rows, structuredClone(rows[1])]), /canonical_save_action_duplicate_event/);
   const substituted = structuredClone(rows);
   substituted[1].metadata.action_sha256 = '0'.repeat(64);
   assert.throws(() => reconstructCanonicalSaveActionTraces(substituted), /recovery_binding_invalid/);
@@ -185,9 +210,9 @@ test('committed material effects and success terminals have exact linear-time se
   assert.throws(() => verifyCommittedTerminalBijection({ committedEffects: [{ binding: HASH_A }], successTerminals: [{ binding: HASH_A }, { binding: HASH_A }] }), /duplicate/);
 });
 
-test('independent R6 audit freezes six recovery owners and eight failure modes', () => {
+test('independent R6 audit accounts seven recovery owners and eight failure modes', () => {
   const proof = proveCr7R6RecoverySetEquality();
-  assert.equal(proof.recovery_family_count, 6);
+  assert.equal(proof.recovery_family_count, 7);
   assert.equal(proof.failure_matrix.length, 8);
   assert.equal(proof.reconstruction.exactSetEquality, true);
   assert.equal(proof.second_pass_exact_noop_required, true);
@@ -208,18 +233,22 @@ test('independent R6 audit freezes six recovery owners and eight failure modes',
   assert.match(proof.proof_root_sha256, /^[0-9a-f]{64}$/);
 });
 
-test('server boot verifies one shared event snapshot before conditional family recovery', () => {
+test('server boot uses one verified grouped reader and native recovery owner per open action', () => {
   const server = fs.readFileSync(path.join(ROOT, 'server.js'), 'utf8');
   const start = server.indexOf('async function reconcileCr7OpenActionsAtBoot()');
-  const end = server.indexOf('\nasync function startServer()', start);
+  const end = server.indexOf('\nasync function checkpointCr7RecoveryAtBoot()', start);
   const owner = server.slice(start, end);
-  assert.equal((owner.match(/readVerifiedEventHistory\(/g) || []).length, 1);
+  assert.equal((owner.match(/readVerifiedRecoveryHistory\(/g) || []).length, 1);
+  assert.match(owner, /operations/);
   for (const reducer of [
-    'reconstructMaterialEffectTraces(events)',
-    'reconstructToolActionTraces(events)',
-    'reconstructCanonicalSaveActionTraces(events)',
-    'reconstructRunTraces(events)',
-    'reconstructSessionLaneTraces(events)',
+    'reconstructMaterialEffectTraces',
+    'reconstructToolActionTraces',
+    'reconstructModelContextTraces',
+    'reconstructCanonicalSaveActionTraces',
+    'reconstructRunTraces',
+    'reconstructSessionLaneTraces',
   ]) assert.match(owner, new RegExp(reducer.replace(/[()]/g, '\\$&')));
+  assert.match(owner, /onOpenGroup/);
+  assert.match(owner, /await handlers\[family\]\(readHistoryFn\)/);
   assert.match(owner, /openCredentialUses\.length/);
 });

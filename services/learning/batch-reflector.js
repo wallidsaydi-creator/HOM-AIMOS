@@ -175,9 +175,17 @@ export function scoreOutput(output, dimensions = []) {
  * @param {object} hypothesis - Initial hypothesis: {text, datasetSchema, variables}
  * @param {number} maxIterations - Max loop iterations (default: 3)
  * @param {string} companyId - Company ID
+ * @param {object} options - Runtime-owned input state for the derived gate SAVE
  * @returns {Promise<{hypothesis: object, iterations: number, passed: boolean, gateStatus: string}>}
  */
-export async function runQualityLoop(hypothesis, maxIterations = DEFAULT_QUALITY_MAX_ITERATIONS, companyId = COMPANY) {
+export async function runQualityLoop(hypothesis, maxIterations = DEFAULT_QUALITY_MAX_ITERATIONS, companyId = COMPANY, options = {}) {
+  const inheritedRuntimeInputs = Boolean(options.nativeToolInputs);
+  const subjectAgentId = inheritedRuntimeInputs
+    ? String(options.subjectAgentId || '').trim()
+    : 'batch-reflector';
+  if (inheritedRuntimeInputs && !subjectAgentId) {
+    throw new Error('batch_reflector_subject_required');
+  }
   let current = { ...hypothesis };
   let iterations = 0;
   let passed = false;
@@ -215,7 +223,7 @@ export async function runQualityLoop(hypothesis, maxIterations = DEFAULT_QUALITY
   try {
     await executeHousekeeperCanonicalSave({
       company_id: companyId,
-      agent_id: 'batch-reflector',
+      agent_id: subjectAgentId,
       key: `gate1_${Date.now()}`,
       value: JSON.stringify({
         gateNumber: 1,
@@ -225,12 +233,13 @@ export async function runQualityLoop(hypothesis, maxIterations = DEFAULT_QUALITY
         status: gateStatus,
         createdAt: new Date().toISOString()
       }),
-      scope: 'system',
+      scope: inheritedRuntimeInputs ? 'private' : 'system',
       memory_type: 'human_gate',
       memory_tier: 'short-term',
-      clearance_level: 6,
+      clearance_level: inheritedRuntimeInputs ? 12 : 6,
+      data_class: inheritedRuntimeInputs ? 'restricted' : 'internal',
       source: 'batch-reflector',
-    });
+    }, { nativeToolInputs: options.nativeToolInputs || null });
   } catch (err) {
     console.warn(`[BATCH-REFLECTOR] Failed to record gate 1: ${err.message}`);
   }

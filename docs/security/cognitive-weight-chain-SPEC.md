@@ -24,6 +24,60 @@ Monotonicity is explicitly **absent**. The only monotone quantity is chain *leng
 
 ## 2. Notation
 
+### AUD-007 typed ancestry binding (deployed; failure-path qualification open, 2026-09-12)
+
+The operator approved explicit predecessor representation on 2026-09-12.
+The implementation uses the existing signed REWEIGHT body and transition
+signature, not a new ledger or signer. Alternative considered: a separate
+signed export-time mapping event; that would attest at export time rather than
+at the mutation transaction. The selected design binds the native heads under
+their existing transaction locks before signing.
+
+`ancestry_binding.schema = hom.aimos.cognitive-ancestry-binding/v1`.
+`native_predecessor` contains exactly `kind`, `commitment_hex`, and
+`provenance_id`; kind is
+`mutation_hash`, `occurrence_ref`, or `genesis`. `projection_predecessor`
+contains exactly `kind` and `commitment_hex`; kind is `projection_hash` or `genesis`.
+Genesis requires JSON null for its commitment and, for the native predecessor,
+its provenance id. Other kinds require lowercase 32-byte hex; a non-genesis
+native predecessor additionally requires the exact retained provenance UUID. The UUID
+permits an indexed parent lookup rather than scanning history for a derived hash.
+No zero-hash string is silently converted to genesis. The native topology
+owner supplies the native kind and bytes; occurrence references retain their
+existing version-specific derivation.
+
+Let B be the signed REWEIGHT body containing that binding, p the stored native
+predecessor, and h_prev the stored projection predecessor. Verification requires
+the binding's values to equal p and h_prev, with their explicit kinds checked.
+The existing signatures authenticate B and the transition commitment containing
+sigma = H(H(B) || p || nonce || time). The existing projection formula then
+determines h from sigma and h_prev. There is no circular self-hash: h is not
+placed inside B. Subject/company, weights and signer epoch remain checked by
+the original native proof and certificate owners.
+
+The same transaction appends `cognitive_ancestry_bound` through the existing
+Housekeeper event owner. Its `hom.aimos.cognitive-ancestry-bridge/v1` metadata
+binds B's typed predecessors, sigma, h, memory/company, integer weights and the
+exact signer epoch/certificate fingerprint. The existing exact-byte event
+signature makes this bridge independently verifiable by SQL without requiring
+PostgreSQL to reconstruct an arbitrary legacy JSON signing body. The constrained
+weight writer requires the native provenance and bridge event to have been
+inserted in its current transaction before accepting the projection. No caller
+gets a new signer or direct mutation permission. The two pre-existing signatures
+and historical preimages are not rewritten.
+
+Under Ed25519 unforgeability and SHA-256 collision resistance, changing either
+typed predecessor while preserving these verified signatures and commitments
+is infeasible: it changes B, sigma or the recomputed h. This binds an edge; a
+claim about a complete history additionally requires the complete ordered
+history and its genesis/terminal checks. Historical bodies without this binding
+remain historical evidence and fail an ancestry-required verification request.
+No present-time signature is represented as one made at historical mutation time.
+
+Reference: Cryptography Engineering §6.7 (Horton principle/interpretation),
+RFC 8032 (Ed25519), and the existing projection formulas below. No learning
+equation, retrieval-weight bound, or published manuscript is changed.
+
 | Symbol | Meaning | Domain / type |
 |---|---|---|
 | $m$ | memory id | UUID, 16 bytes |

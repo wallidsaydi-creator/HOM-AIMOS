@@ -12,7 +12,8 @@ test('ephemeral natural-language scheduler and placeholder executor are absent',
 
 test('canonical scheduler never executes when overlap authority is unavailable', async () => {
   const scheduler = await readFile(new URL('../../services/orchestration/scheduler.js', import.meta.url), 'utf8');
-  assert.match(scheduler, /agentPool\.connect\(\)/);
-  assert.match(scheduler, /reason: 'scheduler_lock_authority_unavailable'/);
+  assert.match(scheduler, /client = await schedulerLockPool\.connect\(\)/);
+  assert.match(scheduler, /catch \(error\) \{ return await defer\('scheduler_lock_authority_unavailable'\); \}/);
+  assert.doesNotMatch(scheduler, /agentPool\.connect\(\)/);
   assert.doesNotMatch(scheduler, /advisory-lock connect failed, running unguarded/);
 });

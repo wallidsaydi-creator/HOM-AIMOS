@@ -34,6 +34,7 @@
  * agent_runtime), NOT by the `vandalismCheck` string scan below.
  */
 import pg from 'pg';
+import { beginServingWork } from '../services/runtime/serving-control.js';
 import {
   AIMOS_RUNTIME_CREDENTIAL_SERVICE,
   AIMOS_RUNTIME_ROLE,
@@ -57,12 +58,21 @@ const FAILOVER_THRESHOLD = 3; // switch after 3 consecutive connection failures
 const RECOVERY_CHECK_MS = 60_000; // try primary again every 60s during failover
 let _recoveryTimer = null;
 
-function createPool(url, label = 'database') {
+function createPool(url, label = 'database', options = {}) {
   const p = new Pool({
     connectionString: url,
-    ssl: false
+    ssl: false,
+    connectionTimeoutMillis: 5000,
+    ...options,
   });
-  p.on('connect', () => {
+  p.on('connect', (client) => {
+    // pg emits some terminal socket failures on the checked-out Client after
+    // the rejected query has already unwound. Keep one pool-lifetime listener
+    // so a correctly discarded connection can never become an unhandled
+    // process exception; transaction owners still receive the query rejection.
+    client.on('error', (error) => {
+      console.error(`[DB:${label}] Client connection error:`, error.message);
+    });
     console.error(`✅ Connected to ${label}` + (_failoverActive ? ' (DR REPLICA)' : '') + ' (no-ssl)');
   });
   p.on('error', (err) => {
@@ -90,18 +100,20 @@ function getRestrictedUrl(baseUrl) {
   }
 }
 
-function createLazyRestrictedPool() {
+function createLazyRestrictedPool(label = 'agent_runtime', options = {}) {
   let restrictedPool = null;
   function get() {
     if (!restrictedPool) {
-      restrictedPool = createPool(getRestrictedUrl(PRIMARY_URL), 'agent_runtime');
+      restrictedPool = createPool(getRestrictedUrl(PRIMARY_URL), label, options);
     }
     return restrictedPool;
   }
   return Object.freeze({
     connect: (...args) => get().connect(...args),
     query: (...args) => get().query(...args),
-    end: (...args) => restrictedPool ? restrictedPool.end(...args) : Promise.resolve()
+    end: (...args) => restrictedPool ? restrictedPool.end(...args) : Promise.resolve(),
+    stats: () => ({ total: restrictedPool?.totalCount || 0, idle: restrictedPool?.idleCount || 0,
+      waiting: restrictedPool?.waitingCount || 0, max: options.max || 10 }),
   });
 }
 
@@ -110,6 +122,12 @@ function createLazyRestrictedPool() {
 // first restricted query still fails closed if genesis has not created the
 // credential.
 export const agentPool = createLazyRestrictedPool();
+
+// Same restricted identity, separate connection capacity. Session-level job
+// locks must never consume the work pool needed by their nested transactions.
+export const schedulerLockPool = createLazyRestrictedPool('scheduler_lock', {
+  max: 2, application_name: 'aimos_scheduler_lock', statement_timeout: 5000,
+});
 
 async function switchToFailover() {
   if (!DR_URL || _failoverActive) return;
@@ -217,6 +235,36 @@ export async function query(text, params) {
  * @param {string}  [options.agent_id|agentId]          → app.current_agent_id
  * @param {string}  [options.knowledge_proof|knowledgeProof] → app.current_knowledge_proof
  */
+const TRANSACTION_OUTCOMES = new WeakMap();
+
+// A transport exception is not a rollback receipt. Only this native transaction
+// owner can attach outcome evidence; arbitrary error properties are not trusted.
+export function getTransactionOutcome(error) {
+  return error && typeof error === 'object' ? TRANSACTION_OUTCOMES.get(error) || null : null;
+}
+
+async function readDisconnectedTransactionStatus(parameters, reference) {
+  if (!reference?.transaction_id) return null;
+  // Fresh connection to the original endpoint/database/role, not a pooled stale
+  // snapshot or a failover target. Never retain credentials in the error object.
+  const connection = new pg.Client({
+    host: parameters.host, port: parameters.port, database: parameters.database,
+    user: parameters.user, password: parameters.password, ssl: false,
+    connectionTimeoutMillis: 3000, query_timeout: 3000,
+    options: '-c default_transaction_read_only=on -c statement_timeout=3000',
+  });
+  connection.on('error', () => {}); // Outcome remains unknown on transport loss.
+  try {
+    await connection.connect();
+    const row = (await connection.query(
+      'SELECT current_database() AS database, pg_xact_status($1::xid8) AS status',
+      [reference.transaction_id],
+    )).rows[0];
+    return row?.database === reference.database ? row.status : null;
+  } catch { return null; }
+  finally { await connection.end().catch(() => {}); }
+}
+
 export async function withTransaction(fn, options = {}) {
   // Accept snake_case (the existing secureQuery contract) AND camelCase.
   // Prefer snake_case; never silently ignore one style.
@@ -225,9 +273,14 @@ export async function withTransaction(fn, options = {}) {
   const knowledgeProof = options.knowledge_proof ?? options.knowledgeProof;
 
   const p = options.restricted ? agentPool : pool;
-  const client = await p.connect();
+  let client, reference = null, commitIssued = false, rolledBack = false, released = false;
+  let connectionError = null;
+  const onConnectionError = error => { connectionError = error; };
+  const finishWork = beginServingWork('database_transaction');
   try {
-    await client.query('BEGIN');
+    client = await p.connect();
+    client.on('error', onConnectionError);
+    await client.query(options.readOnly === true ? 'BEGIN READ ONLY' : 'BEGIN');
     // set_config(key, value, true) === SET LOCAL, but parameterizable and
     // therefore safe against injection. The third arg (is_local=true) scopes it
     // to this transaction.
@@ -235,13 +288,47 @@ export async function withTransaction(fn, options = {}) {
     if (agentId)        await client.query('SELECT set_config($1,$2,true)', ['app.current_agent_id', String(agentId)]);
     if (knowledgeProof) await client.query('SELECT set_config($1,$2,true)', ['app.current_knowledge_proof', String(knowledgeProof)]);
     const result = await fn(client);
-    await client.query('COMMIT');
+    if (connectionError) throw connectionError;
+    reference = (await client.query(
+      'SELECT pg_current_xact_id_if_assigned()::text AS transaction_id, current_database() AS database',
+    )).rows[0];
+    commitIssued = true;
+    const acknowledgement = await client.query('COMMIT');
+    // PostgreSQL may answer COMMIT with ROLLBACK when callback code swallowed
+    // an earlier SQL error. That is a confirmed abort, never successful work.
+    rolledBack = acknowledgement.command === 'ROLLBACK';
+    if (acknowledgement.command !== 'COMMIT') {
+      throw Object.assign(new Error('transaction_commit_not_acknowledged'), { code: 'AIMOS_COMMIT_NOT_ACKNOWLEDGED' });
+    }
     return result;
-  } catch (err) {
-    try { await client.query('ROLLBACK'); } catch { /* best effort — connection may be dead */ }
-    throw err;
+  } catch (cause) {
+    const error = cause instanceof Error ? cause : new Error('transaction_failed', { cause });
+    let state = 'NOT_COMMITTED', postgresStatus = null, rollbackAcknowledged = rolledBack;
+    if (commitIssued && !rolledBack) {
+      // Destroy the suspect pooled connection before any reconciliation. Do
+      // not send a misleading ROLLBACK after a possibly successful COMMIT.
+      const parameters = client.connectionParameters;
+      released = true; client.release(error);
+      postgresStatus = await readDisconnectedTransactionStatus(parameters, reference);
+      state = postgresStatus === 'committed' ? 'COMMITTED'
+        : postgresStatus === 'aborted' ? 'NOT_COMMITTED' : 'INDETERMINATE';
+    } else if (client && !rolledBack) {
+      try { rollbackAcknowledged = (await client.query('ROLLBACK')).command === 'ROLLBACK'; }
+      catch { released = true; client.release(error); }
+    }
+    TRANSACTION_OUTCOMES.set(error, Object.freeze({ state, commitIssued,
+      rollbackAcknowledged, postgresStatus,
+      transactionId: reference?.transaction_id || null, database: reference?.database || null }));
+    throw error;
   } finally {
-    client.release();
+    if (client && !released) {
+      client.removeListener('error', onConnectionError);
+      client.release();
+    }
+    // A discarded pg client may emit its terminal socket error after
+    // release(error) returns. Keep this listener on that destroyed client so
+    // the process cannot crash; the client is never returned to the pool.
+    finishWork();
   }
 }
 

@@ -1,3 +1,9 @@
+import { performance } from 'node:perf_hooks';
+import { createHash } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
+import { open } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 /**
  * providers.js — Model Provider Resolution and Health Engine
  * Source: Circuit Breaker (Netflix Hystrix), Health check patterns
@@ -15,8 +21,9 @@
 // ← Called by: agent-tools.js, governance-resolver.js, model-preferences.js
 // Pipeline: AGENT_RUN | Position: Model resolution (provider status check)
 // ─────────────────────────────────────────────────────────────────────────────
-import { fetchWithTimeout } from '../orchestration/http.js';
+import { fetchWithTimeout, markHttpIndeterminate } from '../orchestration/http.js';
 import {
+  appendIntegrationToken,
   syncIdentityVault as syncIdentityVaultToken
 } from '../integrations/identity-vault.js';
 import { isCircuitAvailable, recordSuccess as recordCircuitSuccess, recordFailure as recordCircuitFailure, getMaxFailoverAttempts, getCircuitState } from './provider-circuit-breaker.js';
@@ -27,9 +34,14 @@ import { credentialLedger, credentialUseEvidenceHash } from '../security/credent
 import { systemConfigStore } from '../security/system-config-store.js';
 import { AIMOS_COMPANY_ID } from './runtime-config.js';
 import { materialEffectOwner } from '../security/material-effect-owner.js';
+import { beginServingWork } from '../runtime/serving-control.js';
 
-const PROVIDER_REQUEST_TIMEOUT_MS = 60_000;
-const CODEX_REQUEST_TIMEOUT_MS = 180_000;
+export const PROVIDER_REQUEST_TIMEOUT_MS = 60_000;
+export const CODEX_REQUEST_TIMEOUT_MS = 180_000;
+const CODEX_TOOL_ROUND_LIMIT = 8;
+const CODEX_TOOL_CALL_LIMIT = 16;
+const CODEX_TOOL_ARGUMENT_BYTES = 65_536;
+const CODEX_TOOL_OUTPUT_BYTES = 1_048_576;
 const COMPANY_ID = AIMOS_COMPANY_ID;
 const OLLAMA_BASE_URL = 'http://127.0.0.1:11434';
 const LMSTUDIO_BASE_URL = 'http://127.0.0.1:1234/v1';
@@ -51,6 +63,7 @@ async function probeLocalProvider(provider) {
     : `${LMSTUDIO_BASE_URL}/models`;
 
   let effect = null;
+  let response;
   try {
     effect = await materialEffectOwner.begin({
       kind: 'external',
@@ -58,7 +71,7 @@ async function probeLocalProvider(provider) {
       targetIdentifier: provider,
       inputProjection: { provider, method: 'GET' },
     });
-    const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 3_000);
+    response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 3_000);
     state.available = response.ok;
     await materialEffectOwner.finish({
       action: effect,
@@ -67,6 +80,7 @@ async function probeLocalProvider(provider) {
       resultClass: 'provider_probe_response',
     });
   } catch (error) {
+    error = markHttpIndeterminate(error);
     state.available = false;
     if (effect) {
       try {
@@ -79,6 +93,8 @@ async function probeLocalProvider(provider) {
       } catch { /* the open signed start is recovered by CR7-R6 */ }
     }
   } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
+
     state.checkedAt = Date.now();
     state.probing = false;
   }
@@ -201,8 +217,116 @@ export function buildCodexModelsRequestUrl(endpoint, clientVersion) {
   return requestUrl.toString();
 }
 
+let codexAuthSynchronization = null;
+
+function codexAuthIsCurrent(vault) {
+  const expires = vault.expiresAt?.getTime();
+  return Number.isFinite(expires) && expires > Date.now() + 60_000;
+}
+
+async function synchronizeImportedCodexAuth() {
+  const finishWork = beginServingWork('oauth_credential_sync');
+  let handle;
+  let raw;
+  try {
+    const vault = await syncIdentityVault('codex');
+    // The signed import profile delegates remote rotation to the original
+    // Codex client. Never redeem a copied rotating refresh token independently.
+    if (vault.metadata?.source_kind !== 'codex_desktop_oauth_import'
+        || !/^[0-9a-f]{64}$/.test(String(vault.metadata.source_file_sha256 || ''))) {
+      throw new Error('codex_oauth_reconnection_required');
+    }
+    const accountId = resolveCodexAccountBinding(vault.metadata,
+      systemConfigStore.readConfigString('CODEX_ACCOUNT_ID'));
+    if (!accountId) throw new Error('codex_oauth_account_binding_required');
+    handle = await open(path.join(os.homedir(), '.codex', 'auth.json'),
+      fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW);
+    const before = await handle.stat();
+    if (!before.isFile() || typeof process.getuid !== 'function'
+        || before.uid !== process.getuid() || (before.mode & 0o077) !== 0
+        || before.size < 2 || before.size > 65_536) {
+      throw new Error('codex_oauth_source_not_private_owned_file');
+    }
+    raw = Buffer.alloc(before.size + 1);
+    let offset = 0;
+    while (offset < raw.length) {
+      const { bytesRead } = await handle.read(raw, offset, raw.length - offset, offset);
+      if (!bytesRead) break;
+      offset += bytesRead;
+    }
+    const after = await handle.stat();
+    if (offset !== before.size || after.size !== before.size || after.mtimeMs !== before.mtimeMs) {
+      throw new Error('codex_oauth_source_changed_during_read');
+    }
+    let source, claims;
+    try {
+      source = JSON.parse(raw.subarray(0, offset).toString('utf8'));
+      const token = source.tokens?.access_token;
+      if (typeof token !== 'string' || token.split('.').length !== 3) throw new Error();
+      claims = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString('utf8'));
+    } catch { throw new Error('codex_oauth_source_invalid'); }
+    // Claims are consistency checks, not an independent JWT signature proof.
+    // The protected source and existing signed account binding own this import;
+    // the remote provider authenticates the token on its next native request.
+    if (source.auth_mode !== 'chatgpt' || source.tokens.account_id !== accountId
+        || claims?.['https://api.openai.com/auth']?.chatgpt_account_id !== accountId
+        || typeof source.tokens.refresh_token !== 'string' || !source.tokens.refresh_token) {
+      throw new Error('codex_oauth_source_account_or_mode_mismatch');
+    }
+    const refreshedAt = Date.parse(source.last_refresh);
+    const previousRefresh = Date.parse(vault.metadata.source_last_refresh);
+    const sourceFileSha256 = createHash('sha256').update(raw.subarray(0, offset)).digest('hex');
+    if (!Number.isSafeInteger(claims.exp) || claims.exp <= 0
+        || claims.exp * 1000 <= Date.now() + 60_000
+        || !Number.isFinite(refreshedAt) || !Number.isFinite(previousRefresh)
+        || refreshedAt > Date.now() + 60_000) {
+      throw new Error('codex_oauth_source_not_fresh_reconnect_original_client');
+    }
+    if (sourceFileSha256 === vault.metadata.source_file_sha256
+        && refreshedAt === previousRefresh && codexAuthIsCurrent(vault)) return vault;
+    if (refreshedAt <= previousRefresh) {
+      throw new Error('codex_oauth_source_not_fresh_reconnect_original_client');
+    }
+    const expiresAt = new Date(claims.exp * 1000);
+    if (!Number.isFinite(expiresAt.getTime())) throw new Error('codex_oauth_source_expiry_invalid');
+    await appendIntegrationToken({
+      companyId: COMPANY_ID, provider: 'codex',
+      accessToken: source.tokens.access_token, refreshToken: source.tokens.refresh_token,
+      expiresAt, authType: 'oauth', initiatingSubjectAgentId: 'housekeeper',
+      expectedCredentialHeads: {
+        access: vault.accessCredentialCheckout?.effectiveMutationHash,
+        refresh: vault.refreshCredentialCheckout?.effectiveMutationHash,
+      },
+      metadata: { ...vault.metadata,
+        source_file_sha256: sourceFileSha256,
+        source_last_refresh: new Date(refreshedAt).toISOString(),
+        source_access_head_sha256: vault.accessCredentialCheckout?.effectiveMutationHash,
+        source_refresh_head_sha256: vault.refreshCredentialCheckout?.effectiveMutationHash,
+      },
+    });
+    const updated = await syncIdentityVault('codex');
+    if (!codexAuthIsCurrent(updated) || updated.metadata.account_id !== accountId
+        || updated.accessToken !== source.tokens.access_token) {
+      throw new Error('codex_oauth_synchronization_readback_failed');
+    }
+    return updated;
+  } finally {
+    raw?.fill(0);
+    try { await handle?.close(); } finally { finishWork(); }
+  }
+}
+
 async function loadCodexChatgptAuth({ requireClientVersion = false } = {}) {
-  const vault = await syncIdentityVault('codex');
+  let vault = await syncIdentityVault('codex');
+  if (vault.accessToken && vault.metadata?.source_kind === 'codex_desktop_oauth_import') {
+    if (!codexAuthSynchronization) {
+      codexAuthSynchronization = synchronizeImportedCodexAuth()
+        .finally(() => { codexAuthSynchronization = null; });
+    }
+    vault = await codexAuthSynchronization;
+  } else if (vault.accessToken && !codexAuthIsCurrent(vault)) {
+    throw new Error('codex_oauth_reconnection_required');
+  }
   const checkout = vault.accessToken
     ? vault.accessCredentialCheckout
     : checkoutCachedCredential('codex_api_key');
@@ -610,6 +734,7 @@ function getOpenAICompatConfig(provider) {
 }
 
 async function listOpenAiCompatibleModels(providerId, config, useContext = {}) {
+  const operationDeadline = Math.min((useContext?.deadlineAt) ?? Infinity, performance.now() + 30_000);
   const auth = await resolveOpenAiCompatAuth(providerId, config);
   const baseUrl = String(auth.baseUrl || '').replace(/\/+$/, '');
   if (!baseUrl) {
@@ -639,7 +764,9 @@ async function listOpenAiCompatibleModels(providerId, config, useContext = {}) {
         Accept: 'application/json',
         Authorization: `Bearer ${auth.apiKey}`,
         ...(auth.headers || {})
-      }
+      },
+      signal: useContext?.signal,
+      deadlineAt: operationDeadline,
     });
     if (!response.ok) {
       throw new Error(`Model catalog request failed with HTTP ${response.status}`);
@@ -658,21 +785,25 @@ async function listOpenAiCompatibleModels(providerId, config, useContext = {}) {
       .map((item) => normalizeOpenAiModelPayload(providerId, item))
       .filter(Boolean);
   } catch (error) {
+    error = markHttpIndeterminate(error);
     if (reservation && !terminalAttempted) {
       terminalAttempted = true;
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'failed',
+        outcome: 'indeterminate',
         errorClass: error?.name || 'provider_request_failed',
         outcomeClass: 'provider_request_failed',
         outcomeHash: credentialUseEvidenceHash({ status: response?.status || null, error: error?.message || String(error) }),
       });
     }
     throw error;
+  } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
   }
 }
 
 async function listCodexModels(useContext = {}) {
+  const operationDeadline = Math.min((useContext?.deadlineAt) ?? Infinity, performance.now() + CODEX_REQUEST_TIMEOUT_MS);
   const {
     accessToken,
     accountId,
@@ -711,7 +842,9 @@ async function listCodexModels(useContext = {}) {
         Accept: 'application/json',
         Authorization: `Bearer ${accessToken}`,
         'ChatGPT-Account-ID': accountId,
-      }
+      },
+      signal: useContext?.signal,
+      deadlineAt: operationDeadline,
     }, CODEX_REQUEST_TIMEOUT_MS);
     if (!response.ok) {
       throw new Error(`Model catalog request failed with HTTP ${response.status}`);
@@ -739,21 +872,25 @@ async function listCodexModels(useContext = {}) {
       .filter(Boolean);
     return { models, credentialUseEvidence };
   } catch (error) {
+    error = markHttpIndeterminate(error);
     if (reservation && !terminalAttempted) {
       terminalAttempted = true;
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'failed',
+        outcome: 'indeterminate',
         errorClass: error?.name || 'provider_request_failed',
         outcomeClass: 'provider_request_failed',
         outcomeHash: credentialUseEvidenceHash({ status: response?.status || null, error: error?.message || String(error) }),
       });
     }
     throw error;
+  } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
   }
 }
 
 async function listAnthropicModels(useContext = {}) {
+  const operationDeadline = Math.min((useContext?.deadlineAt) ?? Infinity, performance.now() + 30_000);
   const credentialCheckout = PROVIDER_REGISTRY.anthropic.credentialCheckout?.();
   const apiKey = String(credentialCheckout?.value || '').trim();
   const baseUrl = String(PROVIDER_REGISTRY.anthropic.baseUrl?.() || 'https://api.anthropic.com').replace(/\/+$/, '');
@@ -780,7 +917,9 @@ async function listAnthropicModels(useContext = {}) {
         Accept: 'application/json',
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01'
-      }
+      },
+      signal: useContext?.signal,
+      deadlineAt: operationDeadline,
     });
     if (!response.ok) {
       throw new Error(`Model catalog request failed with HTTP ${response.status}`);
@@ -801,21 +940,25 @@ async function listAnthropicModels(useContext = {}) {
       })
       .filter(Boolean);
   } catch (error) {
+    error = markHttpIndeterminate(error);
     if (!terminalAttempted) {
       terminalAttempted = true;
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'failed',
+        outcome: 'indeterminate',
         errorClass: error?.name || 'provider_request_failed',
         outcomeClass: 'provider_request_failed',
         outcomeHash: credentialUseEvidenceHash({ status: response?.status || null, error: error?.message || String(error) }),
       });
     }
     throw error;
+  } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
   }
 }
 
 async function listGeminiModels(useContext = {}) {
+  const operationDeadline = Math.min((useContext?.deadlineAt) ?? Infinity, performance.now() + 30_000);
   const auth = await resolveGeminiAuth();
   const endpoint = 'https://generativelanguage.googleapis.com/v1beta/models';
   const url = auth.querySuffix
@@ -842,7 +985,9 @@ async function listGeminiModels(useContext = {}) {
       headers: {
         Accept: 'application/json',
         ...(auth.headers || {})
-      }
+      },
+      signal: useContext?.signal,
+      deadlineAt: operationDeadline,
     });
     if (!response.ok) {
       throw new Error(`Model catalog request failed with HTTP ${response.status}`);
@@ -868,23 +1013,31 @@ async function listGeminiModels(useContext = {}) {
       })
       .filter(Boolean);
   } catch (error) {
+    error = markHttpIndeterminate(error);
     if (reservation && !terminalAttempted) {
       terminalAttempted = true;
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'failed',
+        outcome: 'indeterminate',
         errorClass: error?.name || 'provider_request_failed',
         outcomeClass: 'provider_request_failed',
         outcomeHash: credentialUseEvidenceHash({ status: response?.status || null, error: error?.message || String(error) }),
       });
     }
     throw error;
+  } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
   }
 }
 
-async function listOllamaModels() {
-  const response = await fetchWithTimeout(`${OLLAMA_BASE_URL}/api/tags`, {
-    headers: { Accept: 'application/json' }
+async function listOllamaModels(useContext = {}) {
+  const operationDeadline = Math.min((useContext.deadlineAt) ?? Infinity, performance.now() + 30_000);
+  let response;
+  try {
+    response = await fetchWithTimeout(`${OLLAMA_BASE_URL}/api/tags`, {
+    headers: { Accept: 'application/json' },
+    signal: useContext.signal,
+    deadlineAt: operationDeadline,
   });
 
   if (!response.ok) {
@@ -899,6 +1052,10 @@ async function listOllamaModels() {
       return baseModelPayload('ollama', modelId, modelId);
     })
     .filter(Boolean);
+
+  } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
+  }
 }
 
 export async function listProviderModels(providerId, useContext = {}) {
@@ -926,7 +1083,7 @@ export async function listProviderModels(providerId, useContext = {}) {
     } else if (provider === 'gemini') {
       models = await listGeminiModels(useContext);
     } else if (provider === 'ollama') {
-      models = await listOllamaModels();
+      models = await listOllamaModels(useContext);
     } else if (provider === 'codex') {
       const catalog = await listCodexModels(useContext);
       models = catalog.models;
@@ -981,6 +1138,8 @@ export async function runProvider({
   toolExecutionOptions = {},
   onToken,
   useContext = {},
+  signal,
+  deadlineAt,
   reasoningEffort,
   textVerbosity,
   maxOutputTokens,
@@ -996,6 +1155,13 @@ export async function runProvider({
   const resolution = resolveProviderForModel(providerArg, modelArg);
   const providerKey = resolution.provider;
   const resolvedModel = resolution.model;
+
+  // Transport lifetime is separate from the original, possibly opaque authority.
+  const signals = [signal, useContext.signal, toolExecutionOptions.signal].filter(Boolean);
+  const requestSignal = signals.length ? AbortSignal.any(signals) : undefined;
+  const requestDeadline = Math.min(deadlineAt ?? Infinity, useContext.deadlineAt ?? Infinity,
+    toolExecutionOptions.deadlineAt ?? Infinity,
+    performance.now() + (providerKey === 'codex' ? CODEX_REQUEST_TIMEOUT_MS : PROVIDER_REQUEST_TIMEOUT_MS));
 
   if (!providerKey) {
     throw new Error(
@@ -1017,6 +1183,9 @@ export async function runProvider({
       textVerbosity: textVerbosity ?? null,
       maxOutputTokens: maxOutputTokens ?? null,
       responseSchema: responseSchema ?? null,
+      tool_definition_count: Array.isArray(toolDefs) ? toolDefs.length : 0,
+      tool_definitions_sha256: credentialUseEvidenceHash(Array.isArray(toolDefs)
+        ? toolDefs.map(definition => definition?.schema || definition) : []),
     },
     subjectAgentId: useContext?.actorAgentId || 'housekeeper',
     authority: useContext,
@@ -1026,7 +1195,7 @@ export async function runProvider({
     let result;
     switch (providerKey) {
       case 'gemini':
-        result = await runGemini(prompt, resolvedModel, onToken, useContext);
+        result = await runGemini(prompt, resolvedModel, onToken, useContext, requestSignal, requestDeadline);
         break;
       case 'perplexity':
         result = await runPerplexity({
@@ -1039,6 +1208,8 @@ export async function runProvider({
         toolExecutionOptions,
         onToken,
         useContext,
+        requestSignal,
+        requestDeadline,
         });
         break;
       case 'anthropic': {
@@ -1056,6 +1227,8 @@ export async function runProvider({
         baseUrl,
         onToken,
         useContext,
+        requestSignal,
+        requestDeadline,
         });
         break;
       }
@@ -1068,15 +1241,19 @@ export async function runProvider({
         model: resolvedModel,
         onToken,
         useContext,
+        requestSignal,
+        requestDeadline,
         reasoningEffort,
         textVerbosity,
         maxOutputTokens,
         responseSchema,
         returnMetadata,
+        toolDefs,
+        toolExecutionOptions,
         });
         break;
       case 'ollama':
-        result = await runOllama({ prompt, messages, systemPrompt, userPrompt, model: resolvedModel, onToken });
+        result = await runOllama({ prompt, messages, systemPrompt, userPrompt, model: resolvedModel, onToken, useContext, requestSignal, requestDeadline });
         break;
       case 'openai':
       case 'openrouter':
@@ -1098,6 +1275,8 @@ export async function runProvider({
         toolExecutionOptions,
         onToken,
         useContext,
+        requestSignal,
+        requestDeadline,
         });
         break;
       }
@@ -1112,6 +1291,7 @@ export async function runProvider({
     });
     return result;
   } catch (error) {
+    error = markHttpIndeterminate(error);
     try {
       await materialEffectOwner.finish({
         action: effect,
@@ -1176,6 +1356,32 @@ function normalizeCodexResponseSchema(responseSchema) {
   return { type: 'json_schema', name, schema: JSON.parse(encoded), strict: true };
 }
 
+// Responses uses a flat function definition; the native registry exposes the
+// OpenAI-compatible nested shape. This is a wire projection only—the filtered
+// registry and executeTool remain the sole discovery and execution owners.
+export function normalizeCodexToolDefinitions(toolDefs = []) {
+  if (!Array.isArray(toolDefs) || toolDefs.length > 64) {
+    throw new Error('Codex tool definitions are malformed or unbounded.');
+  }
+  const seen = new Set();
+  return toolDefs.map((entry) => {
+    const wire = entry?.schema || entry;
+    const fn = wire?.type === 'function' && wire?.function ? wire.function : wire;
+    const name = String(fn?.name || '').trim();
+    const description = String(fn?.description || '');
+    const parameters = fn?.parameters;
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(name) || seen.has(name)
+      || !parameters || typeof parameters !== 'object' || Array.isArray(parameters)
+      || parameters.type !== 'object' || Buffer.byteLength(description, 'utf8') > 8_192
+      || Buffer.byteLength(JSON.stringify(parameters), 'utf8') > CODEX_TOOL_ARGUMENT_BYTES) {
+      throw new Error(`Codex tool definition is invalid: ${name || 'unnamed'}`);
+    }
+    seen.add(name);
+    return Object.freeze({ type: 'function', name, description,
+      parameters: JSON.parse(JSON.stringify(parameters)) });
+  });
+}
+
 function buildCodexResponsesInput(conversation) {
   const input = [];
   let instructions = '';
@@ -1208,6 +1414,7 @@ export function buildCodexResponsesPayload({
   textVerbosity,
   maxOutputTokens = null,
   responseSchema = null,
+  tools = [],
 } = {}) {
   const normalizedModel = String(model || '').trim();
   if (!normalizedModel) throw new Error('Codex request model is required.');
@@ -1220,7 +1427,7 @@ export function buildCodexResponsesPayload({
     model: normalizedModel,
     instructions: String(instructions || ''),
     input,
-    tools: [],
+    tools: normalizeCodexToolDefinitions(tools),
     tool_choice: 'auto',
     parallel_tool_calls: false,
     reasoning: { effort: normalizeCodexReasoningEffort(reasoningEffort) },
@@ -1292,6 +1499,7 @@ export function parseCodexSseResponse(raw, onToken) {
   let terminalText = '';
   let completedResponse = null;
   let terminalEventType = null;
+  let terminalEventCount = 0;
   let terminalErrorCode = null;
   let terminalErrorType = null;
   let incompleteReason = null;
@@ -1299,6 +1507,8 @@ export function parseCodexSseResponse(raw, onToken) {
   let parsedEventCount = 0;
   let malformedDataCount = 0;
   const eventTypes = new Set();
+  const responseIds = new Set();
+  const streamedOutputItems = [];
   const serialized = String(raw || '');
   for (const block of serialized.split(/\r?\n\r?\n+/)) {
     const dataLines = block.split('\n').filter(line => line.startsWith('data:'));
@@ -1315,6 +1525,11 @@ export function parseCodexSseResponse(raw, onToken) {
       }
       parsedEventCount += 1;
       if (event?.type) eventTypes.add(String(event.type));
+      if (typeof event?.response_id === 'string') responseIds.add(event.response_id);
+      if (typeof event?.response?.id === 'string') responseIds.add(event.response.id);
+      if (event?.type === 'response.output_item.done' && event?.item) {
+        streamedOutputItems.push(JSON.parse(JSON.stringify(event.item)));
+      }
       const extracted = extractCodexResponseEventText(event);
       if (extracted.kind === 'delta') {
         deltaText += extracted.text;
@@ -1323,6 +1538,7 @@ export function parseCodexSseResponse(raw, onToken) {
         finalText += extracted.text;
       }
       if (['response.completed', 'response.failed', 'response.incomplete'].includes(event?.type)) {
+        terminalEventCount += 1;
         completedResponse = event.response || null;
         terminalEventType = String(event.type);
         terminalText = extractCodexTerminalResponseText(completedResponse);
@@ -1336,7 +1552,7 @@ export function parseCodexSseResponse(raw, onToken) {
       }
     }
   }
-  return Object.freeze({
+  const parsed = {
     text: (deltaText || finalText || terminalText).trim(),
     responseId: completedResponse?.id ? String(completedResponse.id) : null,
     model: completedResponse?.model ? String(completedResponse.model) : null,
@@ -1349,11 +1565,23 @@ export function parseCodexSseResponse(raw, onToken) {
       malformedDataCount,
       eventTypes: Object.freeze([...eventTypes].sort()),
       terminalEventType,
+      terminalEventCount,
+      responseIds: Object.freeze([...responseIds].sort()),
       terminalErrorCode,
       terminalErrorType,
       incompleteReason,
     }),
+  };
+  // Internal continuation evidence is intentionally non-enumerable so callers
+  // cannot mistake provider wire items for a public model result.
+  const outputItems = Array.isArray(completedResponse?.output) && completedResponse.output.length > 0
+    ? JSON.parse(JSON.stringify(completedResponse.output)) : streamedOutputItems;
+  const toolCalls = outputItems.filter(item => item?.type === 'function_call');
+  Object.defineProperties(parsed, {
+    continuationItems: { value: Object.freeze(outputItems), enumerable: false },
+    toolCalls: { value: Object.freeze(toolCalls), enumerable: false },
   });
+  return Object.freeze(parsed);
 }
 
 function codexResponseDiagnosticSuffix(parsed) {
@@ -1368,102 +1596,154 @@ async function runCodex({
   model,
   onToken,
   useContext = {},
+  requestSignal = useContext.signal,
+  requestDeadline = useContext.deadlineAt,
   reasoningEffort,
   textVerbosity,
   maxOutputTokens,
   responseSchema,
   returnMetadata = false,
+  toolDefs = [],
+  toolExecutionOptions = {},
 } = {}) {
+  const operationDeadline = Math.min(requestDeadline ?? Infinity, performance.now() + CODEX_REQUEST_TIMEOUT_MS);
   const resolvedModel = model || PROVIDER_REGISTRY.codex.defaultModel?.();
   if (!resolvedModel) throw new Error('Codex model missing (set CODEX_MODEL or pass model)');
 
   const { accessToken, accountId, credentialCheckout } = await loadCodexChatgptAuth();
   const conversation = buildProviderMessages({ prompt, messages, systemPrompt, userPrompt });
-  const { instructions, input } = buildCodexResponsesInput(conversation);
-  if (input.length === 0) throw new Error('Codex request missing user input');
+  const { instructions, input: initialInput } = buildCodexResponsesInput(conversation);
+  if (initialInput.length === 0) throw new Error('Codex request missing user input');
+  const tools = normalizeCodexToolDefinitions(toolDefs);
+  const executeToolFn = toolExecutionOptions?.executeToolFn;
+  if (tools.length > 0 && typeof executeToolFn !== 'function') {
+    throw new Error('Codex received native tools without a dispatcher.');
+  }
+  const allowedToolNames = new Set(tools.map(tool => tool.name));
 
   const baseUrl = String(PROVIDER_REGISTRY.codex.baseUrl?.() || CODEX_CHATGPT_BASE_URL).replace(/\/+$/, '');
   const endpoint = `${baseUrl}/codex/responses`;
-  const payload = buildCodexResponsesPayload({
-    model: resolvedModel,
-    instructions,
-    input,
-    reasoningEffort: reasoningEffort || codexReasoningEffort(),
-    textVerbosity: textVerbosity || codexTextVerbosity(),
-    maxOutputTokens,
-    responseSchema,
-  });
-  const reservation = credentialCheckout
-    ? await credentialLedger.reserveCredentialUse({
-      ...credentialCheckout,
-      operation: 'codex.responses.create',
-      endpoint,
-      requestHash: credentialUseEvidenceHash({ method: 'POST', endpoint, accountId, payload }),
-      subjectAgentId: useContext?.actorAgentId || useContext?.subjectAgentId || useContext?.agentId || 'housekeeper',
-      requestReceiptId: useContext?.requestReceiptId || null,
-      requestReceiptMutationHash: useContext?.requestReceiptMutationHash || null,
-      requestAdmissionEventId: useContext?.requestAdmissionEventId || null,
-      requestAdmissionMutationHash: useContext?.requestAdmissionMutationHash || null,
-      autonomousActionEventId: useContext?.autonomousActionEventId || null,
-    })
-    : null;
-  let response = null;
-  let terminalAttempted = false;
-  try {
-    response = await fetchWithTimeout(endpoint, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        'ChatGPT-Account-ID': accountId,
-        Accept: 'text/event-stream',
-        'Content-Type': 'application/json',
-        'OpenAI-Beta': 'responses=v1',
-      },
-      body: JSON.stringify(payload)
-    }, CODEX_REQUEST_TIMEOUT_MS);
-    const raw = await response.text();
-    if (!response.ok) {
-      throw new Error(`Codex error (${response.status}): ${raw.slice(0, 1000)}`);
-    }
-    const parsed = parseCodexSseResponse(raw, onToken);
-    if (parsed.status && parsed.status !== 'completed') {
-      throw new Error(
-        `Codex response ended with status ${parsed.status}:${codexResponseDiagnosticSuffix(parsed)}`,
-      );
-    }
-    if (!parsed.text) {
-      throw new Error(`Codex response was empty:${codexResponseDiagnosticSuffix(parsed)}`);
-    }
-    let credentialUseEvidence = null;
-    if (reservation) {
-      terminalAttempted = true;
-      credentialUseEvidence = await credentialLedger.finalizeCredentialUse({
-        reservation,
-        outcome: 'completed',
-        outcomeClass: 'stream_completed',
-        outcomeHash: credentialUseEvidenceHash({ status: response.status, raw }),
-      });
-    }
-    return returnMetadata
-      ? Object.freeze({ ...parsed, credentialUseEvidence })
-      : parsed.text;
-  } catch (error) {
-    if (reservation && !terminalAttempted) {
-      terminalAttempted = true;
-      await credentialLedger.finalizeCredentialUse({
-        reservation,
-        outcome: 'failed',
-        errorClass: error?.name || 'provider_request_failed',
-        outcomeClass: 'provider_request_failed',
-        outcomeHash: credentialUseEvidenceHash({ status: response?.status || null, error: error?.message || String(error) }),
-      });
-    }
-    throw error;
+  let input = [...initialInput];
+  let toolCallCount = 0;
+  let lastCredentialUseEvidence = null;
+  for (let round = 0; round < CODEX_TOOL_ROUND_LIMIT; round += 1) {
+    const payload = buildCodexResponsesPayload({
+      model: resolvedModel, instructions, input, tools,
+      reasoningEffort: reasoningEffort || codexReasoningEffort(),
+      textVerbosity: textVerbosity || codexTextVerbosity(),
+      maxOutputTokens, responseSchema,
+    });
+    const reservation = credentialCheckout
+      ? await credentialLedger.reserveCredentialUse({
+        ...credentialCheckout,
+        operation: 'codex.responses.create', endpoint,
+        requestHash: credentialUseEvidenceHash({ method: 'POST', endpoint, accountId, payload }),
+        subjectAgentId: useContext?.actorAgentId || useContext?.subjectAgentId || useContext?.agentId || 'housekeeper',
+        requestReceiptId: useContext?.requestReceiptId || null,
+        requestReceiptMutationHash: useContext?.requestReceiptMutationHash || null,
+        requestAdmissionEventId: useContext?.requestAdmissionEventId || null,
+        requestAdmissionMutationHash: useContext?.requestAdmissionMutationHash || null,
+        autonomousActionEventId: useContext?.autonomousActionEventId || null,
+      }) : null;
+    let response = null;
+    let terminalAttempted = false;
+    try {
+      response = await fetchWithTimeout(endpoint, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'ChatGPT-Account-ID': accountId,
+          Accept: 'text/event-stream',
+          'Content-Type': 'application/json',
+          'OpenAI-Beta': 'responses=v1',
+        },
+        body: JSON.stringify(payload),
+        signal: requestSignal,
+        deadlineAt: operationDeadline,
+      }, CODEX_REQUEST_TIMEOUT_MS);
+      const raw = await response.text();
+      if (!response.ok) throw new Error(`Codex error (${response.status}): ${raw.slice(0, 1000)}`);
+      const parsed = parseCodexSseResponse(raw);
+      // HTTP EOF is not a model terminal. Do not publish success or execute
+      // collected calls from truncated, malformed or mixed-response streams.
+      if (parsed.status !== 'completed'
+          || parsed.diagnostics.terminalEventType !== 'response.completed'
+          || parsed.diagnostics.terminalEventCount !== 1
+          || parsed.diagnostics.malformedDataCount !== 0
+          || !parsed.responseId
+          || parsed.diagnostics.responseIds.length !== 1
+          || parsed.diagnostics.responseIds[0] !== parsed.responseId
+          || parsed.diagnostics.eventTypes.some((type) => ['error', 'response.failed', 'response.incomplete'].includes(type))) {
+        throw new Error(`Codex response ended with status ${parsed.status}:${codexResponseDiagnosticSuffix(parsed)}`);
+      }
+      if (reservation) {
+        terminalAttempted = true;
+        lastCredentialUseEvidence = await credentialLedger.finalizeCredentialUse({
+          reservation, outcome: 'completed', outcomeClass: 'stream_completed',
+          outcomeHash: credentialUseEvidenceHash({ status: response.status, raw }),
+        });
+      }
+      const calls = parsed.toolCalls;
+      if (calls.length === 0) {
+        if (!parsed.text) throw new Error(`Codex response was empty:${codexResponseDiagnosticSuffix(parsed)}`);
+        if (typeof onToken === 'function') onToken(parsed.text);
+        return returnMetadata
+          ? Object.freeze({ ...parsed, credentialUseEvidence: lastCredentialUseEvidence })
+          : parsed.text;
+      }
+      if (calls.length + toolCallCount > CODEX_TOOL_CALL_LIMIT) {
+        throw new Error('Codex tool-call count exceeded the native bound.');
+      }
+      const continuationBytes = Buffer.byteLength(JSON.stringify(parsed.continuationItems), 'utf8');
+      if (continuationBytes > CODEX_TOOL_OUTPUT_BYTES * 4) {
+        throw new Error('Codex continuation output exceeded the native bound.');
+      }
+      input.push(...parsed.continuationItems);
+      for (const call of calls) {
+        const callId = String(call?.call_id || '').trim();
+        const name = String(call?.name || '').trim();
+        const argumentText = String(call?.arguments || '');
+        if (!/^[A-Za-z0-9_-]{1,256}$/.test(callId) || !allowedToolNames.has(name)
+          || Buffer.byteLength(argumentText, 'utf8') > CODEX_TOOL_ARGUMENT_BYTES) {
+          throw new Error('Codex returned an invalid or unregistered native tool call.');
+        }
+        let args;
+        try { args = JSON.parse(argumentText); } catch { throw new Error(`Codex tool arguments were invalid JSON: ${name}`); }
+        if (!args || typeof args !== 'object' || Array.isArray(args)) {
+          throw new Error(`Codex tool arguments were not an object: ${name}`);
+        }
+        requestSignal?.throwIfAborted();
+        if (performance.now() >= operationDeadline) throw new DOMException("Model operation deadline exceeded", "TimeoutError");
+        const result = await executeToolFn(name, args);
+        const output = JSON.stringify(result ?? null);
+        if (Buffer.byteLength(output, 'utf8') > CODEX_TOOL_OUTPUT_BYTES) {
+          throw new Error(`Codex tool output exceeded the native bound: ${name}`);
+        }
+        await toolExecutionOptions?.recordToolExchange?.({ round, callId, name, args, output });
+        input.push({ type: 'function_call_output', call_id: callId, output });
+        toolCallCount += 1;
+      }
+    } catch (error) {
+    error = markHttpIndeterminate(error);
+      if (reservation && !terminalAttempted) {
+        terminalAttempted = true;
+        await credentialLedger.finalizeCredentialUse({
+          reservation, outcome: 'indeterminate', errorClass: error?.name || 'provider_request_failed',
+          outcomeClass: 'provider_request_failed',
+          outcomeHash: credentialUseEvidenceHash({ status: response?.status || null, error: error?.message || String(error) }),
+        });
+      }
+      throw error;
+    } finally {
+    if (response?.body && !response.body.locked && !response.bodyUsed) await response.body.cancel().catch(() => {});
   }
+  }
+  throw new Error('Codex tool loop exceeded the native round bound.');
 }
 
 // ─── Native Ollama adapter — local HTTP, no SDK, no wrapper ─────────────────
-async function runOllama({ prompt, messages = [], systemPrompt, userPrompt, model, onToken } = {}) {
+async function runOllama({ prompt, messages = [], systemPrompt, userPrompt, model, onToken, useContext = {}, requestSignal = useContext.signal, requestDeadline = useContext.deadlineAt } = {}) {
+  const operationDeadline = Math.min(requestDeadline ?? Infinity, performance.now() + PROVIDER_REQUEST_TIMEOUT_MS);
   const baseUrl = OLLAMA_BASE_URL;
   const resolvedModel = model || systemConfigStore.readConfigString('OLLAMA_MODEL');
   if (!resolvedModel) throw new Error('Ollama model missing (set OLLAMA_MODEL or pass model)');
@@ -1471,10 +1751,14 @@ async function runOllama({ prompt, messages = [], systemPrompt, userPrompt, mode
   const conversation = buildProviderMessages({ prompt, messages, systemPrompt, userPrompt });
   const stream = typeof onToken === 'function';
 
-  const res = await fetchWithTimeout(`${baseUrl}/api/chat`, {
+  let res;
+  try {
+    res = await fetchWithTimeout(`${baseUrl}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: resolvedModel, messages: conversation, stream })
+    body: JSON.stringify({ model: resolvedModel, messages: conversation, stream }),
+    signal: requestSignal,
+    deadlineAt: operationDeadline,
   }, PROVIDER_REQUEST_TIMEOUT_MS);
 
   if (!res.ok) throw new Error(`Ollama error (${res.status}): ${await res.text()}`);
@@ -1489,9 +1773,14 @@ async function runOllama({ prompt, messages = [], systemPrompt, userPrompt, mode
   const decoder = new TextDecoder();
   let buffer = '';
   let full = '';
-  while (true) {
+  let streamComplete = false;
+    try {
+    while (true) {
     const { value, done } = await reader.read();
-    if (done) break;
+    if (done) {
+        if (buffer.trim() || !streamComplete) throw new Error('provider_stream_incomplete');
+        break;
+      }
     buffer += decoder.decode(value, { stream: true });
     const lines = buffer.split('\n');
     buffer = lines.pop() || '';
@@ -1499,20 +1788,31 @@ async function runOllama({ prompt, messages = [], systemPrompt, userPrompt, mode
       const trimmed = line.trim();
       if (!trimmed) continue;
       let parsed;
-      try { parsed = JSON.parse(trimmed); } catch { continue; }
+      try { parsed = JSON.parse(trimmed); } catch (error) { throw error; }
+      if (parsed?.error) throw new Error('ollama_stream_error');
+      if (parsed?.done === true) streamComplete = true;
       const delta = parsed?.message?.content || '';
       if (!delta) continue;
       full += delta;
       onToken(delta);
     }
   }
+    } finally {
+      // Cancellation may already have errored the stream; always release its lock.
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
   return full;
+
+  } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
+  }
 }
 
-async function runGemini(prompt, modelOverride, onToken, useContext = {}) {
+async function runGemini(prompt, modelOverride, onToken, useContext = {}, requestSignal = useContext.signal, requestDeadline = useContext.deadlineAt) {
+  const operationDeadline = Math.min(requestDeadline ?? Infinity, performance.now() + PROVIDER_REQUEST_TIMEOUT_MS);
   const model = modelOverride || systemConfigStore.readConfigString('GEMINI_MODEL') || systemConfigStore.readConfigString('LLM_MODEL');
   if (!model) throw new Error('Gemini model missing (set GEMINI_MODEL or LLM_MODEL)');
-  let lastError = null;
   const auth = await resolveGeminiAuth();
 
   if (typeof onToken === 'function') {
@@ -1541,8 +1841,10 @@ async function runGemini(prompt, modelOverride, onToken, useContext = {}) {
         res = await fetchWithTimeout(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...(auth.headers || {}) },
-          body: JSON.stringify(payload)
-        }, PROVIDER_REQUEST_TIMEOUT_MS);
+          body: JSON.stringify(payload),
+      signal: requestSignal,
+      deadlineAt: operationDeadline,
+    }, PROVIDER_REQUEST_TIMEOUT_MS);
         if (!res.ok) {
           throw new Error(`Gemini error (${res.status}): ${await res.text()}`);
         }
@@ -1551,9 +1853,14 @@ async function runGemini(prompt, modelOverride, onToken, useContext = {}) {
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-        while (true) {
+        let streamComplete = false;
+    try {
+    while (true) {
           const { value, done } = await reader.read();
-          if (done) break;
+          if (done) {
+        if (buffer.trim() || !streamComplete) throw new Error('provider_stream_incomplete');
+        break;
+      }
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split('\n');
           buffer = lines.pop() || '';
@@ -1567,11 +1874,11 @@ async function runGemini(prompt, modelOverride, onToken, useContext = {}) {
             let parsed;
             try {
               parsed = JSON.parse(eventPayload);
-            } catch {
-              continue;
-            }
+            } catch (error) { throw error; }
 
-            const text = parsed?.candidates?.[0]?.content?.parts
+            if (parsed?.error) throw new Error('gemini_stream_error');
+        if (parsed?.candidates?.[0]?.finishReason || parsed?.promptFeedback?.blockReason) streamComplete = true;
+        const text = parsed?.candidates?.[0]?.content?.parts
               ?.map((part) => (typeof part?.text === 'string' ? part.text : ''))
               .join('') || '';
             if (!text) continue;
@@ -1582,6 +1889,11 @@ async function runGemini(prompt, modelOverride, onToken, useContext = {}) {
             onToken(delta);
           }
         }
+    } finally {
+      // Cancellation may already have errored the stream; always release its lock.
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
         if (reservation) {
           terminalAttempted = true;
           await credentialLedger.finalizeCredentialUse({
@@ -1593,21 +1905,24 @@ async function runGemini(prompt, modelOverride, onToken, useContext = {}) {
         }
         return full;
       } catch (error) {
+    error = markHttpIndeterminate(error);
         if (reservation && !terminalAttempted) {
           terminalAttempted = true;
           await credentialLedger.finalizeCredentialUse({
             reservation,
-            outcome: 'failed',
+            outcome: 'indeterminate',
             errorClass: error?.name || 'provider_request_failed',
             outcomeClass: 'provider_request_failed',
             outcomeHash: credentialUseEvidenceHash({ status: res?.status || null, partialText: full, error: error?.message || String(error) }),
           });
         }
-        lastError = error?.message || String(error);
-      }
+        throw error;
+      } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
+  }
     }
 
-    throw new Error(lastError || 'Gemini request failed');
+    throw new Error('Gemini request failed');
   }
 
   for (const querySuffix of [auth.querySuffix]) {
@@ -1634,8 +1949,10 @@ async function runGemini(prompt, modelOverride, onToken, useContext = {}) {
       res = await fetchWithTimeout(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(auth.headers || {}) },
-        body: JSON.stringify(payload)
-      }, PROVIDER_REQUEST_TIMEOUT_MS);
+        body: JSON.stringify(payload),
+      signal: requestSignal,
+      deadlineAt: operationDeadline,
+    }, PROVIDER_REQUEST_TIMEOUT_MS);
       if (!res.ok) {
         throw new Error(`Gemini error (${res.status}): ${await res.text()}`);
       }
@@ -1651,21 +1968,24 @@ async function runGemini(prompt, modelOverride, onToken, useContext = {}) {
       }
       return data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
     } catch (error) {
+    error = markHttpIndeterminate(error);
       if (reservation && !terminalAttempted) {
         terminalAttempted = true;
         await credentialLedger.finalizeCredentialUse({
           reservation,
-          outcome: 'failed',
+          outcome: 'indeterminate',
           errorClass: error?.name || 'provider_request_failed',
           outcomeClass: 'provider_request_failed',
           outcomeHash: credentialUseEvidenceHash({ status: res?.status || null, error: error?.message || String(error) }),
         });
       }
-      lastError = error?.message || String(error);
-    }
+      throw error;
+    } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
+  }
   }
 
-  throw new Error(lastError || 'Gemini request failed');
+  throw new Error('Gemini request failed');
 }
 
 function buildProviderMessages({ prompt, messages = [], systemPrompt, userPrompt }) {
@@ -1702,7 +2022,10 @@ async function runAnthropic({
   baseUrl,
   onToken,
   useContext = {},
+  requestSignal = useContext.signal,
+  requestDeadline = useContext.deadlineAt,
 }) {
+  const operationDeadline = Math.min(requestDeadline ?? Infinity, performance.now() + PROVIDER_REQUEST_TIMEOUT_MS);
   const model = modelOverride || systemConfigStore.readConfigString('ANTHROPIC_MODEL') || systemConfigStore.readConfigString('LLM_MODEL');
   if (!model) throw new Error('Anthropic model missing (set ANTHROPIC_MODEL or LLM_MODEL)');
   if (!apiKey) throw new Error('Anthropic API key missing');
@@ -1736,6 +2059,8 @@ async function runAnthropic({
       credentialCheckout,
       onToken,
       useContext,
+      requestSignal,
+      requestDeadline: operationDeadline,
     });
   }
 
@@ -1762,7 +2087,9 @@ async function runAnthropic({
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01'
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: requestSignal,
+      deadlineAt: operationDeadline,
     }, PROVIDER_REQUEST_TIMEOUT_MS);
     if (!res.ok) throw new Error(`Anthropic error (${res.status}): ${await res.text()}`);
     const data = await res.json();
@@ -1775,21 +2102,25 @@ async function runAnthropic({
     });
     return data?.content?.[0]?.text || '';
   } catch (error) {
+    error = markHttpIndeterminate(error);
     if (!terminalAttempted) {
       terminalAttempted = true;
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'failed',
+        outcome: 'indeterminate',
         errorClass: error?.name || 'provider_request_failed',
         outcomeClass: 'provider_request_failed',
         outcomeHash: credentialUseEvidenceHash({ status: res?.status || null, error: error?.message || String(error) }),
       });
     }
     throw error;
+  } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
   }
 }
 
-async function runAnthropicStream({ model, systemContent, messages, baseUrl, apiKey, credentialCheckout, onToken, useContext = {} }) {
+async function runAnthropicStream({ model, systemContent, messages, baseUrl, apiKey, credentialCheckout, onToken, useContext = {}, requestSignal = useContext.signal, requestDeadline = useContext.deadlineAt }) {
+  const operationDeadline = Math.min(requestDeadline ?? Infinity, performance.now() + PROVIDER_REQUEST_TIMEOUT_MS);
   const endpoint = `${baseUrl.replace(/\/$/, '')}/v1/messages`;
   const payload = {
     model,
@@ -1821,7 +2152,9 @@ async function runAnthropicStream({ model, systemContent, messages, baseUrl, api
         'x-api-key': apiKey,
         'anthropic-version': '2023-06-01'
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: requestSignal,
+      deadlineAt: operationDeadline,
     }, PROVIDER_REQUEST_TIMEOUT_MS);
     if (!res.ok) throw new Error(`Anthropic error (${res.status}): ${await res.text()}`);
     if (!res.body) throw new Error('Anthropic stream body missing');
@@ -1829,9 +2162,14 @@ async function runAnthropicStream({ model, systemContent, messages, baseUrl, api
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let streamComplete = false;
+    try {
     while (true) {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done) {
+        if (buffer.trim() || !streamComplete) throw new Error('provider_stream_incomplete');
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
@@ -1842,8 +2180,10 @@ async function runAnthropicStream({ model, systemContent, messages, baseUrl, api
         const payloadText = line.slice(5).trim();
         if (!payloadText || payloadText === '[DONE]') continue;
         let parsed;
-        try { parsed = JSON.parse(payloadText); } catch { continue; }
+        try { parsed = JSON.parse(payloadText); } catch (error) { throw error; }
         const type = parsed?.type || '';
+        if (type === 'error') throw new Error('anthropic_stream_error');
+        if (type === 'message_stop') streamComplete = true;
         if (type === 'content_block_delta') {
           const delta = parsed?.delta?.text || '';
           if (delta) {
@@ -1852,6 +2192,11 @@ async function runAnthropicStream({ model, systemContent, messages, baseUrl, api
           }
         }
       }
+    }
+    } finally {
+      // Cancellation may already have errored the stream; always release its lock.
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
     }
     terminalAttempted = true;
     await credentialLedger.finalizeCredentialUse({
@@ -1862,17 +2207,20 @@ async function runAnthropicStream({ model, systemContent, messages, baseUrl, api
     });
     return full;
   } catch (error) {
+    error = markHttpIndeterminate(error);
     if (!terminalAttempted) {
       terminalAttempted = true;
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'failed',
+        outcome: 'indeterminate',
         errorClass: error?.name || 'provider_request_failed',
         outcomeClass: 'provider_request_failed',
         outcomeHash: credentialUseEvidenceHash({ status: res?.status || null, partialText: full, error: error?.message || String(error) }),
       });
     }
     throw error;
+  } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
   }
 }
 
@@ -1888,7 +2236,10 @@ async function runOpenAICompat({
   toolExecutionOptions = {},
   onToken,
   useContext = {},
+  requestSignal = useContext.signal,
+  requestDeadline = useContext.deadlineAt,
 }) {
+  const operationDeadline = Math.min(requestDeadline ?? Infinity, performance.now() + PROVIDER_REQUEST_TIMEOUT_MS);
   const model = modelOverride || config.defaultModel;
   if (!model) throw new Error(`${provider} model missing`);
   const auth = await resolveOpenAiCompatAuth(provider, config);
@@ -1909,6 +2260,8 @@ async function runOpenAICompat({
       messages: conversation,
       onToken,
       useContext,
+      requestSignal,
+      requestDeadline: operationDeadline,
     });
   }
 
@@ -1952,8 +2305,10 @@ async function runOpenAICompat({
           'Content-Type': 'application/json',
           ...(auth.headers || {})
         },
-        body: JSON.stringify(payload)
-      }, PROVIDER_REQUEST_TIMEOUT_MS);
+        body: JSON.stringify(payload),
+      signal: requestSignal,
+      deadlineAt: operationDeadline,
+    }, PROVIDER_REQUEST_TIMEOUT_MS);
       if (!res.ok) throw new Error(`${provider} error (${res.status}): ${await res.text()}`);
       data = await res.json();
       if (reservation) {
@@ -1966,18 +2321,21 @@ async function runOpenAICompat({
         });
       }
     } catch (error) {
+    error = markHttpIndeterminate(error);
       if (reservation && !terminalAttempted) {
         terminalAttempted = true;
         await credentialLedger.finalizeCredentialUse({
           reservation,
-          outcome: 'failed',
+          outcome: 'indeterminate',
           errorClass: error?.name || 'provider_request_failed',
           outcomeClass: 'provider_request_failed',
           outcomeHash: credentialUseEvidenceHash({ status: res?.status || null, error: error?.message || String(error) }),
         });
       }
       throw error;
-    }
+    } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
+  }
     const message = data?.choices?.[0]?.message || {};
     const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
     const text = contentToText(message.content);
@@ -2008,13 +2366,14 @@ async function runOpenAICompat({
       let result;
       try {
         const args = parseToolArgs(tc?.function?.arguments);
+        requestSignal?.throwIfAborted();
+        if (performance.now() >= operationDeadline) throw new DOMException("Model operation deadline exceeded", "TimeoutError");
         result = await executeToolFn(toolName, args);
         if (isToolApprovalPayload(result)) {
           throw createToolApprovalError(toolName, result);
         }
       } catch (err) {
-        if (err?.code === 'TOOL_APPROVAL_REQUIRED') throw err;
-        result = { error: err.message };
+        throw err;
       }
 
       executedToolResults.push({ name: toolName || 'unknown_tool', result });
@@ -2036,7 +2395,8 @@ async function runOpenAICompat({
   throw new Error(`${provider} tool loop exceeded max rounds without final response`);
 }
 
-async function runOpenAICompatStream({ provider, auth, model, messages, onToken, useContext = {} }) {
+async function runOpenAICompatStream({ provider, auth, model, messages, onToken, useContext = {}, requestSignal = useContext.signal, requestDeadline = useContext.deadlineAt }) {
+  const operationDeadline = Math.min(requestDeadline ?? Infinity, performance.now() + PROVIDER_REQUEST_TIMEOUT_MS);
   const payload = {
     model,
     messages,
@@ -2070,7 +2430,9 @@ async function runOpenAICompatStream({ provider, auth, model, messages, onToken,
         'Content-Type': 'application/json',
         ...(auth.headers || {})
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: requestSignal,
+      deadlineAt: operationDeadline,
     }, PROVIDER_REQUEST_TIMEOUT_MS);
     if (!res.ok) throw new Error(`${provider} error (${res.status}): ${await res.text()}`);
     if (!res.body) throw new Error(`${provider} stream body missing`);
@@ -2078,9 +2440,14 @@ async function runOpenAICompatStream({ provider, auth, model, messages, onToken,
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let streamComplete = false;
+    try {
     while (true) {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done) {
+        if (buffer.trim() || !streamComplete) throw new Error('provider_stream_incomplete');
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
@@ -2089,18 +2456,23 @@ async function runOpenAICompatStream({ provider, auth, model, messages, onToken,
         const line = rawLine.trim();
         if (!line.startsWith('data:')) continue;
         const payloadText = line.slice(5).trim();
-        if (!payloadText || payloadText === '[DONE]') continue;
+        if (payloadText === '[DONE]') { streamComplete = true; continue; }
+        if (!payloadText) continue;
         let parsed;
         try {
           parsed = JSON.parse(payloadText);
-        } catch {
-          continue;
-        }
+        } catch (error) { throw error; }
+        if (parsed?.error) throw new Error('provider_stream_error');
         const delta = String(parsed?.choices?.[0]?.delta?.content || '');
         if (!delta) continue;
         full += delta;
         onToken(delta);
       }
+    }
+    } finally {
+      // Cancellation may already have errored the stream; always release its lock.
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
     }
     if (reservation) {
       terminalAttempted = true;
@@ -2113,17 +2485,20 @@ async function runOpenAICompatStream({ provider, auth, model, messages, onToken,
     }
     return full;
   } catch (error) {
+    error = markHttpIndeterminate(error);
     if (reservation && !terminalAttempted) {
       terminalAttempted = true;
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'failed',
+        outcome: 'indeterminate',
         errorClass: error?.name || 'provider_request_failed',
         outcomeClass: 'provider_request_failed',
         outcomeHash: credentialUseEvidenceHash({ status: res?.status || null, partialText: full, error: error?.message || String(error) }),
       });
     }
     throw error;
+  } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
   }
 }
 
@@ -2263,7 +2638,10 @@ async function runPerplexity({
   toolExecutionOptions = {},
   onToken,
   useContext = {},
+  requestSignal = useContext.signal,
+  requestDeadline = useContext.deadlineAt,
 }) {
+  const operationDeadline = Math.min(requestDeadline ?? Infinity, performance.now() + PROVIDER_REQUEST_TIMEOUT_MS);
   const credentialCheckout = checkoutCachedCredential('perplexity_api_key');
   if (!credentialCheckout) throw new Error('Perplexity API key missing');
   const key = credentialCheckout.value;
@@ -2302,6 +2680,8 @@ async function runPerplexity({
       messages: conversation,
       onToken,
       useContext,
+      requestSignal,
+      requestDeadline: operationDeadline,
     });
   }
 
@@ -2340,8 +2720,10 @@ async function runPerplexity({
           'Authorization': `Bearer ${key}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify(payload)
-      }, PROVIDER_REQUEST_TIMEOUT_MS);
+        body: JSON.stringify(payload),
+      signal: requestSignal,
+      deadlineAt: operationDeadline,
+    }, PROVIDER_REQUEST_TIMEOUT_MS);
       if (!res.ok) throw new Error(`Perplexity error (${res.status}): ${await res.text()}`);
       data = await res.json();
       terminalAttempted = true;
@@ -2352,18 +2734,21 @@ async function runPerplexity({
         outcomeHash: credentialUseEvidenceHash({ status: res.status, data }),
       });
     } catch (error) {
+    error = markHttpIndeterminate(error);
       if (!terminalAttempted) {
         terminalAttempted = true;
         await credentialLedger.finalizeCredentialUse({
           reservation,
-          outcome: 'failed',
+          outcome: 'indeterminate',
           errorClass: error?.name || 'provider_request_failed',
           outcomeClass: 'provider_request_failed',
           outcomeHash: credentialUseEvidenceHash({ status: res?.status || null, error: error?.message || String(error) }),
         });
       }
       throw error;
-    }
+    } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
+  }
     const message = data?.choices?.[0]?.message || {};
     const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
     const text = contentToText(message.content);
@@ -2376,13 +2761,14 @@ async function runPerplexity({
       if (fallbackToolName && fallbackArgs && typeof executeToolFn === 'function') {
         let fallbackResult;
         try {
+          requestSignal?.throwIfAborted();
+          if (performance.now() >= operationDeadline) throw new DOMException("Model operation deadline exceeded", "TimeoutError");
           fallbackResult = await executeToolFn(fallbackToolName, fallbackArgs);
           if (isToolApprovalPayload(fallbackResult)) {
             throw createToolApprovalError(fallbackToolName, fallbackResult);
           }
         } catch (err) {
-          if (err?.code === 'TOOL_APPROVAL_REQUIRED') throw err;
-          fallbackResult = { error: err.message };
+          throw err;
         }
 
         const exactReply = parseExactReplyDirective(resolvedUserPrompt);
@@ -2422,13 +2808,14 @@ async function runPerplexity({
       let result;
       try {
         const args = parseToolArgs(tc?.function?.arguments);
+        requestSignal?.throwIfAborted();
+        if (performance.now() >= operationDeadline) throw new DOMException("Model operation deadline exceeded", "TimeoutError");
         result = await executeToolFn(toolName, args);
         if (isToolApprovalPayload(result)) {
           throw createToolApprovalError(toolName, result);
         }
       } catch (err) {
-        if (err?.code === 'TOOL_APPROVAL_REQUIRED') throw err;
-        result = { error: err.message };
+        throw err;
       }
       executedToolResults.push({ name: toolName || 'unknown_tool', result });
       conversation.push({
@@ -2449,7 +2836,8 @@ async function runPerplexity({
   throw new Error('Perplexity tool loop exceeded max rounds without final response');
 }
 
-async function runPerplexityStream({ key, credentialCheckout, model, messages, onToken, useContext = {} }) {
+async function runPerplexityStream({ key, credentialCheckout, model, messages, onToken, useContext = {}, requestSignal = useContext.signal, requestDeadline = useContext.deadlineAt }) {
+  const operationDeadline = Math.min(requestDeadline ?? Infinity, performance.now() + PROVIDER_REQUEST_TIMEOUT_MS);
   const payload = {
     model,
     messages,
@@ -2480,7 +2868,9 @@ async function runPerplexityStream({ key, credentialCheckout, model, messages, o
         Authorization: `Bearer ${key}`,
         'Content-Type': 'application/json'
       },
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      signal: requestSignal,
+      deadlineAt: operationDeadline,
     }, PROVIDER_REQUEST_TIMEOUT_MS);
     if (!res.ok) throw new Error(`Perplexity error (${res.status}): ${await res.text()}`);
     if (!res.body) throw new Error('Perplexity stream body missing');
@@ -2488,9 +2878,14 @@ async function runPerplexityStream({ key, credentialCheckout, model, messages, o
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let streamComplete = false;
+    try {
     while (true) {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done) {
+        if (buffer.trim() || !streamComplete) throw new Error('provider_stream_incomplete');
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
@@ -2499,18 +2894,23 @@ async function runPerplexityStream({ key, credentialCheckout, model, messages, o
         const line = rawLine.trim();
         if (!line.startsWith('data:')) continue;
         const payloadText = line.slice(5).trim();
-        if (!payloadText || payloadText === '[DONE]') continue;
+        if (payloadText === '[DONE]') { streamComplete = true; continue; }
+        if (!payloadText) continue;
         let parsed;
         try {
           parsed = JSON.parse(payloadText);
-        } catch {
-          continue;
-        }
+        } catch (error) { throw error; }
+        if (parsed?.error) throw new Error('provider_stream_error');
         const delta = String(parsed?.choices?.[0]?.delta?.content || '');
         if (!delta) continue;
         full += delta;
         onToken(delta);
       }
+    }
+    } finally {
+      // Cancellation may already have errored the stream; always release its lock.
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
     }
     terminalAttempted = true;
     await credentialLedger.finalizeCredentialUse({
@@ -2521,17 +2921,20 @@ async function runPerplexityStream({ key, credentialCheckout, model, messages, o
     });
     return full;
   } catch (error) {
+    error = markHttpIndeterminate(error);
     if (!terminalAttempted) {
       terminalAttempted = true;
       await credentialLedger.finalizeCredentialUse({
         reservation,
-        outcome: 'failed',
+        outcome: 'indeterminate',
         errorClass: error?.name || 'provider_request_failed',
         outcomeClass: 'provider_request_failed',
         outcomeHash: credentialUseEvidenceHash({ status: res?.status || null, partialText: full, error: error?.message || String(error) }),
       });
     }
     throw error;
+  } finally {
+    if (res?.body && !res.body.locked && !res.bodyUsed) await res.body.cancel().catch(() => {});
   }
 }
 
@@ -2562,6 +2965,9 @@ export async function runProviderWithFailover({
 } = {}) {
   const maxAttempts = getMaxFailoverAttempts();
   const attempts = [];
+  const requestDeadline = Math.min(useContext.deadlineAt ?? Infinity, toolExecutionOptions.deadlineAt ?? Infinity,
+    performance.now() + (resolveProviderForModel(primaryProvider, primaryModel).provider === 'codex'
+      ? CODEX_REQUEST_TIMEOUT_MS : PROVIDER_REQUEST_TIMEOUT_MS));
 
   // Build candidate list: primary first, then healthy alternatives sorted by health score
   const candidates = [];
@@ -2596,6 +3002,7 @@ export async function runProviderWithFailover({
   }
 
   for (let i = 0; i < Math.min(maxAttempts, candidates.length); i++) {
+    useContext?.signal?.throwIfAborted();
     const candidate = candidates[i];
     const startTime = Date.now();
 
@@ -2610,6 +3017,7 @@ export async function runProviderWithFailover({
         toolDefs,
         toolExecutionOptions,
         onToken,
+        deadlineAt: requestDeadline,
         useContext: {
           agentId,
           ...useContext,
@@ -2640,6 +3048,8 @@ export async function runProviderWithFailover({
 
       return result;
     } catch (err) {
+      if (useContext?.signal?.aborted || /Timeout|Abort/.test(err?.name || '')
+          || err?.httpOutcome === 'INDETERMINATE' || toolDefs.length > 0) throw err;
       if (String(err?.message || '').startsWith('credential_use_')) {
         throw err;
       }

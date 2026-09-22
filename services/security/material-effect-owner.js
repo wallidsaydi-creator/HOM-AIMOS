@@ -12,13 +12,13 @@ import { createHash, randomUUID } from 'node:crypto';
 import { canonicalJson } from './agent-identity.js';
 import { logEvent, readVerifiedEventHistory } from '../observe/event-ledger.js';
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
+import { beginServingWork } from '../runtime/serving-control.js';
 
 const SCHEMA = 'hom.aimos.material-effect/v1';
 const START_OPERATION = 'material_effect_started';
 const TERMINAL_OPERATION = 'material_effect_terminal';
 const EFFECT_KINDS = new Set(['filesystem', 'external', 'process']);
 const DISPOSITIONS = new Set(['SUCCEEDED', 'FAILED', 'INDETERMINATE']);
-const MAX_RECOVERY_EVENTS = 100_000;
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -49,7 +49,7 @@ function mutationHashOf(receiptOrRow) {
 }
 
 export function reconstructMaterialEffectTraces(rows = []) {
-  if (!Array.isArray(rows) || rows.length > MAX_RECOVERY_EVENTS) throw new Error('material_effect_recovery_limit');
+  if (!Array.isArray(rows)) throw new Error('material_effect_recovery_input_invalid');
   const actions = new Map();
   for (const row of rows) {
     if (row?.operation !== START_OPERATION && row?.operation !== TERMINAL_OPERATION) continue;
@@ -118,6 +118,7 @@ export function createMaterialEffectOwner({
   readEventHistoryFn = readVerifiedEventHistory,
   uuidFn = randomUUID,
 } = {}) {
+  const activeEffects = new Map();
   async function begin({
     kind,
     operation,
@@ -155,6 +156,7 @@ export function createMaterialEffectOwner({
       reasoning: 'The Housekeeper signed the exact non-reconstructive target and input projection before allowing one material effect attempt.',
       source_knowledge: 'material-effect-owner.js — RFC 6962 / RFC 8032 / RFC 8785',
     }, parentEventId, { authority: verifiedAuthority, returnReceipt: true, exclusiveOperationKey: true });
+    activeEffects.set(actionId, beginServingWork('material_effect'));
     return Object.freeze({
       actionId,
       kind: effectKind,
@@ -174,7 +176,7 @@ export function createMaterialEffectOwner({
       throw new Error('material_effect_terminal_invalid');
     }
     const resultSha256 = materialEffectProjectionHash(resultProjection);
-    return logEventFn(action.companyId, action.subjectAgentId, TERMINAL_OPERATION, action.actionId, {
+    const receipt = await logEventFn(action.companyId, action.subjectAgentId, TERMINAL_OPERATION, action.actionId, {
       schema: SCHEMA,
       action_id: action.actionId,
       effect_kind: action.kind,
@@ -193,15 +195,18 @@ export function createMaterialEffectOwner({
       returnReceipt: true,
       exclusiveOperationKey: true,
     });
+    activeEffects.get(action.actionId)?.();
+    activeEffects.delete(action.actionId);
+    return receipt;
   }
 
-  async function findOpen({ companyId = AIMOS_COMPANY_ID } = {}) {
-    const rows = await readEventHistoryFn(companyId, { signerAgentId: 'housekeeper' });
+  async function findOpen({ companyId = AIMOS_COMPANY_ID, historyFn = readEventHistoryFn } = {}) {
+    const rows = await historyFn(companyId, { signerAgentId: 'housekeeper' });
     return reconstructMaterialEffectTraces(rows).open;
   }
 
-  async function reconcileOpen({ companyId = AIMOS_COMPANY_ID } = {}) {
-    const rows = await readEventHistoryFn(companyId, { signerAgentId: 'housekeeper' });
+  async function reconcileOpen({ companyId = AIMOS_COMPANY_ID, historyFn = readEventHistoryFn } = {}) {
+    const rows = await historyFn(companyId, { signerAgentId: 'housekeeper' });
     const before = reconstructMaterialEffectTraces(rows);
     const reconciled = [];
     for (const trace of before.open) {
@@ -235,14 +240,14 @@ export function createMaterialEffectOwner({
         reconciled.push(Object.freeze({ actionId: trace.actionId, receipt }));
       } catch (error) {
         if (error?.message !== 'event_operation_key_exists') throw error;
-        const racedRows = await readEventHistoryFn(companyId, { signerAgentId: 'housekeeper' });
+        const racedRows = await historyFn(companyId, { signerAgentId: 'housekeeper' });
         const raced = reconstructMaterialEffectTraces(racedRows).complete
           .find((entry) => entry.actionId === trace.actionId);
         if (!raced) throw new Error('material_effect_recovery_race_unverified');
         reconciled.push(Object.freeze({ actionId: trace.actionId, existing: true }));
       }
     }
-    const afterRows = await readEventHistoryFn(companyId, { signerAgentId: 'housekeeper' });
+    const afterRows = await historyFn(companyId, { signerAgentId: 'housekeeper' });
     const after = reconstructMaterialEffectTraces(afterRows);
     return Object.freeze({
       scanned: before.actionCount,

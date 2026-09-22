@@ -8,6 +8,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createHash } from 'node:crypto';
+import { memoryCreditEvidence } from '../security/protocol/memory-credit.js';
 import { agentPool } from '../../db/connection.js';
 import { AIMOS_COMPANY_ID } from '../core/runtime-config.js';
 import { canonicalJson } from '../security/agent-identity.js';
@@ -21,6 +22,14 @@ import {
   verifyToolActionAuthority,
 } from '../orchestration/tool-action-ledger.js';
 import { sessionKeyPrefix } from '../shared/session-scope.js';
+import { readVerifiedMemoryOriginTips } from '../security/origin-ledger.js';
+import {
+  ORIGIN_ACTION_CLASS_ORDER_V1,
+  ORIGIN_CONFIDENTIALITY_ORDER_V1,
+  ORIGIN_FAMILY_PROFILE_SHA256_V1,
+  ORIGIN_INTEGRITY_ORDER_V1,
+  originFamilyClosureV1,
+} from '../security/protocol/origin-binding-v1.js';
 
 const COMMAND_FIELDS = new Set([
   'query', 'q', 'key', 'memory_id', 'company_id', 'agent_id', 'limit',
@@ -33,13 +42,19 @@ const COMMAND_FIELDS = new Set([
   'answer_mode', 'ts_signed',
 ]);
 const DATA_CLASS_ORDER = Object.freeze(['public', 'internal', 'confidential', 'restricted']);
+export const NATIVE_RECALL_ORIGIN_DISCLOSURE_SCHEMA_V1 =
+  'hom.aimos.native-recall-origin-disclosure/v1';
+const NATIVE_RECALL_ORIGIN_DISCLOSURE_DOMAIN_V1 = Buffer.from(
+  `${NATIVE_RECALL_ORIGIN_DISCLOSURE_SCHEMA_V1}\0`,
+  'utf8',
+);
 export const NATIVE_RECALL_SESSION_SCALE_CONTRACT = Object.freeze({
   schema: 'hom-aimos/native-recall-session-scale/v1',
   restricted_connections_per_request: 1,
   shared_read_snapshot: true,
   transaction_isolation: 'repeatable_read',
-  transaction_access: 'read_interface_with_authority_row_lock',
-  read_interface: 'select_or_with_only',
+  transaction_access: 'authority_rows_locked_then_database_enforced_read_only',
+  read_interface: 'lexically_validated_single_select_with_or_bounded_read_cursor',
   verified_evidence_cache_scope: 'request_local_repeatable_read_snapshot',
   verified_evidence_cache_authority: false,
   rejected_evidence_cached: false,
@@ -49,6 +64,151 @@ export const NATIVE_RECALL_SESSION_SCALE_CONTRACT = Object.freeze({
 
 function sha256(value) {
   return createHash('sha256').update(value).digest();
+}
+
+function u32(value) {
+  if (!Number.isSafeInteger(value) || value < 0 || value > 0xffffffff) {
+    throw new Error('recall_origin_disclosure_length_invalid');
+  }
+  const result = Buffer.alloc(4);
+  result.writeUInt32BE(value);
+  return result;
+}
+
+function canonicalDisclosureHash(body) {
+  const bytes = Buffer.from(canonicalJson(body), 'utf8');
+  return sha256(Buffer.concat([
+    NATIVE_RECALL_ORIGIN_DISCLOSURE_DOMAIN_V1,
+    u32(bytes.length),
+    bytes,
+  ])).toString('hex');
+}
+
+function disclosureBody(label) {
+  const { disclosure_label_sha256: _hash, ...body } = label;
+  return body;
+}
+
+export function verifyNativeRecallOriginDisclosure(label) {
+  if (!label || typeof label !== 'object' || Array.isArray(label)) {
+    throw new Error('recall_origin_disclosure_invalid');
+  }
+  const claimed = String(label.disclosure_label_sha256 || '').toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(claimed)
+      || canonicalDisclosureHash(disclosureBody(label)) !== claimed) {
+    throw new Error('recall_origin_disclosure_hash_invalid');
+  }
+  return true;
+}
+
+function exactOrderedHashes(values, code) {
+  const result = [...new Set(values.map((value) => String(value || '').toLowerCase()))].sort();
+  if (result.some((value) => !/^[0-9a-f]{64}$/.test(value))) throw new Error(code);
+  return Object.freeze(result);
+}
+
+function exactOrderedUuids(values, code) {
+  const result = [...new Set(values.map((value) => String(value || '').toLowerCase()))].sort();
+  if (result.some((value) => !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value))) {
+    throw new Error(code);
+  }
+  return Object.freeze(result);
+}
+
+function leastAuthority(values, order, fallback, code) {
+  if (!values.length) return fallback;
+  const ranks = values.map((value) => order.indexOf(value));
+  if (ranks.some((rank) => rank < 0)) throw new Error(code);
+  return order[Math.min(...ranks)];
+}
+
+function greatestConfidentiality(values) {
+  const ranks = values.map((value) => ORIGIN_CONFIDENTIALITY_ORDER_V1.indexOf(value));
+  if (ranks.some((rank) => rank < 0)) throw new Error('recall_origin_confidentiality_invalid');
+  return ORIGIN_CONFIDENTIALITY_ORDER_V1[Math.max(...ranks)];
+}
+
+export function buildNativeRecallOriginDisclosure(memory, originTips = []) {
+  const memoryId = String(memory?.id || '').toLowerCase();
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(memoryId)) {
+    throw new Error('recall_origin_memory_id_invalid');
+  }
+  const liveContentHash = String(memory?.provenance_proof?.live_content_hash || '').toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(liveContentHash)) {
+    throw new Error('recall_origin_live_content_hash_invalid');
+  }
+  const tips = Array.isArray(originTips) ? originTips : [];
+  const legacyUnbound = tips.length === 0;
+  const familyIds = originFamilyClosureV1(legacyUnbound
+    ? ['unknown_protected']
+    : [...new Set(tips.flatMap((tip) => tip.family_ids || []))]);
+  const familySetRoot = recallMerkleRoot(familyIds.map((familyId, ordinal) => ({
+    ordinal,
+    family_id: familyId,
+  }))).toString('hex');
+  const body = Object.freeze({
+    schema: NATIVE_RECALL_ORIGIN_DISCLOSURE_SCHEMA_V1,
+    memory_id: memoryId,
+    live_content_hash: liveContentHash,
+    family_profile_sha256: ORIGIN_FAMILY_PROFILE_SHA256_V1,
+    family_ids: familyIds,
+    family_set_root_sha256: familySetRoot,
+    origin_binding_sha256s: exactOrderedHashes(
+      tips.map((tip) => tip.binding_sha256),
+      'recall_origin_binding_hash_invalid',
+    ),
+    origin_ledger_hashes: exactOrderedHashes(
+      tips.map((tip) => tip.ledger_hash),
+      'recall_origin_ledger_hash_invalid',
+    ),
+    origin_event_ids: exactOrderedUuids(
+      tips.map((tip) => tip.classification_event_id),
+      'recall_origin_event_id_invalid',
+    ),
+    origin_event_mutation_sha256s: exactOrderedHashes(
+      tips.map((tip) => tip.classification_event_mutation_sha256),
+      'recall_origin_event_hash_invalid',
+    ),
+    confidentiality: legacyUnbound
+      ? 'restricted'
+      : greatestConfidentiality([
+          String(memory?.data_class || 'public'),
+          ...tips.map((tip) => tip.confidentiality),
+        ]),
+    integrity: legacyUnbound
+      ? 'untrusted'
+      : leastAuthority(
+          tips.map((tip) => tip.integrity),
+          ORIGIN_INTEGRITY_ORDER_V1,
+          'untrusted',
+          'recall_origin_integrity_invalid',
+        ),
+    effective_action_class: legacyUnbound
+      ? 'none'
+      : leastAuthority(
+          tips.map((tip) => tip.action_class),
+          ORIGIN_ACTION_CLASS_ORDER_V1,
+          'none',
+          'recall_origin_action_class_invalid',
+        ),
+    legacy_unbound: legacyUnbound,
+    unclassified: legacyUnbound,
+  });
+  return Object.freeze({
+    ...body,
+    disclosure_label_sha256: canonicalDisclosureHash(body),
+  });
+}
+
+export function nativeRecallDisclosureLabelRoot(labels = []) {
+  if (!Array.isArray(labels)) throw new Error('recall_disclosure_labels_invalid');
+  for (const label of labels) verifyNativeRecallOriginDisclosure(label);
+  return recallMerkleRoot(labels.map((label, ordinal) => ({
+    ordinal,
+    memory_id: label.memory_id,
+    live_content_hash: label.live_content_hash,
+    disclosure_label_sha256: label.disclosure_label_sha256,
+  }))).toString('hex');
 }
 
 function normalizeInteger(value, fallback, min, max) {
@@ -121,22 +281,23 @@ async function assertSignedCommandBinding(rawCommand, requestAuthority, transpor
     });
   }
   if (requestAuthority?.kind !== 'verified_request'
-    || ![3, 4].includes(requestAuthority.requestSigForm)
+    || ![3, 4, 5].includes(requestAuthority.requestSigForm)
     || String(requestAuthority.signedMethod).toUpperCase() !== 'POST') {
     throw new Error('signed_recall_request_required');
   }
   let signedCommand;
+  const signedPathname = String(requestAuthority.signedPath || '').split('?')[0];
   if (transportBinding.transport === 'rest') {
-    if (requestAuthority.signedPath !== '/aimos/recall') throw new Error('recall_signed_path_mismatch');
+    if (signedPathname !== '/aimos/recall') throw new Error('recall_signed_path_mismatch');
     signedCommand = requestAuthority.body;
   } else if (transportBinding.transport === 'v1') {
-    if (requestAuthority.signedPath !== '/v1/recall') throw new Error('recall_signed_path_mismatch');
+    if (signedPathname !== '/v1/recall') throw new Error('recall_signed_path_mismatch');
     signedCommand = requestAuthority.body;
   } else if (transportBinding.transport === 'legacy_mcp') {
-    if (requestAuthority.signedPath !== '/aimos/mcp/tools/call') throw new Error('recall_signed_path_mismatch');
+    if (signedPathname !== '/aimos/mcp/tools/call') throw new Error('recall_signed_path_mismatch');
     signedCommand = exactMcpCommand(requestAuthority.body, transportBinding);
   } else if (transportBinding.transport === 'mcp') {
-    if (requestAuthority.signedPath !== '/mcp') throw new Error('recall_signed_path_mismatch');
+    if (signedPathname !== '/mcp') throw new Error('recall_signed_path_mismatch');
     signedCommand = exactMcpCommand(requestAuthority.body, transportBinding);
   } else {
     throw new Error('recall_transport_invalid');
@@ -371,6 +532,11 @@ export async function admitNativeRecallCandidatesInVerifiedSession(
     error.rejected = evidence.rejected;
     throw error;
   }
+  const originTipsByMemoryId = await readVerifiedMemoryOriginTips({
+    client,
+    companyId: authority.companyId,
+    memoryIds: ids,
+  });
   const admitted = [];
   const unauthorized = [];
   for (const memory of candidateRows) {
@@ -383,6 +549,10 @@ export async function admitNativeRecallCandidatesInVerifiedSession(
     admitted.push({
       ...memory,
       provenance_proof: proof,
+      origin_disclosure: buildNativeRecallOriginDisclosure(
+        { ...memory, provenance_proof: proof },
+        originTipsByMemoryId.get(String(memory.id)) || [],
+      ),
       version_status: proof.version_status,
       retention_frequency_class: quarantineEvidence ? 'quiet' : 'normal',
       evidence_handling: quarantineEvidence ? 'untrusted_reference_only' : 'ordinary_reference',
@@ -472,10 +642,83 @@ function createNativeRecallSessionHandle({ client, authority, evidenceCache }) {
   let closed = false;
   let optionalReadSequence = 0;
   let optionalReadTail = Promise.resolve();
+  const sqlSkeleton = (text) => {
+    const input = String(text || '');
+    let output = '';
+    for (let index = 0; index < input.length;) {
+      const char = input[index], next = input[index + 1];
+      if (char === "'") {
+        output += ' ';
+        index += 1;
+        while (index < input.length) {
+          if (input[index] === "'" && input[index + 1] === "'") { index += 2; continue; }
+          if (input[index] === "'") { index += 1; break; }
+          index += 1;
+        }
+        continue;
+      }
+      if (char === '"') {
+        output += ' ';
+        index += 1;
+        while (index < input.length) {
+          if (input[index] === '"' && input[index + 1] === '"') { index += 2; continue; }
+          if (input[index] === '"') { index += 1; break; }
+          index += 1;
+        }
+        continue;
+      }
+      if (char === '-' && next === '-') {
+        output += ' ';
+        index += 2;
+        while (index < input.length && input[index] !== '\n') index += 1;
+        continue;
+      }
+      if (char === '/' && next === '*') {
+        output += ' ';
+        index += 2;
+        let depth = 1;
+        while (index < input.length && depth > 0) {
+          if (input[index] === '/' && input[index + 1] === '*') { depth += 1; index += 2; }
+          else if (input[index] === '*' && input[index + 1] === '/') { depth -= 1; index += 2; }
+          else index += 1;
+        }
+        if (depth !== 0) throw new Error('recall_admission_sql_lexical_invalid');
+        continue;
+      }
+      if (char === '$') {
+        const tag = input.slice(index).match(/^\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/)?.[0];
+        if (tag) {
+          const end = input.indexOf(tag, index + tag.length);
+          if (end < 0) throw new Error('recall_admission_sql_lexical_invalid');
+          output += ' ';
+          index = end + tag.length;
+          continue;
+        }
+      }
+      output += char;
+      index += 1;
+    }
+    return output;
+  };
   const validateReadStatement = (text) => {
     const statement = String(text || '').trim();
-    if (!/^(?:SELECT|WITH)\b/i.test(statement)
-      || /\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|ALTER|CREATE|DROP|GRANT|REVOKE|CALL|COPY)\b/i.test(statement)) {
+    const skeleton = sqlSkeleton(statement).trim();
+    const withoutTrailingTerminator = skeleton.endsWith(';') ? skeleton.slice(0, -1) : skeleton;
+    const mutation = /\b(?:INSERT|UPDATE|DELETE|MERGE|TRUNCATE|ALTER|CREATE|DROP|GRANT|REVOKE|CALL|COPY)\b/i;
+    const simpleRead = /^(?:SELECT|WITH)\b/i.test(withoutTrailingTerminator);
+    const cursorDeclaration = withoutTrailingTerminator.match(
+      /^DECLARE\s+[a-z_][a-z0-9_]*\s+NO\s+SCROLL\s+CURSOR\s+WITHOUT\s+HOLD\s+FOR\s+([\s\S]+)$/i,
+    );
+    const cursorBody = cursorDeclaration?.[1]?.trim() || '';
+    const boundedFetch = /^FETCH\s+FORWARD\s+[1-9][0-9]*\s+FROM\s+[a-z_][a-z0-9_]*$/i
+      .test(withoutTrailingTerminator);
+    const cursorClose = /^CLOSE\s+[a-z_][a-z0-9_]*$/i.test(withoutTrailingTerminator);
+    const validCursorDeclaration = Boolean(cursorDeclaration)
+      && /^(?:SELECT|WITH)\b/i.test(cursorBody)
+      && !mutation.test(cursorBody);
+    if (withoutTrailingTerminator.includes(';')
+      || (simpleRead && mutation.test(withoutTrailingTerminator))
+      || (!simpleRead && !validCursorDeclaration && !boundedFetch && !cursorClose)) {
       throw new Error('recall_admission_read_only_statement_required');
     }
     return statement;
@@ -573,6 +816,10 @@ export async function openNativeRecallAdmissionSession({
         throw new Error('recall_authority_changed_during_request');
       }
     }
+    // PostgreSQL forbids SELECT ... FOR SHARE in a transaction declared read
+    // only. Lock the exact identity/grant rows first, then irreversibly switch
+    // the same snapshot to READ ONLY before exposing its bounded read handle.
+    await client.query('SET TRANSACTION READ ONLY');
   } catch (error) {
     try { await client.query('ROLLBACK'); } catch { /* connection may be gone */ }
     client.release();
@@ -619,6 +866,7 @@ export async function openNativeRecallRequestSession({
       transportBinding,
       client,
     });
+    await client.query('SET TRANSACTION READ ONLY');
     const evidenceCache = createRequestLocalRecallEvidenceCache(verifyEvidenceFn);
     return createNativeRecallSessionHandle({ client, authority, evidenceCache });
   } catch (error) {
@@ -661,6 +909,24 @@ export async function finalizeNativeRecall({
     if (!/^[0-9a-f]{64}$/.test(occurrenceRef)) {
       throw new TypeError(`recall_disclosure_occurrence_ref_invalid:${ordinal}`);
     }
+    const originDisclosure = memory.origin_disclosure;
+    const normalizedProofContentHash = String(
+      memory.provenance_proof.live_content_hash || '',
+    ).toLowerCase();
+    if (!originDisclosure) throw new TypeError(`recall_origin_disclosure_missing:${ordinal}`);
+    if (originDisclosure.schema !== NATIVE_RECALL_ORIGIN_DISCLOSURE_SCHEMA_V1) {
+      throw new TypeError(`recall_origin_disclosure_schema_invalid:${ordinal}`);
+    }
+    if (originDisclosure.memory_id !== String(memory.id)) {
+      throw new TypeError(`recall_origin_disclosure_memory_invalid:${ordinal}`);
+    }
+    if (originDisclosure.live_content_hash !== normalizedProofContentHash) {
+      throw new TypeError(`recall_origin_disclosure_content_invalid:${ordinal}`);
+    }
+    if (originDisclosure.disclosure_label_sha256
+        !== canonicalDisclosureHash(disclosureBody(originDisclosure))) {
+      throw new TypeError(`recall_origin_disclosure_hash_invalid:${ordinal}`);
+    }
     return {
       ordinal,
       memory_id: String(memory.id),
@@ -669,13 +935,17 @@ export async function finalizeNativeRecall({
       save_mutation_hash: memory.provenance_proof.save_mutation_hash,
       binding_mutation_hash: memory.provenance_proof.binding_mutation_hash,
       truth_state: memory.provenance_proof.version_status,
+      memory_credit: memoryCreditEvidence(memory),
       raw_calibration_score: finiteScoreOrNull(memory._raw_rerank),
       calibrated_score: finiteScoreOrNull(memory.calibrated_recall_score),
       calibration_event_id: memory.calibration_event_id,
       calibration_mutation_hash: memory.calibration_mutation_hash,
       calibration_formula_version: memory.calibration_formula_version,
+      origin_disclosure: originDisclosure,
     };
   });
+  const disclosureLabels = entries.map((entry) => entry.origin_disclosure);
+  const disclosureLabelRoot = nativeRecallDisclosureLabelRoot(disclosureLabels);
   const normalizedDecisionHash = epistemicDecisionHash == null
     ? null
     : String(epistemicDecisionHash).trim().toLowerCase();
@@ -788,9 +1058,11 @@ export async function finalizeNativeRecall({
     result_count: entries.length,
     merkle_root: root,
     evidence: entries,
+    disclosure_label_root_sha256: disclosureLabelRoot,
+    disclosure_labels: disclosureLabels,
     ...(decisionEntries.length ? {
       merkle_schema: normalizedSecurityClosureHash
-        ? 'hom-aimos/recall-merkle/v3-epistemic-and-security-closure'
+        ? 'hom-aimos/recall-merkle/v4-origin-family-disclosure'
         : 'hom-aimos/recall-merkle/v2-epistemic-decision',
       epistemic_decision_sha256: normalizedDecisionHash,
       canary_final_security_closure_sha256: normalizedSecurityClosureHash,
@@ -839,9 +1111,11 @@ export async function finalizeNativeRecall({
     request_admission_authority_kind: authority.requestAuthority.requestAdmissionAuthorityKind,
     merkle_root: root,
     evidence: entries,
+    disclosure_label_root_sha256: disclosureLabelRoot,
+    disclosure_labels: disclosureLabels,
     ...(decisionEntries.length ? {
       merkle_schema: normalizedSecurityClosureHash
-        ? 'hom-aimos/recall-merkle/v3-epistemic-and-security-closure'
+        ? 'hom-aimos/recall-merkle/v4-origin-family-disclosure'
         : 'hom-aimos/recall-merkle/v2-epistemic-decision',
       epistemic_decision_sha256: normalizedDecisionHash,
       canary_final_security_closure_sha256: normalizedSecurityClosureHash,
