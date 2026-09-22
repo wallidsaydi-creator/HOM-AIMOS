@@ -34,9 +34,9 @@ const TRIGGERS = Object.freeze([
 const TRIGGER_TABLES = [...new Set([...READ_TABLES, ...TRIGGERS.map(t => t[0])])];
 
 export function currentOriginSourceContract() {
-  const files = readdirSync(path.join(ROOT, 'migrations')).filter(name => /^(?:10[0-9]|11[0-4])-.*\.sql$/.test(name)).sort()
+  const files = readdirSync(path.join(ROOT, 'migrations')).filter(name => /^(?:10[0-9]|11[0-5])-.*\.sql$/.test(name)).sort()
     .map(name => `migrations/${name}`);
-  assert.equal(files.length, 15, 'origin_current_source_version_set_invalid');
+  assert.equal(files.length, 16, 'origin_current_source_version_set_invalid');
   files.push('db/request-target.sql','db/signed-request-bytes.sql','db/atomic-save-origin.sql',
     'db/signed-json-bytes.sql','db/signed-event-bytes.sql','db/cognitive-ancestry.sql');
   const functions = new Map();

@@ -4,7 +4,7 @@ import { currentOriginSourceContract } from '../../scripts/verification/audit-or
 
 test('current origin expectations select exact latest native SQL owners, including atomicity and OB5', () => {
   const contract = currentOriginSourceContract();
-  assert.equal(contract.sources.length, 22);
+  assert.equal(contract.sources.length, 23);
   assert.deepEqual(contract.sources.filter(s => s.path.startsWith('db/')).map(s => s.path), [
     'db/request-target.sql', 'db/signed-request-bytes.sql', 'db/atomic-save-origin.sql',
     'db/signed-json-bytes.sql', 'db/signed-event-bytes.sql', 'db/cognitive-ancestry.sql',
@@ -36,6 +36,16 @@ test('current origin expectations select exact latest native SQL owners, includi
   assert.equal(contract.functions.get('ob2_validate_corroborators').source, 'migrations/112-origin-corroborator-key-precedence.sql');
   assert.equal(contract.functions.get('select_origin_elevation_v2_for_action').source,
     'migrations/114-origin-elevation-exact-selector.sql');
+  assert.equal(contract.functions.get('ob2_origin_database_context_hash').source,
+    'migrations/115-origin-ledger-genesis-context.sql');
+  assert.equal(contract.functions.get('ob2_read_origin_ledger_state').source,
+    'migrations/115-origin-ledger-genesis-context.sql');
+  assert.match(contract.functions.get('ob2_origin_database_context_hash').body,
+    /v_anchor_kind := 'housekeeper_genesis'/);
+  assert.match(contract.functions.get('ob2_read_origin_ledger_state').body,
+    /database_context_sha256 := public\.ob2_origin_database_context_hash/);
+  assert.match(contract.functions.get('ob2_read_origin_ledger_state').body,
+    /v_head_count = 0 AND v_entry_count > 0/);
   assert.equal(contract.triggers.length, 5);
   assert.equal(contract.indexes.length, 6);
   assert(contract.foreignKeys.length > 15);

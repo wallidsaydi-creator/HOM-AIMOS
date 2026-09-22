@@ -6,8 +6,8 @@
   "hash_algorithm": "sha256",
   "root_algorithm": "sha256(canonical-json(files))",
   "manifest_self_excluded": true,
-  "file_count": 1106,
-  "files_root_sha256": "0834b7a5bda08cc0210a148d985717a8ca6be826138a99a76c1e04b6d666d51c",
+  "file_count": 1107,
+  "files_root_sha256": "485ee6a0a9debfd79e782f01dad414a585cabbe74b1755f4116b73f0a4c72eb0",
   "files": [
     {
       "path": ".github/dependabot.yml",
@@ -1060,6 +1060,11 @@
       "sha256": "a361d6c7189879b2e82f487e998ba3f21ca527dda035f86d0c4cf42c7943d60f"
     },
     {
+      "path": "migrations/115-origin-ledger-genesis-context.sql",
+      "bytes": 5445,
+      "sha256": "8f75f1c0b3bc8bd13b27460bfc1f1532f648120471c687b511dfb6a33ec13ad5"
+    },
+    {
       "path": "migrations/compatibility/029-runtime-role-password-removal.json",
       "bytes": 418,
       "sha256": "530bd44e6a560d636b496569026149147d94edd17da3ebd12a515f90a82eb4bc"
@@ -1671,8 +1676,8 @@
     },
     {
       "path": "scripts/test/run-isolated-security.mjs",
-      "bytes": 20114,
-      "sha256": "846c23e0d1a9c8056bf5cd0805ab33d8ec83ee4fa56d5417b00da0e983f15402"
+      "bytes": 22319,
+      "sha256": "cd0cfc8b45ec7ce3cddcb6acf6940cd98236e5a5a81e172e52de22c2cb787d28"
     },
     {
       "path": "scripts/test/run-source-tests.mjs",
@@ -1681,8 +1686,8 @@
     },
     {
       "path": "scripts/test/verify-public-source-tree.mjs",
-      "bytes": 11911,
-      "sha256": "5f25454d80f2603f4575212f8001ad56d9d5564f6bfbc2011f66bc09f6fdbb6a"
+      "bytes": 11965,
+      "sha256": "e08932ecf20606f51e104be3b4a9747e15be53861b190e9c708637432e7f7e96"
     },
     {
       "path": "scripts/test/verify-release-artifacts.mjs",
@@ -1712,7 +1717,7 @@
     {
       "path": "scripts/verification/audit-origin-ledger-current.mjs",
       "bytes": 28187,
-      "sha256": "da66a26dea905b4f5a41e832aec63b06700d1a2ee7421a778a971bfeb6773a48"
+      "sha256": "8a02940519a8f890848b93870871a6c8b08df9ff4154dadcc0b9cf383c20dd48"
     },
     {
       "path": "scripts/verification/audit-origin-ledger-ob2.mjs",
@@ -4241,8 +4246,8 @@
     },
     {
       "path": "tests/security/audit-023-remediation.test.mjs",
-      "bytes": 3528,
-      "sha256": "24ef8fea119f3bb30a6988e58878a27835e9d15e7ec810a0f1ec366abe2a74ee"
+      "bytes": 4204,
+      "sha256": "cf6187f11ee7716b6506584d675c4efa303d8d43554d2be77b3379c132b5ddfe"
     },
     {
       "path": "tests/security/auth-tier-system-self.test.mjs",
@@ -5540,5 +5545,5 @@
       "sha256": "474b416f860aebe17a7e84c1d2f8d06335f66d7585097ff8d1547e79042a5175"
     }
   ],
-  "manifest_sha256": "3ae0c650ac3995195c91af45e8bf0f3370ab836975e6cd9d03a495d2b039f64b"
+  "manifest_sha256": "5d26abd1e23d847fde3524af4249b1e66f0eecc6c0cdf4a60f1ea35f0c17a33b"
 }

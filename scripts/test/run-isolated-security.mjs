@@ -91,6 +91,53 @@ async function scratchProof(databaseName) {
   });
 }
 
+async function originGenesisContextProof(databaseName) {
+  return withPool(databaseName, async (pool) => {
+    const before = (await pool.query(`SELECT
+      (SELECT count(*)::int FROM aimos_master_identity) AS masters,
+      (SELECT count(*)::int FROM aimos_origin_ledger_entries) AS ledger_entries,
+      encode(database_context_sha256,'hex') AS database_context_sha256
+      FROM ob2_read_origin_ledger_state('hom')`)).rows[0];
+    if (before?.masters !== 0 || before.ledger_entries < 1
+        || !/^[0-9a-f]{64}$/.test(before.database_context_sha256 || '')) {
+      throw new Error(`origin_genesis_context_precondition_invalid:${JSON.stringify(before)}`);
+    }
+
+    await pool.query('BEGIN');
+    try {
+      await pool.query(`INSERT INTO aimos_master_identity
+        (id,master_pubkey,fingerprint,keychain_service,keychain_account)
+        VALUES (1,$1,$2,$3,$4)`, [
+        Buffer.alloc(44, 7).toString('base64url'),
+        'ab'.repeat(32),
+        'test-only-origin-context',
+        'test-only-origin-context',
+      ]);
+      const after = (await pool.query(`SELECT
+        (SELECT count(*)::int FROM aimos_master_identity) AS masters,
+        encode(database_context_sha256,'hex') AS database_context_sha256
+        FROM ob2_read_origin_ledger_state('hom')`)).rows[0];
+      if (after?.masters !== 1
+          || after.database_context_sha256 !== before.database_context_sha256) {
+        throw new Error(`origin_genesis_context_changed_after_master:${JSON.stringify({ before, after })}`);
+      }
+    } finally {
+      await pool.query('ROLLBACK');
+    }
+    const mastersAfterRollback = Number((await pool.query(
+      'SELECT count(*)::int AS count FROM aimos_master_identity',
+    )).rows[0].count);
+    if (mastersAfterRollback !== 0) throw new Error('origin_genesis_context_test_residue');
+    return {
+      no_master_genesis_verified: true,
+      context_stable_after_master_arrival: true,
+      database_context_sha256: before.database_context_sha256,
+      ledger_entries: before.ledger_entries,
+      transaction_rolled_back: true,
+    };
+  });
+}
+
 async function cr5SessionFingerprint(databaseName) {
   return withPool(databaseName, async (pool) => {
     const result = await pool.query(
@@ -385,6 +432,7 @@ async function main() {
       '--aimos-db', databaseName,
       '--aimos-port', String(SCRATCH_PORT)
     ]);
+    const originGenesisContext = await originGenesisContextProof(databaseName);
     await run(process.execPath, [
       'tests/security/auth-tier-system-self.test.mjs',
       '--live-fire',
@@ -488,6 +536,7 @@ async function main() {
       scratch_proof: proof,
       cr5_restart_proof: cr5RestartProof,
       cr6_restart_proof: cr6RestartProof,
+      origin_genesis_context: originGenesisContext,
       scratch_retained: keepScratch
     }, null, 2));
   } finally {

@@ -126,6 +126,7 @@ for (const required of [
   'migrations/112-origin-corroborator-key-precedence.sql',
   'migrations/113-origin-elevation-attempt-continuity.sql',
   'migrations/114-origin-elevation-exact-selector.sql',
+  'migrations/115-origin-ledger-genesis-context.sql',
   'scripts/identity/authorize-tool-action.js',
   'services/orchestration/tool-action-ledger.js',
   'services/orchestration/tool-registry.js',
