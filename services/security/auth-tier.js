@@ -319,6 +319,7 @@ export function createAuthTier(deps = {}) {
         'reject_replayed_nonce',
         null,
         { enforced: true, nonce: env.nonce,
+          reasoning: 'Reject a previously observed signed request nonce so a captured envelope cannot repeat an authenticated action.',
           source_knowledge: 'R1 identity binding — request nonce replay is terminal' }
       ).catch(() => {});
       return t0('replay_detected');

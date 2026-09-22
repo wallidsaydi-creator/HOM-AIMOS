@@ -66,6 +66,18 @@ test('initial boot publishes only a complete verified candidate', async () => {
   assert.equal(broken.owner.isLoaded(), false);
 });
 
+test('provider-agnostic boot publishes explicit per-service unavailability without exposing bytes', async () => {
+  const f = fixture();
+  f.failures.add('alpha');
+  const loaded = await f.owner.load({ allowUnavailable: true });
+  assert.deepEqual(loaded.unavailable, ['alpha']);
+  assert.equal(f.owner.isLoaded(), true);
+  assert.equal(f.owner.state('alpha').state, CREDENTIAL_CACHE_STATES.UNAVAILABLE);
+  assert.equal(f.owner.get('alpha'), null);
+  assert.throws(() => f.owner.checkout('alpha'), /authority_unavailable/);
+  assert.equal(f.owner.state('beta').state, CREDENTIAL_CACHE_STATES.ABSENT);
+});
+
 test('transient failure is explicit and cannot authorize retained bytes', async () => {
   const f = fixture();
   await f.owner.load();

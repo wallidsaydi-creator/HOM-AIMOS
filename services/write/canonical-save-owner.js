@@ -67,7 +67,8 @@ function evidenceHash(value) {
 }
 
 function safeFailureCode(error, fallback = 'canonical_save_failed') {
-  const candidate = String(error?.code || error?.message || fallback)
+  const candidate = String(error?.provenanceReason || error?.envelopeReason
+    || error?.code || error?.message || fallback)
     .toLowerCase().replace(/[^a-z0-9:_-]+/g, '_').slice(0, 160);
   return candidate || fallback;
 }

@@ -146,8 +146,10 @@ async function cr5SessionFingerprint(databaseName) {
          FROM aimos_memories m
          LEFT JOIN aimos_events e
            ON e.company_id = m.company_id
-          AND e.key = m.key
           AND e.operation = 'canonical_save_terminal'
+          AND e.metadata->'stages' @> jsonb_build_array(jsonb_build_object(
+            'stage','TERMINAL','status','SUCCESS','evidence',
+            jsonb_build_object('memory_id',m.id)))
         WHERE m.company_id = 'hom'
           AND m.source = 'test:cr5-session-convergence'
         GROUP BY m.id, m.key, m.content_hash

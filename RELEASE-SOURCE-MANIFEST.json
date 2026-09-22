@@ -7,7 +7,7 @@
   "root_algorithm": "sha256(canonical-json(files))",
   "manifest_self_excluded": true,
   "file_count": 1107,
-  "files_root_sha256": "485ee6a0a9debfd79e782f01dad414a585cabbe74b1755f4116b73f0a4c72eb0",
+  "files_root_sha256": "4fa0e432b98f5c0bad7c9ffa1604ec380b8584f1ee4541b6cc25b1bcaafde1f8",
   "files": [
     {
       "path": ".github/dependabot.yml",
@@ -1676,8 +1676,8 @@
     },
     {
       "path": "scripts/test/run-isolated-security.mjs",
-      "bytes": 22319,
-      "sha256": "cd0cfc8b45ec7ce3cddcb6acf6940cd98236e5a5a81e172e52de22c2cb787d28"
+      "bytes": 22480,
+      "sha256": "914b4b706c5cab6be8376b09969179739946a7a844e27690214772ea5e65e4b2"
     },
     {
       "path": "scripts/test/run-source-tests.mjs",
@@ -1961,8 +1961,8 @@
     },
     {
       "path": "server.js",
-      "bytes": 37556,
-      "sha256": "b6ca29a2478d3149768ea9c553d33f635814269260ab0708957e32c638acb6d3"
+      "bytes": 37977,
+      "sha256": "b7dac3221e4339f60159bd8ee72c6664043b0f3aa6d8c16ea2c0842256b284b6"
     },
     {
       "path": "services/answering/ensemble-engine.js",
@@ -3091,8 +3091,8 @@
     },
     {
       "path": "services/security/auth-tier.js",
-      "bytes": 17084,
-      "sha256": "b72ec6e56caa5b2c408b214b348d80afa59b041c9766c0f02b08108663755533"
+      "bytes": 17220,
+      "sha256": "205bbaccf359f6c8f650684a51ff00517ae97ac4d66bb96fa2f81cc6c89b80c6"
     },
     {
       "path": "services/security/canary-tracker.js",
@@ -3121,8 +3121,8 @@
     },
     {
       "path": "services/security/credential-cache.js",
-      "bytes": 13890,
-      "sha256": "924b4ee1ec18cbe3120dfe55c5cd29b59806397b9bd25ee491455a518e52101b"
+      "bytes": 14331,
+      "sha256": "7a57797dd0b60c6ee4a16d84e3287165bdc17cd077b8e55a285bf08e2e8d62b4"
     },
     {
       "path": "services/security/credential-ledger.js",
@@ -3556,8 +3556,8 @@
     },
     {
       "path": "services/write/canonical-save-owner.js",
-      "bytes": 50127,
-      "sha256": "53b16542ba6368479c09bed5514a5df5554fa27216d443b2c0ea00dd12b12bf9"
+      "bytes": 50183,
+      "sha256": "a5e2d6ec183df1e096145110fce8651f295412ffc72314e4958f104f5a517d12"
     },
     {
       "path": "services/write/channel-separator.js",
@@ -4146,8 +4146,8 @@
     },
     {
       "path": "tests/security/audit-013-remediation.test.mjs",
-      "bytes": 7761,
-      "sha256": "40d16b89e013b7752ae4660d4100684af5ba7001d89de58aa3eb984200cc4865"
+      "bytes": 8367,
+      "sha256": "97b6b54b45f4f0b6ef3e1c4f2678d00208122a1ac23c8ac1022616ad74530fe8"
     },
     {
       "path": "tests/security/audit-014-remediation-db.test.mjs",
@@ -4346,8 +4346,8 @@
     },
     {
       "path": "tests/security/cr5-session-convergence-db.test.mjs",
-      "bytes": 5741,
-      "sha256": "001da42bada4e9771d32e9dff22bfbc180c4e1b30b44c3d847d85d2022013b53"
+      "bytes": 6268,
+      "sha256": "b4d02ddd2b03c6f800f8bf44003023c51236f66b5a0fbb545cef71e2e1e27d3d"
     },
     {
       "path": "tests/security/cr6-canonical-recall-owner.test.mjs",
@@ -4671,8 +4671,8 @@
     },
     {
       "path": "tests/security/native-persistence-atomicity.test.mjs",
-      "bytes": 27991,
-      "sha256": "569669814eaf0c4ae4c37f0eb2b153753eed3ae42b5f9e22b7c818a2e8fb9c95"
+      "bytes": 29712,
+      "sha256": "6f895d52ac624d0df61e57a9bb2293fed6999f46c9ae02c71b56e25a74bec7a1"
     },
     {
       "path": "tests/security/native-tool-action-authority.test.mjs",
@@ -4681,8 +4681,8 @@
     },
     {
       "path": "tests/security/native-tool-action-db.test.mjs",
-      "bytes": 4352,
-      "sha256": "581db84513b7e7e69b230165db1261498219b58039d557fe76e16eb42309e4cf"
+      "bytes": 4417,
+      "sha256": "32c581026fca4da4facb78993ea54ea6366149d80ea8617c73a72ae7d38ad114"
     },
     {
       "path": "tests/security/neuroplasticity-trajectory-control.test.mjs",
@@ -5545,5 +5545,5 @@
       "sha256": "474b416f860aebe17a7e84c1d2f8d06335f66d7585097ff8d1547e79042a5175"
     }
   ],
-  "manifest_sha256": "5d26abd1e23d847fde3524af4249b1e66f0eecc6c0cdf4a60f1ea35f0c17a33b"
+  "manifest_sha256": "0e72e3c3c4f9d2d9344bfc4e2d90b98c41adbc5aeca8bf403da4214ddd24e1fe"
 }

@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
 import crypto from 'node:crypto';
+import http from 'node:http';
+import express from 'express';
 
 import { agentPool, pool } from '../../db/connection.js';
 import { resolveAimosDatabaseName } from '../../services/core/runtime-config.js';
@@ -16,10 +18,15 @@ import {
 } from '../../services/security/agent-identity.js';
 import { genesisHashFor } from '../../services/security/identity-chain.js';
 import { persistMemory } from '../../services/write/persist-memory.js';
-import { createHousekeeperCanonicalSaveOwner } from '../../services/write/canonical-save-owner.js';
+import {
+  createCanonicalSaveOwner,
+  createHousekeeperCanonicalSaveOwner,
+  executeHousekeeperCanonicalSave,
+} from '../../services/write/canonical-save-owner.js';
 import { recallAuthorizationService } from '../../services/security/recall-authorization.js';
 import { resolveNativeRecallAuthority } from '../../services/retrieval/native-recall.js';
 import { executeNativeRecall } from '../../services/retrieval/native-recall-pipeline.js';
+import { authGate } from '../../services/security/auth-gate.js';
 import { insertRevocationEvent } from '../../scripts/identity/db.js';
 
 const databaseName = resolveAimosDatabaseName();
@@ -55,16 +62,8 @@ function memorySpec({ key, value, source, supersedesId = null, authority = null 
   };
 }
 
-const mintHousekeeperPersistenceAuthority = createHousekeeperCanonicalSaveOwner({
-  executeCanonicalSave: async (spec) => spec,
-});
-
-async function authorizeHousekeeperSpec(spec) {
-  return mintHousekeeperPersistenceAuthority(spec);
-}
-
 async function persistHousekeeperMemory(spec) {
-  return persistMemory(await authorizeHousekeeperSpec(spec));
+  return executeHousekeeperCanonicalSave(spec);
 }
 
 async function countByKey(key) {
@@ -367,16 +366,21 @@ async function testTransactionTimestampInversion(runId) {
       value: 'On 2026-07-11, this newer transaction commits first and becomes the retained topology root so the regression can distinguish transaction time from chain order.',
       source,
     }));
-    const olderTimestampSpec = await authorizeHousekeeperSpec(memorySpec({
+    const executeOnOlderTransaction = createCanonicalSaveOwner({
+      withTransaction: async (operation, options = {}) => {
+        const value = await operation(oldClient);
+        if (options.readOnly !== true) await oldClient.query('COMMIT');
+        return value;
+      },
+    });
+    const persistOnOlderTransaction = createHousekeeperCanonicalSaveOwner({
+      executeCanonicalSave: executeOnOlderTransaction,
+    });
+    const olderTimestampSuccessor = await persistOnOlderTransaction(memorySpec({
         key,
         value: 'On 2026-07-11, this older transaction timestamp commits second and must supersede the topology root because the explicit predecessor link is canonical.',
         source,
       }));
-    const olderTimestampSuccessor = await persistMemory({
-      ...olderTimestampSpec,
-      client: oldClient,
-    });
-    await oldClient.query('COMMIT');
 
     const third = await persistHousekeeperMemory(memorySpec({
       key,
@@ -477,40 +481,62 @@ async function enrollScratchAgent(runId, issuer = null) {
   return { agentId, keys, cert, validFromIso };
 }
 
-function verifiedAuthority(identity, body, claimedPrev, nonce = crypto.randomBytes(16).toString('base64url')) {
+function signedT2Headers(identity, body, claimedPrev, nonce = crypto.randomBytes(16).toString('base64url')) {
   const signedTs = Math.floor(Date.now() / 1000);
   body.ts_signed = signedTs;
+  const previous = claimedPrev.toString('base64url');
   const signedClaims = {
-    prev_chain_hash: claimedPrev.toString('base64url'),
+    prev_chain_hash: previous,
     device_fp: null,
   };
   return {
-    kind: 'verified_request',
-    body,
-    agentId: identity.agentId,
-    validFromIso: identity.validFromIso,
-    certString: identity.cert,
-    signedTs,
-    nonce,
-    sigBytes: Buffer.from(
-      signPayloadWithEnvelopeClaims(
-        identity.keys.privkey,
-        body,
-        'POST',
-        '/aimos/save',
-        signedClaims,
-        nonce,
-        signedTs,
-      ),
-      'base64url'
+    'content-type': 'application/json',
+    'aimos-agent-cert': identity.cert,
+    'aimos-agent-signature': signPayloadWithEnvelopeClaims(
+      identity.keys.privkey,
+      body,
+      'POST',
+      '/aimos/save',
+      signedClaims,
+      nonce,
+      signedTs,
     ),
-    identityTier: 'T2',
-    claimedPrev,
-    requestSigForm: 4,
-    signedMethod: 'POST',
-    signedPath: '/aimos/save',
-    signedClaims,
+    'aimos-agent-nonce': nonce,
+    'aimos-agent-timestamp': String(signedTs),
+    'aimos-agent-prev-chain-hash': previous,
+    'x-aimos-sig-form': '4',
   };
+}
+
+async function startSignedSaveServer() {
+  const app = express();
+  app.use(express.json({ limit: '10mb' }));
+  app.use(authGate);
+  let router = null;
+  app.use('/aimos', async (req, res, next) => {
+    if (!router) router = (await import('../../routes/aimos.js')).default;
+    return router(req, res, next);
+  });
+  app.use((error, _req, res, _next) => res.status(Number(error?.statusCode || 500)).json({
+    error: error?.publicMessage || 'internal_error',
+  }));
+  const server = http.createServer(app);
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  return {
+    base: `http://127.0.0.1:${server.address().port}`,
+    close: () => new Promise((resolve) => server.close(resolve)),
+  };
+}
+
+async function postT2Save(base, identity, body, claimedPrev, nonce) {
+  const headers = signedT2Headers(identity, body, claimedPrev, nonce);
+  const response = await fetch(`${base}/aimos/save`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  });
+  const responseBody = await response.json().catch(() => ({}));
+  return { status: response.status, body: responseBody };
 }
 
 async function testT2ChainRaceAndReplay(runId) {
@@ -549,82 +575,95 @@ async function testT2ChainRaceAndReplay(runId) {
     memory_type: 'test',
     source: `test:native-persistence-t2:${runId}`,
   }));
-  const race = await Promise.allSettled(bodies.map((body) => persistMemory({
-    ...body,
-    mutation_authority: verifiedAuthority(identity, body, initialHead),
-  })));
-  const winners = race.filter((entry) => entry.status === 'fulfilled');
-  const losers = race.filter((entry) => entry.status === 'rejected');
-  assert(winners.length === 1, 'exactly one T2 head claimant commits');
-  assert(losers.length === 1, 'exactly one T2 head claimant rolls back');
-  assert(losers[0]?.reason?.envelopeReason === 'fork_detected', 'T2 loser reports fork_detected');
-
-  const raceProof = await pool.query(
-    `SELECT count(DISTINCT m.id)::int AS memories,
-            count(DISTINCT p.provenance_id)::int AS provenance,
-            count(DISTINCT e.memory_id)::int AS envelopes
-       FROM aimos_memories m
-       LEFT JOIN aimos_memory_provenance p ON p.memory_id = m.id
-       LEFT JOIN aimos_save_envelope e ON e.memory_id = m.id
-      WHERE m.source = $1`,
-    [`test:native-persistence-t2:${runId}`]
-  );
-  assert(Number(raceProof.rows[0].memories) === 1, 'T2 race leaves one memory');
-  assert(Number(raceProof.rows[0].provenance) === 2, 'T2 race leaves one SAVE plus one BIND provenance row');
-  assert(Number(raceProof.rows[0].envelopes) === 1, 'T2 race leaves one envelope row');
-
-  const winnerHead = winners[0].value.envelope_commit.chainHash;
-  const headAfterRace = await pool.query(
-    `SELECT chain_head FROM agent_identity WHERE agent_id = $1 AND valid_from = $2`,
-    [identity.agentId, identity.validFromIso]
-  );
-  assert(Buffer.from(headAfterRace.rows[0].chain_head).equals(winnerHead), 'agent chain head advances exactly to the winning envelope');
-
-  const replayNonce = crypto.randomBytes(16).toString('base64url');
-  const firstReplayBody = {
-    company_id: 'hom',
-    agent_id: identity.agentId,
-    key: `atomicity-t2-replay-first-${runId}`,
-    value: 'On 2026-07-11, atomicity.test.mjs committed the first nonce-bearing request as durable T2 evidence.',
-    scope: 'agent',
-    clearance_level: 1,
-    memory_type: 'test',
-    source: `test:native-persistence-t2-replay:${runId}`,
-  };
-  const firstReplay = await persistMemory({
-    ...firstReplayBody,
-    mutation_authority: verifiedAuthority(identity, firstReplayBody, winnerHead, replayNonce),
-  });
-
-  const duplicateBody = {
-    company_id: 'hom',
-    agent_id: identity.agentId,
-    key: `atomicity-t2-replay-loser-${runId}`,
-    value: 'On 2026-07-11, atomicity.test.mjs attempted a duplicate nonce; therefore no memory or chain advance may survive.',
-    scope: 'agent',
-    clearance_level: 1,
-    memory_type: 'test',
-    source: `test:native-persistence-t2-replay:${runId}`,
-  };
-  let replayError = null;
+  const signedServer = await startSignedSaveServer();
+  let winnerHead;
   try {
-    await persistMemory({
-      ...duplicateBody,
-      mutation_authority: verifiedAuthority(identity, duplicateBody, firstReplay.envelope_commit.chainHash, replayNonce),
-    });
-  } catch (error) {
-    replayError = error;
-  }
-  assert(replayError?.envelopeReason === 'replay_detected', 'duplicate nonce remains classified as replay_detected');
+    const race = await Promise.all(bodies.map((body) =>
+      postT2Save(signedServer.base, identity, body, initialHead)));
+    const winners = race.filter((entry) => entry.status === 200);
+    const losers = race.filter((entry) => entry.status !== 200);
+    assert(winners.length === 1, 'exactly one T2 head claimant commits');
+    assert(losers.length === 1, 'exactly one T2 head claimant rolls back');
+    const forkTerminal = await pool.query(
+      `SELECT id FROM aimos_events
+        WHERE company_id='hom' AND agent_id=$1 AND operation='canonical_save_terminal'
+          AND metadata->>'failure_code'='fork_detected'`,
+      [identity.agentId]
+    );
+    assert(forkTerminal.rowCount === 1, 'T2 loser retains one signed fork_detected terminal');
 
-  const replayLoserProof = await countByKey(duplicateBody.key);
-  assert(Number(replayLoserProof.memories) === 0, 'replay loser leaves no memory');
-  assert(Number(replayLoserProof.provenance) === 0, 'replay loser leaves no provenance');
-  const finalHead = await pool.query(
-    `SELECT chain_head FROM agent_identity WHERE agent_id = $1 AND valid_from = $2`,
-    [identity.agentId, identity.validFromIso]
-  );
-  assert(Buffer.from(finalHead.rows[0].chain_head).equals(firstReplay.envelope_commit.chainHash), 'replay loser chain-head update rolls back');
+    const raceProof = await pool.query(
+      `SELECT count(DISTINCT m.id)::int AS memories,
+              count(DISTINCT p.provenance_id)::int AS provenance,
+              count(DISTINCT e.memory_id)::int AS envelopes
+         FROM aimos_memories m
+         LEFT JOIN aimos_memory_provenance p ON p.memory_id = m.id
+         LEFT JOIN aimos_save_envelope e ON e.memory_id = m.id
+        WHERE m.source = $1`,
+      [`test:native-persistence-t2:${runId}`]
+    );
+    assert(Number(raceProof.rows[0].memories) === 1, 'T2 race leaves one memory');
+    assert(Number(raceProof.rows[0].provenance) === 2, 'T2 race leaves one SAVE plus one BIND provenance row');
+    assert(Number(raceProof.rows[0].envelopes) === 1, 'T2 race leaves one envelope row');
+
+    winnerHead = Buffer.from(winners[0].body.chain_hash, 'base64url');
+    const headAfterRace = await pool.query(
+      `SELECT chain_head FROM agent_identity WHERE agent_id = $1 AND valid_from = $2`,
+      [identity.agentId, identity.validFromIso]
+    );
+    assert(Buffer.from(headAfterRace.rows[0].chain_head).equals(winnerHead), 'agent chain head advances exactly to the winning envelope');
+
+    const replayNonce = crypto.randomBytes(16).toString('base64url');
+    const firstReplayBody = {
+      company_id: 'hom',
+      agent_id: identity.agentId,
+      key: `atomicity-t2-replay-first-${runId}`,
+      value: 'On 2026-07-11, atomicity.test.mjs committed the first nonce-bearing request as durable T2 evidence.',
+      scope: 'agent',
+      clearance_level: 1,
+      memory_type: 'test',
+      source: `test:native-persistence-t2-replay:${runId}`,
+    };
+    const firstReplay = await postT2Save(
+      signedServer.base,
+      identity,
+      firstReplayBody,
+      winnerHead,
+      replayNonce,
+    );
+    assert(firstReplay.status === 200, 'first nonce-bearing T2 request commits through canonical HTTP SAVE');
+    const firstReplayHead = Buffer.from(firstReplay.body.chain_hash, 'base64url');
+
+    const duplicateBody = {
+      company_id: 'hom',
+      agent_id: identity.agentId,
+      key: `atomicity-t2-replay-loser-${runId}`,
+      value: 'On 2026-07-11, atomicity.test.mjs attempted a duplicate nonce; therefore no memory or chain advance may survive.',
+      scope: 'agent',
+      clearance_level: 1,
+      memory_type: 'test',
+      source: `test:native-persistence-t2-replay:${runId}`,
+    };
+    const replay = await postT2Save(
+      signedServer.base,
+      identity,
+      duplicateBody,
+      firstReplayHead,
+      replayNonce,
+    );
+    assert(replay.status === 401 || replay.status === 409, 'duplicate nonce is rejected by canonical admission');
+
+    const replayLoserProof = await countByKey(duplicateBody.key);
+    assert(Number(replayLoserProof.memories) === 0, 'replay loser leaves no memory');
+    assert(Number(replayLoserProof.provenance) === 0, 'replay loser leaves no provenance');
+    const finalHead = await pool.query(
+      `SELECT chain_head FROM agent_identity WHERE agent_id = $1 AND valid_from = $2`,
+      [identity.agentId, identity.validFromIso]
+    );
+    assert(Buffer.from(finalHead.rows[0].chain_head).equals(firstReplayHead), 'replay loser chain-head update rolls back');
+  } finally {
+    await signedServer.close();
+  }
 
   console.log('\n[AUTHORIZATION] grant and revoke are retained signed events');
   const authorizationAuthority = (allowed) => {
@@ -684,7 +723,7 @@ async function main() {
   }
 }
 
-main().catch((error) => {
+main().then(() => process.exit(0)).catch((error) => {
   console.error(error?.stack || error);
-  process.exitCode = 1;
+  process.exit(1);
 });

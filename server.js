@@ -582,8 +582,14 @@ async function startServer() {
   }
   // Load credentials from versioned Keychain slots into the sync-boot cache.
   // Keychain plus signed lifecycle evidence is the only credential authority.
+  // An unavailable optional integration remains fail-closed at its own checkout;
+  // it must not take the provider-agnostic SAVE/RECALL backend offline.
   try {
-    await loadCredentialCache();
+    const credentialState = await loadCredentialCache({ allowUnavailable: true });
+    if (credentialState.unavailable.length) {
+      console.warn('[BOOT] optional credential authorities unavailable — affected integrations remain disabled:',
+        credentialState.unavailable.join(','));
+    }
   } catch (err) {
     console.error('[BOOT] credentialCache load failed — server admission remains closed:', err?.message || String(err));
     throw err;

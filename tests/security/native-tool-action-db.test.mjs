@@ -10,7 +10,7 @@ import {
   getHousekeeperCert,
 } from '../../services/security/housekeeper-signer.js';
 import { beginToolAction, finishToolAction } from '../../services/orchestration/tool-action-ledger.js';
-import { persistMemory } from '../../services/write/persist-memory.js';
+import { executeCanonicalSave } from '../../services/write/canonical-save-owner.js';
 import { executeCanonicalRecall } from '../../services/retrieval/native-recall-pipeline.js';
 
 const databaseName = new URL(resolveAimosDatabaseUrl()).pathname.slice(1);
@@ -59,8 +59,9 @@ test('signed derived save and recall actions produce linked memory and Merkle pr
     executionContext,
     parentEventId: proposed.receipt.event_id,
   });
-  const saved = await persistMemory({ ...saveSpec, mutation_authority: commit.authority });
+  const saved = await executeCanonicalSave({ ...saveSpec, mutation_authority: commit.authority });
   assert(saved?.id);
+  assert(saved?.terminal_receipt?.event_id);
   assert.match(saved.live_content_hash.toString('hex'), /^[0-9a-f]{64}$/);
   assert.match(saved.ledger_commit.mutationHash.toString('hex'), /^[0-9a-f]{64}$/);
   assert.match(saved.binding_commit.mutationHash.toString('hex'), /^[0-9a-f]{64}$/);

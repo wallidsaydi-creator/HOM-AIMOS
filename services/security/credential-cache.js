@@ -200,14 +200,23 @@ export function createCredentialCacheOwner({
       .map(([service]) => service);
   }
 
-  async function load() {
-    if (loaded) return Object.freeze({ generation, unavailable: Object.freeze([]) });
+  async function load({ allowUnavailable = false } = {}) {
+    if (loaded) {
+      const unavailable = unavailableServices(snapshot);
+      if (unavailable.length && !allowUnavailable) {
+        const error = new Error(`credential_cache_initial_load_unavailable:${unavailable.join(',')}`);
+        error.unavailableServices = Object.freeze(unavailable);
+        throw error;
+      }
+      return Object.freeze({ generation, unavailable: Object.freeze(unavailable) });
+    }
     if (initialLoad) return initialLoad;
     initialLoad = enqueueReload(async () => {
-      if (loaded) return Object.freeze({ generation, unavailable: Object.freeze([]) });
+      if (loaded) return Object.freeze({ generation,
+        unavailable: Object.freeze(unavailableServices(snapshot)) });
       const candidate = await buildSnapshot(new Map());
       const unavailable = unavailableServices(candidate);
-      if (unavailable.length) {
+      if (unavailable.length && !allowUnavailable) {
         const error = new Error(`credential_cache_initial_load_unavailable:${unavailable.join(',')}`);
         error.unavailableServices = Object.freeze(unavailable);
         throw error;
@@ -215,7 +224,7 @@ export function createCredentialCacheOwner({
       const nextGeneration = publish(candidate);
       const present = [...candidate.values()].filter((state) => state.state === CREDENTIAL_CACHE_STATES.READY).length;
       logFn.log?.(`[BOOT] credentialCache loaded — ${present}/${serviceSet.size} slots present; generation=${nextGeneration}`);
-      return Object.freeze({ generation: nextGeneration, unavailable: Object.freeze([]) });
+      return Object.freeze({ generation: nextGeneration, unavailable: Object.freeze(unavailable) });
     });
     try { return await initialLoad; } catch (error) { initialLoad = null; throw error; }
   }
@@ -316,7 +325,7 @@ export function createCredentialCacheOwner({
 const credentialCache = createCredentialCacheOwner();
 
 export function isCredentialCacheLoaded() { return credentialCache.isLoaded(); }
-export async function loadCredentialCache() { return credentialCache.load(); }
+export async function loadCredentialCache(options) { return credentialCache.load(options); }
 export async function reloadCredentialCache() { return credentialCache.reload(); }
 export function getCachedCredential(service) { return credentialCache.get(service); }
 export function getCachedCredentialHash(service) { return credentialCache.getHash(service); }

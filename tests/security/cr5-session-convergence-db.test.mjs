@@ -86,8 +86,21 @@ test('CR5 session SAVE proves typed Housekeeper actions, security order, continu
     `SELECT id::text, operation, key, metadata, parent_event_id::text
        FROM aimos_events
       WHERE company_id=$1
-        AND key LIKE $2
-        AND operation IN ('canonical_save_action_started','canonical_save_terminal')
+        AND (
+          (operation='canonical_save_action_started' AND key LIKE $2)
+          OR (
+            operation='canonical_save_terminal'
+            AND EXISTS (
+              SELECT 1 FROM aimos_events action
+               WHERE action.company_id=aimos_events.company_id
+                 AND action.operation='canonical_save_action_started'
+                 AND action.key LIKE $2
+                 AND aimos_events.metadata->'stages' @> jsonb_build_array(
+                   jsonb_build_object('stage','RECEIPT','evidence',
+                     jsonb_build_object('event_id',action.id)))
+            )
+          )
+        )
       ORDER BY ledger_seq`,
     ['hom', `sess:${sessionId}:%`],
   );
