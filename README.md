@@ -1,14 +1,110 @@
-# HOM-AIMOS — Agent Security on Auditable Persistent Memory
+# HOM-AIMOS
 
-HOM-AIMOS is a local-first agent-security system built on a complete persistent
-retrieval-memory engine. The memory substrate is the enforcement surface:
-signed identity, immutable history, native hybrid and graph retrieval,
-retention-preserving poison classification, explicit Canary traversal
-controls, cryptographically authorized adaptation, and SABER-inspired signed
-operational red-team evidence all participate in the same save and recall lifecycle. A housekeeper
-identity owns autonomous maintenance without borrowing an enrolled user agent.
+**A local-first security and long-term memory backend for AI agents.**
 
-## The retrieval-memory substrate
+[![CI](https://github.com/wallidsaydi-creator/HOM-AIMOS/actions/workflows/ci.yml/badge.svg)](https://github.com/wallidsaydi-creator/HOM-AIMOS/actions/workflows/ci.yml)
+
+Agents become more useful when they remember—and more dangerous when nobody can
+explain who wrote a memory, where it came from, why it changed, or what it later
+caused. HOM-AIMOS makes those questions part of the memory system itself.
+
+It gives an agent one governed path to remember, one governed path to recall,
+and a cryptographic trail across identity, origin, provenance, mutation, tool
+use, and durable outcomes. It runs on the user's Mac, keeps its canonical brain
+in PostgreSQL, and does not require a hosted HOM-AIMOS account or control plane.
+
+**Current release:** `v1.0.5` · macOS 14+ · Node.js 20/24/26 · PostgreSQL 18 ·
+AGPL-3.0-or-later
+
+## What HOM-AIMOS gives your agent
+
+| Need | What the system provides |
+|---|---|
+| Memory that survives sessions and restarts | Persistent sessions, canonical SAVE, native hybrid/graph RECALL, and signed terminal outcomes. |
+| Evidence about where memory came from | Native Origin Binding derives and commits source, family, principal, and action evidence with the memory. |
+| Protection against unsafe recalled context | Provenance verification, epistemic classification, Canary traversal controls, disclosure policy, and signed recall receipts. |
+| Learning without silent rewriting | Content remains immutable while governed retrieval weight can change through signed, bounded, reversible transitions. |
+| Autonomous upkeep without impersonating the user | A separate Housekeeper identity owns maintenance, scheduling, dreams, and authorized mutation. |
+| A history that can be inspected later | Append-only ledgers retain attempts, denials, failures, supersession, and successful durable effects. |
+| A clean reset when a project truly ends | One explicit, offline, all-or-nothing brain purge; no selective forgetting disguised as maintenance. |
+
+## Why it is different
+
+- **Security is inside memory, not bolted on afterward.** Identity, origin,
+  authorization, retention, provenance, and terminal evidence participate in
+  the same SAVE and RECALL lifecycles.
+- **One memory system means one authority path.** HTTP, MCP, sessions,
+  autonomous work, and tool results converge on canonical owners instead of
+  maintaining parallel stores or privileged shortcuts.
+- **Full retention is structural.** Suspicious, contradicted, or superseded
+  observations remain auditable. Policy may change how evidence is used; it
+  cannot quietly erase history.
+- **Agent identity is not a model subscription.** Provider/model choice is an
+  optional signed policy. An enrolled identity remains independent of the
+  provider used for a particular task.
+- **Claims are bounded honestly.** HOM-AIMOS can prove that retained bytes,
+  authority, ordering, and transitions verify. It cannot prove that an
+  authorized source told the truth.
+
+## Start locally
+
+Clone the repository on a supported Mac, inspect the prerequisites, and run the
+single public installer:
+
+```sh
+git clone https://github.com/wallidsaydi-creator/HOM-AIMOS.git
+cd HOM-AIMOS
+./install-macos.sh --check
+./install-macos.sh
+```
+
+First launch creates the database, restricted runtime role, autonomous
+Housekeeper, signed Guide corpus, operator root, and one ordinary agent selected
+by the user. It then installs HOM-AIMOS as a persistent user service. The
+operator enters one passphrase for the complete onboarding flow.
+
+Confirm that it is running:
+
+```sh
+npm run service:status
+curl --fail http://127.0.0.1:9100/healthz
+```
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for the exact signed SAVE/RECALL workflow,
+additional agent enrollment, upgrades, recovery, and the whole-brain purge
+boundary.
+
+## The product boundary
+
+This repository is the HOM-AIMOS backend and developer integration surface. It
+is not a hosted model, a model provider, or a graphical agent application. It
+exposes signed local HTTP and MCP surfaces so an agent or application can use
+the same memory and security owners without direct database access.
+
+```text
+Agent or application
+        │ signed certificate envelope
+        ▼
+HOM-AIMOS :9100
+  ├── identity and capability authority
+  ├── canonical sessions, SAVE and RECALL
+  ├── origin, provenance and event ledgers
+  ├── tool approval and execution evidence
+  └── Housekeeper-owned maintenance and mutation
+        │
+        ▼
+PostgreSQL + pgvector (one canonical brain)
+```
+
+Useful entry points:
+
+- [Architecture map](ARCHITECTURE-MAP.md)
+- [Agent and tool connection guide](Guide/AGENTS.md)
+- [Security model](SECURITY.md)
+- [Threat model](THREAT-MODEL.md)
+- [Release verification](RELEASE.md)
+
+## Under the hood: the retrieval-memory substrate
 
 HOM-AIMOS is a complete persistent-memory backend, not a provenance layer
 attached to a vector store. Its source-derived architecture binds a
@@ -16,7 +112,7 @@ current 295-service census and declares six critical pipelines containing 115
 service connections. SAVE exposes one fixed 15-stage owner; RECALL exposes its
 eight principal native execution boundaries.
 
-### SAVE — 16 fixed stages
+### SAVE — 15 fixed stages
 
 `services/write/canonical-save-owner.js` owns:
 
@@ -210,7 +306,7 @@ ledger position and that the retained evidence has not been silently rewritten.
 It cannot prove that the asserted content is factually true. The threat model
 names this failure class **Authenticated-But-False (ABF)**.
 
-## Release status
+## Release and research lineage
 
 This repository contains the HOM-AIMOS 1.0.5 source release. It advances the
 system beyond the published MutMem V2 snapshot with complete native Origin

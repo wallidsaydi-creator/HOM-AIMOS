@@ -7,7 +7,7 @@
   "root_algorithm": "sha256(canonical-json(files))",
   "manifest_self_excluded": true,
   "file_count": 1106,
-  "files_root_sha256": "ac8135cf0cb3ac4157dabf9e2c530139d9cc7760561bddbbe61fff620c0c5213",
+  "files_root_sha256": "0834b7a5bda08cc0210a148d985717a8ca6be826138a99a76c1e04b6d666d51c",
   "files": [
     {
       "path": ".github/dependabot.yml",
@@ -1131,8 +1131,8 @@
     },
     {
       "path": "README.md",
-      "bytes": 21588,
-      "sha256": "7867704a5b4d5e5ee98b1d827534da9bf68f4e5c07043b008baeeae568e1a4f7"
+      "bytes": 25830,
+      "sha256": "3ecf586ae403aeb94689c26af404a3ed91fec57acbb9ead7ec0ba96a04e51464"
     },
     {
       "path": "RELEASE-TIERING.md",
@@ -5540,5 +5540,5 @@
       "sha256": "474b416f860aebe17a7e84c1d2f8d06335f66d7585097ff8d1547e79042a5175"
     }
   ],
-  "manifest_sha256": "8fcfdf304517b83984e14a56edfaf8742c611e35fbd3215e00a8c48b2bbde1eb"
+  "manifest_sha256": "3ae0c650ac3995195c91af45e8bf0f3370ab836975e6cd9d03a495d2b039f64b"
 }
