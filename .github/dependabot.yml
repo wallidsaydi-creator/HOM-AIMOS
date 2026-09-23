@@ -5,6 +5,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # Undici 8 requires Node >=22.19; this release still supports Node 20.
+      - dependency-name: undici
+        update-types: ["version-update:semver-major"]
     groups:
       production-runtime:
         dependency-type: production
