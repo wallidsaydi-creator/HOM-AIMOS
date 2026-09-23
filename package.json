@@ -61,7 +61,7 @@
     "ipaddr.js": "2.5.0",
     "node-cron": "^4.6.0",
     "pg": "^8.23.0",
-    "undici": "8.10.2",
+    "undici": "7.29.1",
     "yauzl": "^3.4.0"
   },
   "overrides": {
