@@ -14,17 +14,17 @@ const REQUIRED_DATA = Object.freeze([
   'aimos_master_identity', 'aimos_memories', 'aimos_system_config',
   'schema_migrations',
 ]);
-const REQUIRED_COMPANY_POLICIES = Object.freeze([
-  'aimos_action_origin_verdicts', 'aimos_cognitive_weight_baselines',
-  'aimos_cognitive_weight_projections', 'aimos_events', 'aimos_memories',
-  'aimos_memory_epistemic_classifications', 'aimos_memory_origin_bindings',
-  'aimos_origin_elevations', 'aimos_origin_ledger_entries',
-  'aimos_request_receipts', 'dream_summary_layers', 'entity_memory_edges',
-  'integration_tokens', 'procedural_skills', 'recommendation_log',
-  'retrieval_pheromones', 'scheduled_tasks',
-]);
-
 function fail(reason) { throw new Error(`restore_archive_${reason}`); }
+
+function requiredCompanyPolicies() {
+  const migration = fs.readFileSync(new URL('../../migrations/116-service-reader-role-acl.sql', import.meta.url), 'utf8');
+  const literal = migration.match(/FOREACH relation_name IN ARRAY ARRAY\[([\s\S]*?)\]\s+LOOP/)?.[1];
+  const names = literal?.match(/'[a-z][a-z0-9_]*'/g)?.map((name) => name.slice(1, -1));
+  if (!names || names.length !== 17 || new Set(names).size !== 17) {
+    fail('policy_contract_invalid');
+  }
+  return names;
+}
 
 export function preflightRestoreToc(toc, { database = 'aimos' } = {}) {
   if (typeof toc !== 'string' || !/^[a-z][a-z0-9_]{0,62}$/.test(database)) {
@@ -50,13 +50,14 @@ export function preflightRestoreToc(toc, { database = 'aimos' } = {}) {
   }
   const missingData = REQUIRED_DATA.filter((name) => !dataTables.has(name));
   if (missingData.length) fail(`identity_data_missing:${missingData.join(',')}`);
-  const missingPolicies = REQUIRED_COMPANY_POLICIES.filter((name) => !policyTables.has(name));
+  const companyPolicies = requiredCompanyPolicies();
+  const missingPolicies = companyPolicies.filter((name) => !policyTables.has(name));
   if (missingPolicies.length) fail(`company_policies_missing:${missingPolicies.join(',')}`);
   if (aclEntries === 0) fail('acl_omitted');
   return Object.freeze({
     database, postgresMajor: 18, tocEntries: entries.length,
     identityDataEntries: REQUIRED_DATA.length,
-    companyPolicyTables: REQUIRED_COMPANY_POLICIES.length,
+    companyPolicyTables: companyPolicies.length,
     aclEntries,
     qualification: 'archive_metadata_only',
   });

@@ -77,10 +77,22 @@ directly, so the public fixture is not presented as the 103-site snapshot.
 - `npm run test:source` remains red in the restricted host: local TCP listeners,
   PostgreSQL connections, and Keychain access receive `EPERM`. This is an
   incomplete host qualification, not a green release result.
-- A real signed write, forced process death with a retained temporary file,
-  restart cleanup, and second-pass no-op have not run against a disposable
-  PostgreSQL/identity installation. The successor proof records those facts
-  as unexecuted and `release_closed: false`.
+- Isolated `secqual` qualification used AIMOS port 9203 and PostgreSQL port
+  55442/database `aimos_secqual`; the live 9100/5432 service was not used. A
+  Housekeeper-signed `POST /aimos/recall` for the scoped R8 scratch-write
+  purpose returned HTTP 200, two memories, and a recall receipt. No recall
+  content or signing material was printed.
+- A direct native Housekeeper `executeTool('write_file')` attempt targeting a
+  unique, initially absent hidden file beneath the existing owner-only
+  `~/Documents` directory returned `blocked: true` with
+  `KNOWLEDGE_ACQUISITION_REQUIRED`. The target remained absent. The signed
+  HTTP recall did not create knowledge evidence inside that native tool run;
+  its receipt was not transplanted into the run or treated as write approval.
+  The consequential action also requires master-signed operator approval,
+  for which no fixture was available. No authority was inferred or bypassed.
+- No authorized signed native write was committed, so forced process death,
+  orphan recovery after restart, and second-pass no-op were not attempted.
+  The successor proof remains `release_closed: false`.
 
 The same macOS user can still race or directly access its own files outside
 the AIMOS process. A market deployment requiring local hostile-process

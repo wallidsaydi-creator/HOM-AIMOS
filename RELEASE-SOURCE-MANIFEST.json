@@ -7,7 +7,7 @@
   "root_algorithm": "sha256(canonical-json(files))",
   "manifest_self_excluded": true,
   "file_count": 1131,
-  "files_root_sha256": "5e66f36245ef3bb8bac06102506fa891acbde3fd58e7b7b7a2ea28ca8f9f7c29",
+  "files_root_sha256": "5e82f98d07608189180ae156316dd26ed969b7b2d5ca1860ba070fa18e5e6710",
   "files": [
     {
       "path": ".github/dependabot.yml",
@@ -156,8 +156,8 @@
     },
     {
       "path": "docs/security/cr7-r8-file-write-successor-2026-10-06.md",
-      "bytes": 5124,
-      "sha256": "23998abeb381455064a79fb58fedbbbb9c46fc653a39736e63ecc1a6a76d56f7"
+      "bytes": 5989,
+      "sha256": "aacc5db0e175ed2815870dab9bca27c3f3bd197d53b7029463676553b9128fbc"
     },
     {
       "path": "docs/security/saber-operational-evidence.md",
@@ -1581,8 +1581,8 @@
     },
     {
       "path": "scripts/db/preflight-restore-archive.mjs",
-      "bytes": 4624,
-      "sha256": "63f8d48f56b48d0740c82301b0ca22d2e59187e58a88ce7252f3d50355565a0d"
+      "bytes": 4613,
+      "sha256": "08c0a757372dfd3b1dd6a5b82be753c23c4bcb66fce533f2d8bd35620b9b02b7"
     },
     {
       "path": "scripts/db/qualify-secure-cluster.mjs",
@@ -5665,5 +5665,5 @@
       "sha256": "474b416f860aebe17a7e84c1d2f8d06335f66d7585097ff8d1547e79042a5175"
     }
   ],
-  "manifest_sha256": "fa2bd9b7318dcacabd43773e8915309626ac0597e6a60afb07ae8b3cf0d060c4"
+  "manifest_sha256": "d039096a75f6438ef60a042957bbb83cb15b331493eb856345f871dd30af4d1f"
 }
