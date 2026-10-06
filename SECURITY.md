@@ -43,7 +43,8 @@ AIMOS is designed to provide:
 - signed operational red-team manifests, per-case decisions, and terminal or
   failed campaign evidence;
 - revocation and replay rejection without mutable bypass flags;
-- a restricted database role with no selective memory-deletion authority;
+- a private PostgreSQL cluster with SCRAM authentication and distinct
+  non-superuser reader, identity-enrollment, and canonical-write roles;
 - signed whole-brain purge as the only erasure ceremony.
 
 The ledger proves integrity and attribution. It does not prove that signed
@@ -86,9 +87,13 @@ internet-facing multi-tenant service and has not received an independent
 penetration test.
 
 The first local embedding-model download requires network access. Both the npm
-runtime and model revision are pinned; subsequent inference is local. Operators
-should protect the PostgreSQL socket, Keychain session, agent key directory,
-and release checkout with normal host controls.
+runtime and model revision are pinned; subsequent inference is local. The
+source installer creates a private loopback PostgreSQL cluster without a Unix
+socket and rejects passwordless serving-role admission before listening.
+Operators should protect its data directory, the Keychain session, agent key
+directory, and release checkout with host controls. A hostile process running
+as the same OS user can access that user's files and credential session;
+separate OS or host custody is required for that threat model.
 
 ## Supply-chain gates
 

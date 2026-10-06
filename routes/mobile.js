@@ -5,10 +5,18 @@ import { executeTool } from '../services/orchestration/tool-registry.js';
 import { createToolInputState } from '../services/orchestration/tool-action-ledger.js';
 import { createKnowledgeGateState } from '../services/security/knowledge-gate.js';
 import { normalizeSourceMemoryIds } from '../services/write/canonical-save-contract.js';
+import { requireCapability } from '../services/security/require-capability.js';
 
 const router = express.Router();
+const requireEmail = requireCapability('email');
+const requireInternet = requireCapability('internet');
 
-router.post('/quick-action', async (req, res) => {
+router.post('/quick-action', (req, res, next) => {
+  const action = String(req.body?.action || '').trim().toLowerCase();
+  if (action === 'email' || action === 'calendar') return requireEmail(req, res, next);
+  if (action === 'search') return requireInternet(req, res, next);
+  return next();
+}, async (req, res) => {
   const action = String(req.body?.action || '').trim().toLowerCase();
 
   try {
@@ -30,13 +38,7 @@ router.post('/quick-action', async (req, res) => {
       const result = await searchWeb({
         query,
         maxResults: Number(req.body?.maxResults) || 5,
-        useContext: {
-          actorAgentId: req.executionContext?.actorAgentId,
-          requestReceiptId: req.executionContext?.requestReceiptId,
-          requestReceiptMutationHash: req.executionContext?.requestReceiptMutationHash,
-          requestAdmissionEventId: req.executionContext?.requestAdmissionEventId,
-          requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash,
-        },
+        useContext: req.executionContext,
       });
       return res.json({ success: true, action, ...result });
     }

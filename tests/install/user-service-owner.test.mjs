@@ -73,6 +73,7 @@ test('named installation service is disjoint while canonical defaults stay uncha
     port: 9303,
     instance: 'p3_repro',
     postgresPort: 55432,
+    postgresBin: '/test-pg/bin',
   });
   assert.equal(definition.label, 'com.hom.aimos.p3_repro');
   assert.equal(definition.state_root, '/test-home/.aimos/instances/p3_repro/service');
@@ -87,6 +88,23 @@ test('named installation service is disjoint while canonical defaults stay uncha
   assert.equal(rebuilt.installation_context_sha256, definition.installation_context_sha256);
   assert.equal(rebuilt.postgres_port, 55432);
   assert.equal(rebuilt.unit_path, definition.unit_path);
+});
+
+test('canonical service retains a private PostgreSQL port across manifest reload', () => {
+  const definition = buildUserServiceDefinition({
+    sourceRoot: ROOT,
+    nodePath: process.execPath,
+    platform: 'darwin',
+    homeDirectory: FIXTURE_HOME,
+    postgresPort: 55432,
+    postgresBin: '/test-pg/bin',
+  });
+  const manifest = buildUserServiceManifest(definition);
+  assert.equal(manifest.postgres_port, 55432);
+  const rebuilt = validateUserServiceManifest(manifest, { homeDirectory: FIXTURE_HOME });
+  assert.equal(rebuilt.postgres_port, 55432);
+  assert.match(rebuilt.unit_body, /--aimos-postgres-port/);
+  assert.match(rebuilt.unit_body, /55432/);
 });
 
 test('service definition rejects unsafe database, port and unsupported platform', () => {

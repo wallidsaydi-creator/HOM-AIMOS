@@ -62,6 +62,10 @@ function walk(directory) {
 }
 walk(root);
 observed.sort((left, right) => left.path.localeCompare(right.path));
+const privateSecurityNotes = observed
+  .map((entry) => entry.path)
+  .filter((file) => /^docs\/security\/(?:phase0-|phase1a-|three-gap-remediation-|master-remediation-plan-).*\.md$/.test(file));
+assert.deepEqual(privateSecurityNotes, [], `private security notes shipped: ${privateSecurityNotes.join(', ')}`);
 assert.deepEqual(observed, manifest.files, 'public source tree differs from manifest');
 assert.equal(observed.length, manifest.file_count);
 assert.equal(
@@ -127,7 +131,22 @@ for (const required of [
   'migrations/113-origin-elevation-attempt-continuity.sql',
   'migrations/114-origin-elevation-exact-selector.sql',
   'migrations/115-origin-ledger-genesis-context.sql',
+  'migrations/116-service-reader-role-acl.sql',
+  'migrations/117-retire-legacy-aimos-app-login.sql',
+  'migrations/118-serving-reader-and-identity-writer-acl.sql',
+  'migrations/119-serving-identity-read-columns.sql',
+  'scripts/db/activate-serving-roles.mjs',
+  'scripts/db/audit-serving-roles.mjs',
+  'scripts/db/cluster-admin.mjs',
+  'scripts/db/qualify-secure-cluster.mjs',
+  'scripts/db/scram-verifier.mjs',
+  'scripts/db/secure-cluster.mjs',
+  'scripts/service/run-private-postgres.mjs',
+  'scripts/test/probe-secure-serving.mjs',
   'scripts/identity/authorize-tool-action.js',
+  'scripts/verification/fixtures/cr7-r7-public-main-678af3c.tar.gz',
+  'scripts/verification/prove-cr7-r8-file-write-successor.mjs',
+  'scripts/verification/prove-cr8-r1-current-scheduler-successor.mjs',
   'services/orchestration/tool-action-ledger.js',
   'services/orchestration/tool-registry.js',
   'services/security/origin-ledger.js',
@@ -137,6 +156,9 @@ for (const required of [
   'services/security/protocol/origin-binding-v1.js',
   'services/security/protocol/origin-corroboration-v1.js',
   'tests/security/consequential-action-ob5.test.mjs',
+  'tests/security/cr7-r8-file-write-successor.test.mjs',
+  'services/security/postgres-serving-boundary.js',
+  'tests/security/postgres-serving-boundary.test.mjs',
   'tests/security/native-tool-action-authority.test.mjs',
   'tests/security/native-tool-action-db.test.mjs',
   'tests/security/origin-binding-ob1-artifacts.test.mjs',

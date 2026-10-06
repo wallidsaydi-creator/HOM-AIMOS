@@ -15,7 +15,7 @@ ASSUME_YES=0
 DATABASE="aimos"
 PORT="9100"
 INSTANCE="canonical"
-POSTGRES_PORT="5432"
+POSTGRES_PORT="55432"
 AGENT_ID=""
 MODEL_PROVIDER=""
 MODEL_ID=""
@@ -33,7 +33,7 @@ Usage: ./install-macos.sh [options]
   --aimos-db NAME         Genesis database name (default: aimos).
   --aimos-port PORT       AIMOS server port (default: 9100).
   --aimos-instance NAME   Application installation namespace (default: canonical).
-  --postgres-port PORT    PostgreSQL server port (default: 5432).
+  --postgres-port PORT    Private AIMOS PostgreSQL port (default: 55432).
   --agent-id ID           First ordinary agent identity (prompted when omitted).
   --model-provider ID     Optional provider selected during onboarding.
   --model ID              Optional model selected during onboarding.
@@ -98,6 +98,7 @@ case "$POSTGRES_PORT" in
   ''|*[!0-9]*) echo "Invalid PostgreSQL port: $POSTGRES_PORT" >&2; exit 64 ;;
 esac
 if [ "$POSTGRES_PORT" -lt 1024 ] || [ "$POSTGRES_PORT" -gt 65535 ] \
+   || [ "$POSTGRES_PORT" -eq 5432 ] \
    || [ "$POSTGRES_PORT" -eq 9000 ] || [ "$POSTGRES_PORT" -eq 9001 ] \
    || [ "$POSTGRES_PORT" -eq 9100 ]; then
   echo "Invalid PostgreSQL port: $POSTGRES_PORT" >&2
@@ -253,12 +254,6 @@ if [ -n "$MISSING" ]; then
   "$BREW" bundle --file "$ROOT/Brewfile"
 fi
 
-BREW="$(find_brew || true)"
-if [ "$POSTGRES_PORT" -eq 5432 ] && [ -n "$BREW" ] \
-   && "$BREW" --prefix postgresql@18 >/dev/null 2>&1; then
-  "$BREW" services start postgresql@18
-fi
-
 inspect_dependencies
 print_facts
 if [ -n "$MISSING" ]; then
@@ -291,6 +286,9 @@ fi
 
 cd "$ROOT"
 "$NPM_BIN" ci
+"$NODE_BIN" scripts/db/secure-cluster.mjs \
+  --aimos-instance "$INSTANCE" --aimos-postgres-port "$POSTGRES_PORT" \
+  --pg-bindir "$PG_BINDIR"
 "$NODE_BIN" scripts/genesis-install.mjs \
   --aimos-db "$DATABASE" --aimos-port "$PORT" \
   --aimos-instance "$INSTANCE" --aimos-postgres-port "$POSTGRES_PORT"
@@ -311,7 +309,8 @@ fi
   --database "$DATABASE" \
   --port "$PORT" \
   --instance "$INSTANCE" \
-  --postgres-port "$POSTGRES_PORT"
+  --postgres-port "$POSTGRES_PORT" \
+  --postgres-bin "$PG_BINDIR"
 
 echo
 echo "Installation complete. AIMOS is installed as a persistent user service."

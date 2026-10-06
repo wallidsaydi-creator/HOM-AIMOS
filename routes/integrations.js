@@ -39,9 +39,9 @@ const PROVIDERS = [
   { id: 'telegram', name: 'Telegram', type: 'token' },
   { id: 'imessage', name: 'iMessage', type: 'local' }
 ];
-router.get('/status', async (_req, res, next) => {
+router.get('/status', requireCapability('admin_override'), async (req, res, next) => {
   try {
-    const nativeStatus = await listIntegrationStatus();
+    const nativeStatus = await listIntegrationStatus(req.executionContext);
     const byProvider = new Map(nativeStatus.map((entry) => [entry.id, entry]));
     const status = PROVIDERS.map(p => {
       const connected = Boolean(byProvider.get(p.id)?.connected);
@@ -101,7 +101,7 @@ router.post('/imessage/request-access', requireCapability('email'), async (req, 
 });
 
 // Read recent chats — delegates to service layer which validates + caps limit
-router.get('/imessage/chats', async (req, res, next) => {
+router.get('/imessage/chats', requireCapability('email'), async (req, res, next) => {
   try {
     const chats = await imessageListChats({ limit: req.query.limit }, req.executionContext || {});
     res.json({ success: true, chats });
@@ -128,7 +128,7 @@ router.post('/imessage/send', requireCapability('email'), async (req, res, next)
   }
 });
 
-router.get('/imessage/search-contact', async (req, res, next) => {
+router.get('/imessage/search-contact', requireCapability('email'), async (req, res, next) => {
   const q = String(req.query.q || req.query.query || '').trim();
   if (!q) return res.status(400).json({ success: false, error: 'q is required' });
   try {

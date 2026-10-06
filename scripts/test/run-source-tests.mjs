@@ -1,12 +1,83 @@
 #!/usr/bin/env node
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync, readdirSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const TEST_ROOT = path.join(ROOT, 'tests');
+const HISTORICAL_SOURCE_ARCHIVE = 'scripts/verification/fixtures/cr7-r7-public-main-678af3c.tar.gz';
+const HISTORICAL_SOURCE_SHA256 = '5a878f566a00226c17722012c9092c3417889bd651bb33366427c294747f3890';
+const HISTORICAL_SOURCE_COMMIT = '678af3c8766b200f9d61d44f153f0198bf147edc';
+const HISTORICAL_PROOF_ROOTS = Object.freeze([
+  ['scripts/verification/prove-cr7-r7-aggregate-audit.mjs',
+    'preclosure_proof_root_sha256', '0b57d2e65d15a0fba47b96d041dc52f198b640bae5876828b6c52333e84bebe4'],
+  ['scripts/verification/prove-cr8-housekeeper-scheduler.mjs',
+    'proof_root_sha256', '880f9a47b6ac56cf56fbfbf795701e647328d53c4e89a9b202f21cf3de1bb82e'],
+]);
+const HISTORICAL_TESTS = Object.freeze([
+  'tests/security/cr7-durable-action-census.test.mjs',
+  'tests/security/cr7-r1-existing-ledger-owner-audit.test.mjs',
+  'tests/security/cr7-r2-database-local-verifier.test.mjs',
+  'tests/security/cr7-r3-security-authority.test.mjs',
+  'tests/security/cr7-r4-operational-audit.test.mjs',
+  'tests/security/cr7-r5-material-effect-owner.test.mjs',
+  'tests/security/cr7-r6-recovery-set-equality.test.mjs',
+  'tests/security/cr7-r7-aggregate-audit.test.mjs',
+  'tests/security/cr8-housekeeper-scheduler-autonomy.test.mjs',
+]);
+const FROZEN_CURRENT_TESTS = new Set(HISTORICAL_TESTS.filter((file) =>
+  file !== 'tests/security/cr8-housekeeper-scheduler-autonomy.test.mjs'));
+
+function runHistoricalSourceProof() {
+  const archive = path.join(ROOT, HISTORICAL_SOURCE_ARCHIVE);
+  const digest = createHash('sha256').update(readFileSync(archive)).digest('hex');
+  if (digest !== HISTORICAL_SOURCE_SHA256) throw new Error('historical_cr7_archive_hash_mismatch');
+  const listing = spawnSync('tar', ['-tzf', archive], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  if (listing.error || listing.status !== 0) throw listing.error || new Error('historical_cr7_archive_listing_failed');
+  const members = listing.stdout.trim().split('\n');
+  for (const member of members) {
+    const parts = member.split('/').filter(Boolean);
+    if (!member || member.startsWith('/') || member.includes('\\')
+        || parts.some((part) => part === '.' || part === '..')
+        || /(?:^|\/)(?:node_modules|\.git)(?:\/|$)/.test(member)
+        || /(?:^|\/)\.env(?:\.|\/|$)/.test(member)
+        || /\.(?:key|pem|dump)$/i.test(member)) {
+      throw new Error(`historical_cr7_archive_member_rejected:${member}`);
+    }
+  }
+  for (const file of ['server.js', 'package.json', ...HISTORICAL_TESTS,
+    ...HISTORICAL_PROOF_ROOTS.map(([file]) => file)]) {
+    if (!members.includes(file)) throw new Error(`historical_cr7_archive_file_missing:${file}`);
+  }
+  const scratch = mkdtempSync(path.join(tmpdir(), 'aimos-cr7-r7-public-'));
+  try {
+    const unpack = spawnSync('tar', ['-xzf', archive, '-C', scratch], { stdio: 'inherit' });
+    if (unpack.error || unpack.status !== 0) throw unpack.error || new Error('historical_cr7_archive_extract_failed');
+    const modules = path.join(ROOT, 'node_modules');
+    if (!existsSync(modules)) throw new Error('historical_cr7_node_modules_missing');
+    symlinkSync(modules, path.join(scratch, 'node_modules'), 'dir');
+    console.log(`Historical CR7 R0–R7 and CR8: ${HISTORICAL_TESTS.length} source files from public commit ${HISTORICAL_SOURCE_COMMIT}.`);
+    const result = spawnSync(process.execPath, [
+      '--test', '--test-concurrency=4', ...HISTORICAL_TESTS,
+    ], { cwd: scratch, env: process.env, stdio: 'inherit' });
+    if (result.error || result.status !== 0) throw result.error || new Error('historical_cr7_source_proof_failed');
+    for (const [file, field, expected] of HISTORICAL_PROOF_ROOTS) {
+      const proof = spawnSync(process.execPath, [file], {
+        cwd: scratch, env: process.env, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024,
+      });
+      if (proof.error || proof.status !== 0) throw proof.error || new Error(`historical_proof_failed:${file}`);
+      const body = JSON.parse(proof.stdout);
+      if (body[field] !== expected) throw new Error(`historical_proof_root_changed:${file}`);
+    }
+    console.log('Historical R7 and CR8 proof roots match the pinned public source.');
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+}
 
 // These tests exercise real signed routes and a real database. They are owned
 // by run-isolated-security.mjs, which provisions an aimos_test_security_*
@@ -74,6 +145,13 @@ const allTests = walk(TEST_ROOT)
   .filter((file) => file.endsWith('.test.mjs'))
   .map((file) => path.relative(ROOT, file).split(path.sep).join('/'))
   .sort();
+for (const file of HISTORICAL_TESTS) {
+  if (!allTests.includes(file)) throw new Error(`historical_cr7_test_missing:${file}`);
+}
+if (process.argv.includes('--historical-only')) {
+  runHistoricalSourceProof();
+  process.exit(0);
+}
 const benchmarkTests = allTests.filter((file) => file.startsWith('tests/benchmark/'));
 if (benchmarkTests.length === 0) throw new Error('benchmark contract test suite is empty');
 
@@ -103,7 +181,9 @@ for (const [file, owner] of LIVE_FIRE_OWNERS) {
 const benchmarkOnly = process.argv.includes('--benchmark-only');
 const selectedTests = benchmarkOnly
   ? benchmarkTests
-  : allTests.filter((file) => !LIVE_FIRE_TESTS.has(file) && !benchmarkTests.includes(file));
+  : allTests.filter((file) => !LIVE_FIRE_TESTS.has(file)
+    && !benchmarkTests.includes(file)
+    && !FROZEN_CURRENT_TESTS.has(file));
 if (selectedTests.length === 0) throw new Error('selected test suite is empty');
 
 if (!benchmarkOnly) {
@@ -118,12 +198,13 @@ if (!benchmarkOnly) {
     if (syntax.status !== 0) throw new Error(`runtime_syntax_invalid:${path.relative(ROOT, file)}`);
   }
   console.log(`Native runtime syntax: ${runtimeFiles.length}/${runtimeFiles.length} passed.`);
+  runHistoricalSourceProof();
 }
 
 console.log(
   benchmarkOnly
     ? `Running ${selectedTests.length} benchmark contract tests against the prepared canonical corpus.`
-    : `Running ${selectedTests.length} source tests; ${benchmarkTests.length} benchmark contract tests and ${LIVE_FIRE_TESTS.size} live-fire tests have separate owners.`
+    : `Running ${selectedTests.length} current source tests, including R8 and the current CR8 successor; ${HISTORICAL_TESTS.length} frozen test files passed against the pinned public source, while ${benchmarkTests.length} benchmark and ${LIVE_FIRE_TESTS.size} live-fire tests have separate owners.`
 );
 const result = spawnSync(process.execPath, [
   '--test',

@@ -43,9 +43,14 @@ function toInt(value, fallback) {
 }
 
 async function mintBearerFromKeySecret(useContext = {}, deadlineAt = useContext.deadlineAt) {
-  if (!peekCachedCredential('x_api_key') || !peekCachedCredential('x_api_secret')) return null;
-
   for (const base of X_API_BASES) {
+    const authorization = await credentialLedger.authorizeCredentialUse({
+      operation: 'x_oauth2_client_credentials',
+      endpoint: `${base}/oauth2/token`,
+      useContext,
+    });
+    if (authorization.capability !== 'x') throw new Error('x_credential_capability_unknown');
+    if (!peekCachedCredential('x_api_key') || !peekCachedCredential('x_api_secret')) return null;
     const key = checkoutCachedCredential('x_api_key');
     const secret = checkoutCachedCredential('x_api_secret');
     if (!key || !secret) return null;
@@ -65,6 +70,8 @@ async function mintBearerFromKeySecret(useContext = {}, deadlineAt = useContext.
         requestAdmissionEventId: useContext?.requestAdmissionEventId || null,
         requestAdmissionMutationHash: useContext?.requestAdmissionMutationHash || null,
         autonomousActionEventId: useContext?.autonomousActionEventId || null,
+        actorValidFromIso: useContext?.actorValidFromIso || null,
+        toolActionArguments: useContext?.toolActionArguments || null,
         useGroupId,
       })
     )));
@@ -162,6 +169,13 @@ export async function xSearchRecent({ query, maxResults = 10, useContext = {} })
   const q = String(query || '').trim();
   if (!q) throw new Error('query is required');
 
+  const initialAuthorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'x_search_recent',
+    endpoint: `${X_API_BASES[0]}/2/tweets/search/recent`,
+    useContext,
+  });
+  if (initialAuthorization.capability !== 'x') throw new Error('x_credential_capability_unknown');
+
   let authorization = await resolveBearerAuthorization(useContext, deadlineAt);
   if (!authorization) {
     throw new Error('X_BEARER_TOKEN is missing (and X key/secret fallback unavailable)');
@@ -181,6 +195,12 @@ export async function xSearchRecent({ query, maxResults = 10, useContext = {} })
 
   let lastError = null;
   for (const base of X_API_BASES) {
+    const operationAuthorization = await credentialLedger.authorizeCredentialUse({
+      operation: 'x_search_recent',
+      endpoint: `${base}/2/tweets/search/recent`,
+      useContext,
+    });
+    if (operationAuthorization.capability !== 'x') throw new Error('x_credential_capability_unknown');
     const url = `${base}/2/tweets/search/recent?${params.toString()}`;
     const useGroupId = authorization.credentials.length > 1 ? randomUUID() : null;
     const reservationResults = await Promise.allSettled(authorization.credentials.map((credential) => (
@@ -195,6 +215,8 @@ export async function xSearchRecent({ query, maxResults = 10, useContext = {} })
         requestAdmissionEventId: useContext?.requestAdmissionEventId || null,
         requestAdmissionMutationHash: useContext?.requestAdmissionMutationHash || null,
         autonomousActionEventId: useContext?.autonomousActionEventId || null,
+        actorValidFromIso: useContext?.actorValidFromIso || null,
+        toolActionArguments: useContext?.toolActionArguments || null,
         useGroupId,
       })
     )));

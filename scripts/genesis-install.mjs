@@ -38,8 +38,11 @@ const PROJECT_ROOT = resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const GUIDE_DIR = resolve(PROJECT_ROOT, 'Guide');
 let DATABASE_NAME = null;
 let DATABASE_URL = null;
+let MAINTENANCE_CONFIG = null;
 let AIMOS_COMPANY_ID = null;
 let AIMOS_RUNTIME_CREDENTIAL_SERVICE = null;
+let AIMOS_SERVICE_READER_CREDENTIAL_SERVICE = null;
+let AIMOS_IDENTITY_WRITER_CREDENTIAL_SERVICE = null;
 let AIMOS_SERVER_PORT = null;
 let AIMOS_AGENT_KEY_ROOT = null;
 let pool = null;
@@ -48,6 +51,7 @@ let pool = null;
 const a6Result = { ingested: 0, total: 0, corpusRoot: null, manifestVersion: null };
 let verifiedGenesisManifest = null;
 let pgsodiumDependencyReceipt = null;
+let servingRoleCredentials = [];
 
 function logPhase(phase, msg) {
   console.log(`\n=== ${phase} ===`);
@@ -69,8 +73,16 @@ async function initializeBootstrapFacts() {
   const runtime = await import('../services/core/runtime-config.js');
   DATABASE_NAME = runtime.resolveAimosDatabaseName();
   DATABASE_URL = runtime.resolveAimosDatabaseUrl();
+  if (runtime.AIMOS_POSTGRES_PORT !== 5432) {
+    const { resolveClusterAdminConfig } = await import('./db/cluster-admin.mjs');
+    MAINTENANCE_CONFIG = await resolveClusterAdminConfig({
+      argv: process.argv.slice(2), database: 'postgres',
+    });
+  }
   AIMOS_COMPANY_ID = runtime.AIMOS_COMPANY_ID;
   AIMOS_RUNTIME_CREDENTIAL_SERVICE = runtime.AIMOS_RUNTIME_CREDENTIAL_SERVICE;
+  AIMOS_SERVICE_READER_CREDENTIAL_SERVICE = runtime.AIMOS_SERVICE_READER_CREDENTIAL_SERVICE;
+  AIMOS_IDENTITY_WRITER_CREDENTIAL_SERVICE = runtime.AIMOS_IDENTITY_WRITER_CREDENTIAL_SERVICE;
   AIMOS_SERVER_PORT = runtime.AIMOS_SERVER_PORT;
   AIMOS_AGENT_KEY_ROOT = runtime.AIMOS_AGENT_KEY_ROOT;
 }
@@ -86,7 +98,9 @@ function verifySupportedNodeRuntime() {
 async function phaseA0_5PgsodiumPreflight() {
   logPhase('A0.5 — locked pgsodium preflight before database creation');
   const { ensurePgsodium } = await import('./db/ensure-pgsodium.mjs');
-  pgsodiumDependencyReceipt = await ensurePgsodium({ databaseUrl: DATABASE_URL });
+  pgsodiumDependencyReceipt = await ensurePgsodium({
+    databaseUrl: DATABASE_URL, maintenanceConfig: MAINTENANCE_CONFIG,
+  });
   console.log(`[A0.5] pgsodium ${pgsodiumDependencyReceipt.available_version} is visible to the selected PostgreSQL server.`);
   console.log(`       node:           ${pgsodiumDependencyReceipt.node_version}`);
   console.log(`       postgres:       ${pgsodiumDependencyReceipt.postgres_version}`);
@@ -132,7 +146,10 @@ async function phaseA2DbBootstrap() {
 
   // Delegate to the reusable bootstrap (idempotent, handles fresh install)
   const { bootstrapDatabase } = await import('./bootstrap-db.mjs');
-  const result = await bootstrapDatabase({ databaseUrl: DATABASE_URL, databaseName: DATABASE_NAME });
+  const result = await bootstrapDatabase({
+    databaseUrl: DATABASE_URL, databaseName: DATABASE_NAME,
+    maintenanceConfig: MAINTENANCE_CONFIG,
+  });
 
   console.log('[A2] Fresh DB + role bootstrap complete for HOM-AIMOS.');
   if (result?.db?.created) console.log('      → aimos database created');
@@ -147,7 +164,9 @@ async function phaseA3SchemaMigrations() {
   console.log(`Using the AIMOS bootstrap target for migrations.`);
 
   const { default: pg } = await import('pg');
-  const migrationPool = new pg.Pool({ connectionString: DATABASE_URL });
+  const migrationPool = new pg.Pool(MAINTENANCE_CONFIG
+    ? { ...MAINTENANCE_CONFIG, database: DATABASE_NAME }
+    : { connectionString: DATABASE_URL });
 
   try {
     // Import the runner function (CLI auto-run is guarded and won't trigger on import)
@@ -180,9 +199,20 @@ async function phaseA3_1RuntimeCredentialSync() {
   const result = await synchronizeRuntimeRoleCredential({
     databaseUrl: DATABASE_URL,
     databaseName: DATABASE_NAME,
+    maintenanceConfig: MAINTENANCE_CONFIG,
   });
   if (!result.synchronized) throw new Error('agent_runtime Keychain credential was not synchronized');
   console.log(`[A3.1] ${result.roleName} synchronized from Keychain slot ${result.credentialSlot}.`);
+}
+
+async function phaseA3_2ServingRoleActivation() {
+  if (!MAINTENANCE_CONFIG) return;
+  logPhase('A3.2 — authenticated serving role activation');
+  const { activateServingRoles } = await import('./db/activate-serving-roles.mjs');
+  servingRoleCredentials = await activateServingRoles({
+    argv: process.argv.slice(2), database: DATABASE_NAME,
+  });
+  console.log(`[A3.2] ${servingRoleCredentials.length} non-superuser serving roles authenticated through SCRAM.`);
 }
 
 async function phaseA4ArchitectureAuthority() {
@@ -417,63 +447,53 @@ async function phaseA5_0LedgerDependencyReceipt() {
 }
 
 async function phaseA5_1LedgerRuntimeCredential() {
-  logPhase('A5.1 — runtime DB credential cryptographic lifecycle');
+  logPhase('A5.1 — database role credential cryptographic lifecycle');
 
   const { readCredentialSync } = await import('../services/security/credential-store.js');
   const { signAsHousekeeper } = await import('../services/security/housekeeper-signer.js');
-
-  const credential = readCredentialSync(AIMOS_RUNTIME_CREDENTIAL_SERVICE);
-  if (!credential) {
-    throw new Error('A5.1 cannot find the runtime DB credential created in A2');
-  }
-
   const { credentialLedger } = await import('../services/security/credential-ledger.js');
-  const existing = await credentialLedger.getSlotChain(credential.slot, 1);
-  if (existing.length > 0) {
-    const ledgerHash = existing[0]?.body_json?.credential_hash;
-    if (ledgerHash !== credential.hash) {
-      throw new Error('A5.1 keychain/ledger credential hash mismatch; explicit rotation ceremony required');
+  const credentials = [
+    [AIMOS_RUNTIME_CREDENTIAL_SERVICE, 'genesis_runtime_database_role'],
+    ...(MAINTENANCE_CONFIG ? [
+      [AIMOS_SERVICE_READER_CREDENTIAL_SERVICE, 'genesis_service_reader_database_role'],
+      [AIMOS_IDENTITY_WRITER_CREDENTIAL_SERVICE, 'genesis_identity_writer_database_role'],
+    ] : []),
+  ];
+  if (MAINTENANCE_CONFIG && servingRoleCredentials.length !== 2) {
+    throw new Error('A5.1 serving role activation evidence missing');
+  }
+  for (const [service, reason] of credentials) {
+    const credential = readCredentialSync(service);
+    if (!credential) throw new Error(`A5.1 database credential unavailable: ${service}`);
+    const existing = await credentialLedger.getSlotChain(credential.slot, 1);
+    if (existing.length > 0) {
+      if (existing[0]?.body_json?.credential_hash !== credential.hash) {
+        throw new Error('A5.1 keychain/ledger credential hash mismatch; explicit rotation ceremony required');
+      }
+      console.log(`[A5.1] Existing credential lifecycle row verified for ${credential.slot}.`);
+      continue;
     }
-    console.log(`[A5.1] Existing credential lifecycle row verified for ${credential.slot}.`);
-    return;
+    // These database secrets are required before the Housekeeper ledger
+    // exists. Each exact first STORE is a bounded custody genesis root.
+    const body = {
+      event_type: 'STORE', service, slot_id: credential.slot,
+      credential_hash: credential.hash,
+      valid_from: Math.floor(Date.now() / 1000), valid_until: null,
+      rotated_from: null, reason, operator: 'housekeeper',
+      signer_agent_id: 'housekeeper', genesis_root: true,
+    };
+    const signed = await signAsHousekeeper(body);
+    const commit = await credentialLedger.commitCredentialLifecycle({
+      serviceName: service, slotId: credential.slot,
+      body: signed.body, agentId: signed.agentId,
+      validFromIso: signed.validFromIso, certString: signed.certString,
+      signedTs: signed.signedTs, nonce: signed.nonce,
+      sigBytes: signed.sigBytes, identityTier: signed.identityTier,
+      eventType: 'STORE', bodyJson: signed.body,
+    });
+    if (!commit.ok) throw new Error(`A5.1 credential ledger commit failed: ${commit.reason}`);
+    console.log(`[A5.1] Database credential ledgered for ${service}: mutation_hash=${Buffer.from(commit.mutationHash).toString('hex')}`);
   }
-
-  const body = {
-    event_type: 'STORE',
-    service: AIMOS_RUNTIME_CREDENTIAL_SERVICE,
-    slot_id: credential.slot,
-    credential_hash: credential.hash,
-    valid_from: Math.floor(Date.now() / 1000),
-    valid_until: null,
-    rotated_from: null,
-    reason: 'genesis_runtime_database_role',
-    operator: 'housekeeper',
-    signer_agent_id: 'housekeeper',
-    // The runtime database credential necessarily predates the database and
-    // Housekeeper ledger. This exact first STORE is the custody genesis root;
-    // successors must carry an ordinary signed custody start binding.
-    genesis_root: true,
-  };
-  const signed = await signAsHousekeeper(body);
-  const commit = await credentialLedger.commitCredentialLifecycle({
-    serviceName: AIMOS_RUNTIME_CREDENTIAL_SERVICE,
-    slotId: credential.slot,
-    body: signed.body,
-    agentId: signed.agentId,
-    validFromIso: signed.validFromIso,
-    certString: signed.certString,
-    signedTs: signed.signedTs,
-    nonce: signed.nonce,
-    sigBytes: signed.sigBytes,
-    identityTier: signed.identityTier,
-    eventType: 'STORE',
-    bodyJson: signed.body
-  });
-  if (!commit.ok) {
-    throw new Error(`A5.1 credential ledger commit failed: ${commit.reason}`);
-  }
-  console.log(`[A5.1] Runtime credential ledgered: content_hash=${Buffer.from(commit.contentHash).toString('hex')}`);
-  console.log(`[A5.1] mutation_hash=${Buffer.from(commit.mutationHash).toString('hex')}`);
 }
 
 async function phaseA5_2CalibrationGenesis() {
@@ -841,9 +861,17 @@ async function main() {
     // loading any runtime pool or starting any HTTP listener.
     await phaseA3_1RuntimeCredentialSync();
 
+    await phaseA3_2ServingRoleActivation();
+
     // Load the runtime DB pools only after A2 generated the restricted-role
     // credential and A3 created the schema they operate on.
-    ({ pool } = await import('../db/connection.js'));
+    if (MAINTENANCE_CONFIG) {
+      const { default: pg } = await import('pg');
+      pool = new pg.Pool({ ...MAINTENANCE_CONFIG, database: DATABASE_NAME });
+      await import('../db/connection.js');
+    } else {
+      ({ pool } = await import('../db/connection.js'));
+    }
 
     // Phase A4 — runtime architecture-authority generation.
     await phaseA4ArchitectureAuthority();

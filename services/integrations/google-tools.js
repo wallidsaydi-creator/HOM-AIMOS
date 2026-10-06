@@ -17,6 +17,17 @@ import { verifyToolActionAuthority } from '../orchestration/tool-action-ledger.j
 
 const COMPANY = AIMOS_COMPANY_ID;
 const GOOGLE_REQUEST_TIMEOUT_MS = 12_000;
+const gmailListProofs = new WeakMap();
+
+function contextForListedMessages(context, messages) {
+  if (!context?.autonomousActionEventId || context.requestReceiptId) return context;
+  const proof = Object.freeze({});
+  gmailListProofs.set(proof, {
+    actionEventId: context.autonomousActionEventId,
+    ids: new Set(messages.map((message) => String(message.id))),
+  });
+  return { ...context, gmailListProof: proof };
+}
 
 async function refreshGoogleAccessToken(row, useContext = {}, deadlineAt = useContext.deadlineAt) {
   const refreshCheckout = row?.refresh_token_checkout || null;
@@ -44,11 +55,14 @@ async function refreshGoogleAccessToken(row, useContext = {}, deadlineAt = useCo
   const context = useContext && typeof useContext === 'object' ? useContext : {};
   const authority = {
     subjectAgentId: context.actorAgentId || context.subjectAgentId || context.agentId || 'housekeeper',
+    actorValidFromIso: context.actorValidFromIso || null,
+    requiredCapability: context.credentialCapability || null,
     requestReceiptId: context.requestReceiptId || null,
     requestReceiptMutationHash: context.requestReceiptMutationHash || null,
     requestAdmissionEventId: context.requestAdmissionEventId || null,
     requestAdmissionMutationHash: context.requestAdmissionMutationHash || null,
     autonomousActionEventId: context.autonomousActionEventId || null,
+    toolActionArguments: context.toolActionArguments || null,
   };
   let refreshReservation = null;
   let clientSecretReservation = null;
@@ -59,6 +73,7 @@ async function refreshGoogleAccessToken(row, useContext = {}, deadlineAt = useCo
       ...refreshCheckout,
       operation: 'google.oauth.refresh.refresh_token',
       endpoint,
+      requestTarget: endpoint,
       requestHash,
       useGroupId,
       ...authority,
@@ -67,6 +82,7 @@ async function refreshGoogleAccessToken(row, useContext = {}, deadlineAt = useCo
       ...googleSecretCheckout,
       operation: 'google.oauth.refresh.client_secret',
       endpoint,
+      requestTarget: endpoint,
       requestHash,
       useGroupId,
       ...authority,
@@ -208,11 +224,30 @@ async function getGoogleToken(useContext = {}, deadlineAt = useContext.deadlineA
 async function gFetch(path, options = {}, useContext = {}, responseMode = 'json') {
   const deadlineAt = Math.min(options.deadlineAt ?? Infinity, useContext.deadlineAt ?? Infinity,
     performance.now() + GOOGLE_REQUEST_TIMEOUT_MS);
-  let row = await getGoogleToken(useContext, deadlineAt);
   const base = 'https://www.googleapis.com';
   const target = new URL(path, base);
   const endpoint = `${target.origin}${target.pathname}`;
   const method = String(options.method || 'GET').toUpperCase();
+  if (useContext?.autonomousActionEventId && !useContext.requestReceiptId
+      && method === 'GET' && target.pathname.startsWith('/gmail/v1/users/me/messages/')) {
+    const messageId = decodeURIComponent(target.pathname.slice('/gmail/v1/users/me/messages/'.length));
+    const signedMessageId = String(useContext.toolActionArguments?.messageId || '');
+    if (messageId !== signedMessageId) {
+      const proof = gmailListProofs.get(useContext.gmailListProof);
+      if (proof?.actionEventId !== useContext.autonomousActionEventId || !proof.ids.has(messageId)) {
+        throw new Error('gmail_message_not_in_verified_list_response');
+      }
+    }
+  }
+  const { capability } = await credentialLedger.authorizeCredentialUse({
+    operation: `google.api.${method.toLowerCase()}`,
+    endpoint,
+    requestTarget: target.toString(),
+    useContext,
+  });
+  if (!capability) throw new Error('google_credential_capability_unknown');
+  const authorizedContext = { ...useContext, credentialCapability: capability };
+  let row = await getGoogleToken(authorizedContext, deadlineAt);
   const requestHash = credentialUseEvidenceHash({
     method,
     targetHash: credentialUseEvidenceHash(target.toString()),
@@ -221,11 +256,14 @@ async function gFetch(path, options = {}, useContext = {}, responseMode = 'json'
   const context = useContext && typeof useContext === 'object' ? useContext : {};
   const authority = {
     subjectAgentId: context.actorAgentId || context.subjectAgentId || context.agentId || 'housekeeper',
+    actorValidFromIso: context.actorValidFromIso || null,
+    requiredCapability: capability,
     requestReceiptId: context.requestReceiptId || null,
     requestReceiptMutationHash: context.requestReceiptMutationHash || null,
     requestAdmissionEventId: context.requestAdmissionEventId || null,
     requestAdmissionMutationHash: context.requestAdmissionMutationHash || null,
     autonomousActionEventId: context.autonomousActionEventId || null,
+    toolActionArguments: context.toolActionArguments || null,
   };
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -234,6 +272,7 @@ async function gFetch(path, options = {}, useContext = {}, responseMode = 'json'
       ...checkout,
       operation: `google.api.${method.toLowerCase()}`,
       endpoint,
+      requestTarget: target.toString(),
       requestHash,
       ...authority,
     });
@@ -261,7 +300,7 @@ async function gFetch(path, options = {}, useContext = {}, responseMode = 'json'
         });
         terminalRecorded = true;
         await res.body?.cancel();
-        row = await forceRefreshGoogleToken(row, useContext, deadlineAt);
+        row = await forceRefreshGoogleToken(row, authorizedContext, deadlineAt);
         continue;
       }
       if (!res.ok) {
@@ -318,7 +357,8 @@ export async function gmailListInbox({ maxResults = 10, query: q = '' } = {}, cr
   const params = new URLSearchParams({ maxResults, q: q || 'in:inbox' });
   const list = await gFetch(`/gmail/v1/users/me/messages?${params}`, {}, credentialUseContext);
   const ids = (list.messages || []).slice(0, maxResults);
-  const messages = await Promise.all(ids.map(m => gmailGetMessage(m.id, credentialUseContext)));
+  const listedContext = contextForListedMessages(credentialUseContext, ids);
+  const messages = await Promise.all(ids.map(m => gmailGetMessage(m.id, listedContext)));
   return messages;
 }
 
@@ -343,7 +383,8 @@ export async function gmailSearchMessages({ query: q, maxResults = 10 }, credent
   const params = new URLSearchParams({ q, maxResults });
   const list = await gFetch(`/gmail/v1/users/me/messages?${params}`, {}, credentialUseContext);
   const ids = (list.messages || []).slice(0, maxResults);
-  return Promise.all(ids.map(m => gmailGetMessage(m.id, credentialUseContext)));
+  const listedContext = contextForListedMessages(credentialUseContext, ids);
+  return Promise.all(ids.map(m => gmailGetMessage(m.id, listedContext)));
 }
 
 async function sendGmailMessageTransport({
@@ -448,6 +489,9 @@ export async function youtubeSearch({ query: q, maxResults = 10, type = 'video' 
 }
 
 export async function youtubeChannelStats(channelId, credentialUseContext = {}) {
+  if (credentialUseContext?.autonomousActionEventId && !credentialUseContext.requestReceiptId && channelId) {
+    throw new Error('youtube_channel_target_not_authorized');
+  }
   const id = channelId || systemConfigStore.readConfigString('YOUTUBE_CHANNEL_ID');
   const params = new URLSearchParams({ id, part: 'snippet,statistics' });
   return gFetch(`/youtube/v3/channels?${params}`, {}, credentialUseContext);
@@ -459,6 +503,9 @@ export async function youtubeVideoDetails(videoId, credentialUseContext = {}) {
 }
 
 export async function youtubeListChannelVideos({ channelId, maxResults = 20 } = {}, credentialUseContext = {}) {
+  if (credentialUseContext?.autonomousActionEventId && !credentialUseContext.requestReceiptId && channelId) {
+    throw new Error('youtube_channel_target_not_authorized');
+  }
   const id = channelId || systemConfigStore.readConfigString('YOUTUBE_CHANNEL_ID');
   const params = new URLSearchParams({
     channelId: id,
@@ -508,6 +555,9 @@ export async function calendarListEvents({
   maxResults = 20,
   timeMin,
 } = {}, credentialUseContext = {}) {
+  if (credentialUseContext?.autonomousActionEventId && !credentialUseContext.requestReceiptId && timeMin) {
+    throw new Error('calendar_time_target_not_authorized');
+  }
   const params = new URLSearchParams({
     maxResults,
     singleEvents: 'true',

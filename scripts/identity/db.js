@@ -3,7 +3,7 @@
 // aimos DB. Read-only operations are safe; writes are init-time only.
 
 import { createHash, randomUUID } from 'node:crypto';
-import { pool } from '../../db/connection.js';
+import { pool, identityWriterPool } from '../../db/connection.js';
 import { canonicalJson, getAgentCert, verifyCertChain, issueCert } from '../../services/security/agent-identity.js';
 import { AIMOS_COMPANY_ID } from '../../services/core/runtime-config.js';
 import { logEvent, readVerifiedEventById } from '../../services/observe/event-ledger.js';
@@ -159,13 +159,15 @@ export async function beginMasterEnrollment(row, encryptedBlobSha256) {
   return Object.freeze({ actionId, projection, projectionSha256, encryptedBlobSha256: blobHash, ...receipt });
 }
 
-export async function commitMasterEnrollment(row, start, observedEncryptedBlobSha256) {
+export async function commitMasterEnrollment(row, start, observedEncryptedBlobSha256, {
+  maintenancePool = pool,
+} = {}) {
   if (!start?.event_id || !/^[0-9a-f]{64}$/.test(String(start.mutation_hash || ''))
       || String(observedEncryptedBlobSha256) !== start.encryptedBlobSha256
       || canonicalJson(masterProjection(row)) !== canonicalJson(start.projection)) {
     throw new Error('master_enrollment_projection_invalid');
   }
-  const client = await pool.connect();
+  const client = await maintenancePool.connect();
   try {
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', ['master-enrollment']);
@@ -378,7 +380,7 @@ export async function commitAgentEnrollment(row, start, fileProjection) {
   if (!/^[0-9a-f]{64}$/.test(signingMaterialSha256) || !/^[0-9a-f]{64}$/.test(certCacheSha256)) {
     throw new Error('identity_enrollment_file_projection_invalid');
   }
-  const client = await pool.connect();
+  const client = await identityWriterPool.connect();
   try {
     await client.query('BEGIN');
     await client.query(
@@ -413,8 +415,10 @@ export async function commitAgentEnrollment(row, start, fileProjection) {
         || new Date(startMetadata?.valid_until).toISOString() !== projection.valid_until) {
       throw new Error('identity_enrollment_start_binding_invalid');
     }
+    // The public identity is fixed after master enrollment; the later locator
+    // binding updates different columns and does not require a row lock here.
     const master = await client.query(
-      'SELECT master_pubkey, fingerprint FROM aimos_master_identity WHERE id = 1 FOR SHARE',
+      'SELECT master_pubkey, fingerprint FROM aimos_master_identity WHERE id = 1',
     );
     const masterRow = master.rows[0];
     const certificate = verifyCertChain(row.cert, masterRow?.master_pubkey);

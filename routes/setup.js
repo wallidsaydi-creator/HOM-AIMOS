@@ -17,7 +17,7 @@ import { getOperatorAgentId, systemConfigStore } from '../services/security/syst
 import { peekCachedCredential } from '../services/security/credential-cache.js';
 import { requireCapability } from '../services/security/require-capability.js';
 import { verifiedRequestAuthorityFromRequest } from '../services/security/auth-gate.js';
-import { AIMOS_COMPANY_ID } from '../services/core/runtime-config.js';
+import { AIMOS_AGENT_KEY_ROOT, AIMOS_COMPANY_ID } from '../services/core/runtime-config.js';
 
 const router = express.Router();
 
@@ -70,7 +70,7 @@ const COMPANY = AIMOS_COMPANY_ID;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const BRAIN_ROOT = path.resolve(__dirname, '..');
-const AGENTS_DIR = path.join(os.homedir(), '.aimos', 'agents');
+const AGENTS_DIR = AIMOS_AGENT_KEY_ROOT;
 const AGENT_ID_RE = /^[a-zA-Z0-9_-]{1,64}$/;
 
 function sha256Hex(value) {

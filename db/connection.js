@@ -8,24 +8,25 @@
  * 4. → Benefits from: DR_URL (Automatic failover to read-only replica)
  *
  * ─── POOL DECISION (R3, locked) ─────────────────────────────────────────────
- * There are two pools, and the choice between them is NOT interchangeable:
+ * Serving roles are not interchangeable:
  *
  *   `agentPool`  — connects as the restricted `agent_runtime` role. RLS and
  *                  privilege enforcement (including the R3 REVOKE DELETE in
  *                  migration 041) ONLY bind non-superusers, so this is the pool
  *                  that any security guarantee actually lives on. Use it for the
  *                  guarded proof-of-context path (`secureQuery`).
- *   `pool`       — connects as the DB superuser. RESERVED for migrations,
- *                  boot-time store loads, and superuser maintenance. A superuser
- *                  BYPASSES RLS and every REVOKE, so nothing routed through `pool`
- *                  is protected by those controls.
+ *   `pool`       — service_reader on a private PostgreSQL cluster. The
+ *                  pre-cutover port-5432 installation retains its legacy
+ *                  primary connection until the dedicated cluster is ready.
+ *   `identityWriterPool` — one narrow signed-enrollment transaction lane.
+ *   Offline migrations and Genesis hold their own short-lived admin client.
  *
  * Migration 045 removes the public SECURITY DEFINER memory writer and grants
  * `agent_runtime` the exact SELECT/INSERT statements used by the native
  * memory/provenance/envelope transaction. Canonical saves therefore use
  * `agentPool` with `app.current_client_id` set before any RLS-protected DML.
- * The superuser pool remains reserved for migrations, boot stores, diagnostics,
- * and maintenance; it is not the canonical memory mutation path.
+ * The ordinary serving process never constructs an admin pool for a private
+ * PostgreSQL cluster. Canonical writes remain on agentPool.
  *
  * LOGIC GUIDE (Step-Up Connections): `secureQuery` runs on `agentPool` inside a
  * real transaction (BEGIN…COMMIT) so that `set_config('app.current_agent_id',…,
@@ -38,6 +39,11 @@ import { beginServingWork } from '../services/runtime/serving-control.js';
 import {
   AIMOS_RUNTIME_CREDENTIAL_SERVICE,
   AIMOS_RUNTIME_ROLE,
+  AIMOS_POSTGRES_PORT,
+  AIMOS_IDENTITY_WRITER_CREDENTIAL_SERVICE,
+  AIMOS_SERVICE_READER_CREDENTIAL_SERVICE,
+  resolveAimosIdentityWriterDatabaseConfig,
+  resolveAimosServiceReaderDatabaseConfig,
   resolveAimosDatabaseUrl
 } from '../services/core/runtime-config.js';
 import { readCredentialSync } from '../services/security/credential-store.js';
@@ -58,9 +64,9 @@ const FAILOVER_THRESHOLD = 3; // switch after 3 consecutive connection failures
 const RECOVERY_CHECK_MS = 60_000; // try primary again every 60s during failover
 let _recoveryTimer = null;
 
-function createPool(url, label = 'database', options = {}) {
+function createPool(target, label = 'database', options = {}) {
   const p = new Pool({
-    connectionString: url,
+    ...(typeof target === 'string' ? { connectionString: target } : target),
     ssl: false,
     connectionTimeoutMillis: 5000,
     ...options,
@@ -81,7 +87,80 @@ function createPool(url, label = 'database', options = {}) {
   return p;
 }
 
-export let pool = createPool(PRIMARY_URL, 'primary');
+export let pool;
+
+// Staged serving identities. Neither lane falls back to the privileged pool.
+// Both remain unused until their distinct signed credentials and SCRAM roles
+// have passed a disposable-database boot and enrollment qualification.
+function createLazyKeychainRolePool({
+  credentialService, resolveTarget, label, unavailableReason,
+  credentialReader, poolFactory,
+}) {
+  let rolePool = null;
+  function get() {
+    if (!rolePool) {
+      let credential;
+      try {
+        credential = credentialReader(credentialService);
+      } catch {
+        throw new Error(unavailableReason);
+      }
+      if (!credential?.value) throw new Error(unavailableReason);
+      rolePool = poolFactory({
+        ...resolveTarget(),
+        password: credential.value,
+        application_name: label,
+      });
+    }
+    return rolePool;
+  }
+  return Object.freeze({
+    connect: (...args) => get().connect(...args),
+    query: (...args) => get().query(...args),
+    end: (...args) => rolePool ? rolePool.end(...args) : Promise.resolve(),
+    get totalCount() { return rolePool?.totalCount || 0; },
+    get idleCount() { return rolePool?.idleCount || 0; },
+    get waitingCount() { return rolePool?.waitingCount || 0; },
+    stats: () => ({ total: rolePool?.totalCount || 0, idle: rolePool?.idleCount || 0,
+      waiting: rolePool?.waitingCount || 0, max: 10 }),
+  });
+}
+
+export function createLazyServiceReaderPool({
+  credentialReader = readCredentialSync,
+  poolFactory = (config) => createPool(config, 'service_reader'),
+} = {}) {
+  return createLazyKeychainRolePool({
+    credentialService: AIMOS_SERVICE_READER_CREDENTIAL_SERVICE,
+    resolveTarget: resolveAimosServiceReaderDatabaseConfig,
+    label: 'aimos_service_reader',
+    unavailableReason: 'service_reader_credential_unavailable',
+    credentialReader, poolFactory,
+  });
+}
+
+export function createLazyIdentityWriterPool({
+  credentialReader = readCredentialSync,
+  poolFactory = (config) => createPool(config, 'identity_writer'),
+} = {}) {
+  return createLazyKeychainRolePool({
+    credentialService: AIMOS_IDENTITY_WRITER_CREDENTIAL_SERVICE,
+    resolveTarget: resolveAimosIdentityWriterDatabaseConfig,
+    label: 'aimos_identity_writer',
+    unavailableReason: 'identity_writer_credential_unavailable',
+    credentialReader, poolFactory,
+  });
+}
+
+export const serviceReaderPool = createLazyServiceReaderPool();
+export const identityWriterPool = createLazyIdentityWriterPool();
+// New AIMOS-only installations use a credentialed, RLS-bound read role for
+// every ordinary primary query. Port 5432 is retained solely for the already
+// installed legacy process until its database is cut over; it is not accepted
+// by the clean installer.
+pool = AIMOS_POSTGRES_PORT === 5432
+  ? createPool(PRIMARY_URL, 'legacy_primary')
+  : serviceReaderPool;
 
 // ─── RESTRICTED RUNTIME POOL (Fortress Phase 1) ─────────────────────────────
 // Constructed from PRIMARY_URL by swapping user/pass for agent_runtime.
@@ -226,7 +305,7 @@ export async function query(text, params) {
  *
  * Pool selection (see POOL DECISION at the top of this file):
  *   options.restricted === true  → agentPool (agent_runtime, RLS/REVOKE bind here)
- *   otherwise                    → pool (superuser; migrations / boot / maintenance)
+ *   otherwise                    → pool (service reader on the private cluster)
  *
  * @param {(client: import('pg').PoolClient) => Promise<any>} fn
  * @param {Object} [options]

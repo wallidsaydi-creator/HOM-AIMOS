@@ -19,29 +19,30 @@ export async function readPassphrase(prompt) {
     stdin.resume();
     stdin.setEncoding('utf8');
     const onData = (ch) => {
-      const c = ch.toString('utf8');
-      if (c === '\r' || c === '\n') {
-        stdin.setRawMode(false);
-        stdin.pause();
-        stdin.removeListener('data', onData);
-        process.stdout.write('\n');
-        resolve(buf);
-        return;
-      }
-      if (c === ETX) {
-        stdin.setRawMode(false);
-        process.stdout.write('\n');
-        process.exit(130);
-      }
-      if (c === DEL || c === '\b') {
-        if (buf.length > 0) {
-          buf = buf.slice(0, -1);
-          process.stdout.write('\b \b');
+      for (const c of ch.toString('utf8')) {
+        if (c === '\r' || c === '\n') {
+          stdin.setRawMode(false);
+          stdin.pause();
+          stdin.removeListener('data', onData);
+          process.stdout.write('\n');
+          resolve(buf);
+          return;
         }
-        return;
+        if (c === ETX) {
+          stdin.setRawMode(false);
+          process.stdout.write('\n');
+          process.exit(130);
+        }
+        if (c === DEL || c === '\b') {
+          if (buf.length > 0) {
+            buf = buf.slice(0, -1);
+            process.stdout.write('\b \b');
+          }
+          continue;
+        }
+        buf += c;
+        process.stdout.write('*');
       }
-      buf += c;
-      process.stdout.write('*');
     };
     stdin.on('data', onData);
   });
@@ -64,30 +65,31 @@ export async function readLine(prompt, { default: defaultValue = null } = {}) {
     stdin.resume();
     stdin.setEncoding('utf8');
     const onData = (ch) => {
-      const c = ch.toString('utf8');
-      if (c === '\r' || c === '\n') {
-        stdin.setRawMode(false);
-        stdin.pause();
-        stdin.removeListener('data', onData);
-        process.stdout.write('\n');
-        const trimmed = buf.trim();
-        resolve(trimmed || (defaultValue ? String(defaultValue) : ''));
-        return;
-      }
-      if (c === ETX) {
-        stdin.setRawMode(false);
-        process.stdout.write('\n');
-        process.exit(130);
-      }
-      if (c === DEL || c === '\b') {
-        if (buf.length > 0) {
-          buf = buf.slice(0, -1);
-          process.stdout.write('\b \b');
+      for (const c of ch.toString('utf8')) {
+        if (c === '\r' || c === '\n') {
+          stdin.setRawMode(false);
+          stdin.pause();
+          stdin.removeListener('data', onData);
+          process.stdout.write('\n');
+          const trimmed = buf.trim();
+          resolve(trimmed || (defaultValue ? String(defaultValue) : ''));
+          return;
         }
-        return;
+        if (c === ETX) {
+          stdin.setRawMode(false);
+          process.stdout.write('\n');
+          process.exit(130);
+        }
+        if (c === DEL || c === '\b') {
+          if (buf.length > 0) {
+            buf = buf.slice(0, -1);
+            process.stdout.write('\b \b');
+          }
+          continue;
+        }
+        buf += c;
+        process.stdout.write(c);
       }
-      buf += c;
-      process.stdout.write(c);
     };
     stdin.on('data', onData);
   });

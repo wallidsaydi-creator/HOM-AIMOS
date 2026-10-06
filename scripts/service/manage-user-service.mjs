@@ -102,6 +102,7 @@ export function buildUserServiceDefinition({
   homeDirectory = os.homedir(),
   instance = 'canonical',
   postgresPort = 5432,
+  postgresBin = null,
 } = {}) {
   const source = requireSourceRoot(sourceRoot);
   const node = requireRegularFile(nodePath, 'aimos_service_node_invalid');
@@ -113,6 +114,11 @@ export function buildUserServiceDefinition({
     '--aimos-instance', String(instance),
     '--aimos-postgres-port', String(postgresPort),
   ], { homeDirectory: home });
+  const privatePostgres = context.postgres_port !== 5432;
+  const pgBin = privatePostgres ? path.resolve(String(postgresBin || '')) : null;
+  if (privatePostgres && (!postgresBin || !path.isAbsolute(postgresBin))) {
+    fail('aimos_service_postgres_bindir_required');
+  }
   const stateRoot = context.service_state_root;
   const logRoot = context.service_log_root;
   const runtimeArguments = [
@@ -121,6 +127,7 @@ export function buildUserServiceDefinition({
     ...(context.canonical ? [] : ['--aimos-instance', context.instance]),
     ...(context.postgres_port === 5432
       ? [] : ['--aimos-postgres-port', String(context.postgres_port)]),
+    ...(privatePostgres ? ['--pg-bindir', pgBin] : []),
   ];
   const common = {
     schema: AIMOS_USER_SERVICE_SCHEMA,
@@ -132,6 +139,10 @@ export function buildUserServiceDefinition({
     source_root: source,
     node_path: node,
     server_path: path.join(source, 'server.js'),
+    launcher_path: privatePostgres
+      ? path.join(source, 'scripts', 'service', 'run-private-postgres.mjs')
+      : path.join(source, 'server.js'),
+    postgres_bin: pgBin,
     database: db,
     port: serverPort,
     state_root: stateRoot,
@@ -157,7 +168,7 @@ export function buildUserServiceDefinition({
   <key>ProgramArguments</key>
   <array>
     <string>${xml(node)}</string>
-    <string>${xml(common.server_path)}</string>
+    <string>${xml(common.launcher_path)}</string>
     ${argumentXml}
   </array>
   <key>WorkingDirectory</key><string>${xml(source)}</string>
@@ -176,7 +187,7 @@ export function buildUserServiceDefinition({
   if (platform === 'linux') {
     const unitName = context.canonical ? 'hom-aimos.service' : `hom-aimos-${context.instance}.service`;
     const unitPath = path.join(home, '.config', 'systemd', 'user', unitName);
-    const command = [node, common.server_path, ...runtimeArguments]
+    const command = [node, common.launcher_path, ...runtimeArguments]
       .map(systemdQuote).join(' ');
     const unit = `[Unit]
 Description=HOM-AIMOS native memory service
@@ -206,10 +217,14 @@ function definitionManifest(definition) {
   const body = {
     schema: definition.schema,
     label: definition.label,
-    ...(definition.instance === 'canonical' ? {} : {
+    ...(definition.instance === 'canonical' && definition.postgres_port === 5432 ? {} : {
       instance: definition.instance,
       installation_context_sha256: definition.installation_context_sha256,
       postgres_port: definition.postgres_port,
+      ...(definition.postgres_port === 5432 ? {} : {
+        postgres_bin: definition.postgres_bin,
+        launcher_path: definition.launcher_path,
+      }),
     }),
     platform: definition.platform,
     source_root: definition.source_root,
@@ -239,6 +254,7 @@ export function validateUserServiceManifest(manifest, {
     port: manifest.port,
     instance: manifest.instance,
     postgresPort: manifest.postgres_port,
+    postgresBin: manifest.postgres_bin,
     platform: manifest.platform,
     homeDirectory,
   });
@@ -447,7 +463,7 @@ export async function manageInstalledUserService(action, { instance = 'canonical
 }
 
 function usage() {
-  process.stderr.write('Usage: node scripts/service/manage-user-service.mjs install|start|stop|restart|status|uninstall [--source-root PATH --node PATH --database NAME --port PORT --instance NAME --postgres-port PORT]\n');
+  process.stderr.write('Usage: node scripts/service/manage-user-service.mjs install|start|stop|restart|status|uninstall [--source-root PATH --node PATH --database NAME --port PORT --instance NAME --postgres-port PORT --postgres-bin PATH]\n');
 }
 
 async function main() {
@@ -466,6 +482,7 @@ async function main() {
         port: cliValue(argv, '--port') || 9100,
         instance: cliValue(argv, '--instance') || 'canonical',
         postgresPort: cliValue(argv, '--postgres-port') || 5432,
+        postgresBin: cliValue(argv, '--postgres-bin'),
       })
     : await manageInstalledUserService(action, {
         instance: cliValue(argv, '--instance') || 'canonical',

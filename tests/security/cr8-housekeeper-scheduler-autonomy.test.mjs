@@ -5,7 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { proveCr8HousekeeperScheduler } from '../../scripts/verification/prove-cr8-housekeeper-scheduler.mjs';
+import { proveCr8R1CurrentSchedulerSuccessor } from '../../scripts/verification/prove-cr8-r1-current-scheduler-successor.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -46,7 +46,7 @@ test('delegated schedule orphan recovery binds the original reservation and neve
 });
 
 test('independent CR8 audit proves truthful scheduler authority without local-model or tenant dependency', () => {
-  const proof = proveCr8HousekeeperScheduler();
+  const proof = proveCr8R1CurrentSchedulerSuccessor();
   assert.equal(proof.required_system_jobs, 5);
   assert.equal(proof.autonomous_principal, 'housekeeper');
   assert.equal(proof.signed_start_terminal, true);

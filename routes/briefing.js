@@ -1,6 +1,7 @@
 import { AIMOS_COMPANY_ID } from '../services/core/runtime-config.js';
 import express from 'express';
 import { gmailListInbox, calendarTodayEvents } from '../services/integrations/google-tools.js';
+import { requireCapability } from '../services/security/require-capability.js';
 import { query } from '../db/connection.js';
 import { systemConfigStore } from '../services/security/system-config-store.js';
 
@@ -76,11 +77,11 @@ async function loadPendingTasks(limit = 10) {
   return results;
 }
 
-router.get('/config', async (req, res) => {
+router.get('/config', requireCapability('admin_override'), async (req, res) => {
   res.json({ success: true, config: briefingConfig });
 });
 
-router.post('/config', async (req, res) => {
+router.post('/config', requireCapability('admin_override'), async (req, res) => {
   const sections = req.body?.sections;
   const preferredTime = req.body?.preferredTime;
 
@@ -204,12 +205,12 @@ async function buildBriefingPayload(credentialUseContext = {}) {
   };
 }
 
-router.get('/today', async (req, res) => {
+router.get('/today', requireCapability('admin_override'), async (req, res) => {
   const payload = await buildBriefingPayload(req.executionContext);
   res.json(payload);
 });
 
-router.get('/push', async (req, res) => {
+router.get('/push', requireCapability('admin_override'), async (req, res) => {
   const payload = await buildBriefingPayload(req.executionContext);
   const sections = Array.isArray(payload?.sections) ? payload.sections : [];
   const emailCount = sections.find((s) => s.key === 'email')?.items?.length || 0;

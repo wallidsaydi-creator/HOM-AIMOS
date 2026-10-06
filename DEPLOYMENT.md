@@ -24,9 +24,8 @@ or later with:
 - macOS Keychain access;
 - Apple Command Line Tools, including `git`, `curl`, a compiler, and `make`;
 - Node.js 20, 24, or 26 and `npm`; the clean installer prefers Node 26;
-- PostgreSQL 18, reachable through the current OS account on port `5432`; the
-  account must be allowed to create the `aimos` database and restricted
-  `agent_runtime` role;
+- PostgreSQL 18 binaries; the installer creates an AIMOS-only cluster on
+  loopback port `55432` with SCRAM authentication and no Unix socket;
 - pgvector installed for that PostgreSQL 18 server; and
 - libsodium plus `pkg-config`/pkgconf.
 
@@ -76,8 +75,9 @@ The equivalent explicit manual path is:
 xcode-select --install              # only when Command Line Tools are absent
 # Install Homebrew from https://brew.sh when no compatible toolchain exists.
 brew bundle --file Brewfile
-brew services start postgresql@18
 npm ci
+PG_BIN="$(pg_config --bindir)"
+node scripts/db/secure-cluster.mjs --aimos-postgres-port 55432 --pg-bindir "$PG_BIN"
 ```
 
 `Brewfile` selects the supported major-version contract and Homebrew resolves
@@ -90,7 +90,9 @@ file.
 ## 2. Run Genesis
 
 ```sh
-npm run genesis:install -- --aimos-db aimos --aimos-port 9100
+node scripts/genesis-install.mjs --aimos-db aimos --aimos-port 9100 --aimos-postgres-port 55432
+node scripts/identity/onboard-agent.mjs --aimos-db aimos --aimos-port 9100 --aimos-postgres-port 55432
+node scripts/service/manage-user-service.mjs install --database aimos --port 9100 --postgres-port 55432 --postgres-bin "$PG_BIN"
 ```
 
 Before creating the database, Genesis:
@@ -101,7 +103,7 @@ Before creating the database, Genesis:
 3. verifies Node.js 20, 24, or 26, PostgreSQL 18, and pgvector availability; and
 4. verifies or installs the checksum-locked pgsodium `3.1.11` artifact set.
 
-It then creates the database and restricted role, applies every migration,
+It then creates the database and restricted roles, applies every migration,
 generates `architecture-authority.json`, provisions the housekeeper, appends
 the signed dependency/runtime-credential/calibration evidence, and ingests the
 eight Guide files through the real signed `/aimos/save` path.
@@ -116,7 +118,9 @@ npm run service:status
 ```
 
 `install-macos.sh` installs and starts AIMOS as the current user's persistent
-service after generic onboarding completes. It starts at login, restarts only after failure, and uses no root
+service after generic onboarding completes. Its portable launcher starts the
+private PostgreSQL cluster when needed before starting AIMOS. It starts at login,
+restarts only after failure, and uses no root
 privileges. The platform-neutral owner also renders a systemd user unit on
 Linux; unsupported platforms fail explicitly.
 

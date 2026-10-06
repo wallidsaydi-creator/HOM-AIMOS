@@ -1,7 +1,7 @@
 # AIMOS public architecture map
 
 Status: source-derived public runtime map
-Service census: 295 JavaScript services across 17 groups
+Service census: 296 JavaScript services across 17 groups
 
 This document describes the released AIMOS backend. It contains no deployment
 state, retained memory, private product roadmap, machine path, operator record,
@@ -54,6 +54,12 @@ signed client or local housekeeper
 PostgreSQL is the canonical store. The filesystem carries source code,
 machine-local keys protected by file permissions and Keychain custody, and
 generated authority metadata; it is not a second memory authority.
+The clean installer creates an AIMOS-only loopback PostgreSQL cluster with
+SCRAM authentication and no Unix socket. Ordinary reads use
+`aimos_service_reader`; signed agent enrollment uses the narrow
+`aimos_identity_writer`; canonical writes use `agent_runtime`. Genesis and
+migrations hold a separate offline administrator connection. The server
+checks password rejection, role attributes, and active RLS before listening.
 
 ## Public entrypoints
 

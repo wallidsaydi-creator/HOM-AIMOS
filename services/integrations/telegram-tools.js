@@ -24,6 +24,12 @@ export async function telegramSendMessage({ chatId, text, parseMode = null, useC
     expectedActorAgentId: useContext.actorAgentId,
     expectedArguments: authorizedArgs,
   });
+  const authorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'telegram_send_message',
+    endpoint: `${TELEGRAM_ORIGIN}/bot{credential}/sendMessage`,
+    useContext,
+  });
+  if (authorization.capability !== 'email') throw new Error('telegram_credential_capability_unknown');
   const credential = checkoutCachedCredential('telegram_bot_token');
   if (!credential) throw new Error('telegram_credential_not_enrolled');
   const body = {
@@ -42,6 +48,8 @@ export async function telegramSendMessage({ chatId, text, parseMode = null, useC
     requestAdmissionEventId: useContext.requestAdmissionEventId || null,
     requestAdmissionMutationHash: useContext.requestAdmissionMutationHash || null,
     autonomousActionEventId: useContext.autonomousActionEventId || null,
+    actorValidFromIso: useContext.actorValidFromIso || null,
+    toolActionArguments: useContext.toolActionArguments || null,
   });
   let response;
   let payload;
@@ -98,6 +106,12 @@ export async function telegramSendMessage({ chatId, text, parseMode = null, useC
 }
 
 export async function telegramGetUpdates({ limit = 20, useContext = {} } = {}) {
+  const authorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'telegram_get_updates',
+    endpoint: `${TELEGRAM_ORIGIN}/bot{credential}/getUpdates`,
+    useContext,
+  });
+  if (authorization.capability !== 'email') throw new Error('telegram_credential_capability_unknown');
   const credential = checkoutCachedCredential('telegram_bot_token');
   if (!credential) throw new Error('telegram_credential_not_enrolled');
   const capped = Math.min(Math.max(Number(limit) || 20, 1), 100);
@@ -112,6 +126,8 @@ export async function telegramGetUpdates({ limit = 20, useContext = {} } = {}) {
     requestAdmissionEventId: useContext.requestAdmissionEventId || null,
     requestAdmissionMutationHash: useContext.requestAdmissionMutationHash || null,
     autonomousActionEventId: useContext.autonomousActionEventId || null,
+    actorValidFromIso: useContext.actorValidFromIso || null,
+    toolActionArguments: useContext.toolActionArguments || null,
   });
   let response;
   let payload;

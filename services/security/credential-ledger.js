@@ -24,7 +24,13 @@ import {
 } from './agent-identity.js';
 import { agentPool as defaultPool } from '../../db/connection.js';
 import { signAsHousekeeper } from './housekeeper-signer.js';
-import { AIMOS_COMPANY_ID, AIMOS_RUNTIME_CREDENTIAL_SERVICE } from '../core/runtime-config.js';
+import {
+  AIMOS_COMPANY_ID,
+  AIMOS_RUNTIME_CREDENTIAL_SERVICE,
+  AIMOS_SERVICE_READER_CREDENTIAL_SERVICE,
+  AIMOS_IDENTITY_WRITER_CREDENTIAL_SERVICE,
+} from '../core/runtime-config.js';
+import { getPermissions } from '../core/permissions.js';
 import { logEvent, readVerifiedEventById } from '../observe/event-ledger.js';
 import { readVerifiedRequestReceiptById } from './request-receipt-ledger.js';
 
@@ -40,6 +46,230 @@ const ALLOWED_EVENT_TYPES = Object.freeze([
 ]);
 const USE_TERMINAL_TYPES = new Set(['USE_COMPLETED', 'USE_FAILED']);
 const MAX_RECOVERY_SLOTS = 10_000;
+const DATABASE_GENESIS_CREDENTIAL_REASONS = Object.freeze(new Map([
+  [AIMOS_RUNTIME_CREDENTIAL_SERVICE, 'genesis_runtime_database_role'],
+  [AIMOS_SERVICE_READER_CREDENTIAL_SERVICE, 'genesis_service_reader_database_role'],
+  [AIMOS_IDENTITY_WRITER_CREDENTIAL_SERVICE, 'genesis_identity_writer_database_role'],
+]));
+
+export function credentialUseCapability(operation, endpoint, claimedCapability = null) {
+  const op = String(operation || '');
+  const url = new URL(String(endpoint || ''));
+  if (url.username || url.password || url.search || url.hash || url.port) {
+    throw new Error('credential_use_endpoint_not_template');
+  }
+  let capability = null;
+  if (op === 'stripe_api_read' && url.origin === 'https://api.stripe.com' && url.pathname.startsWith('/v1/')) {
+    capability = 'stripe';
+  } else if (op === 'perplexity_web_search' && url.toString() === 'https://api.perplexity.ai/chat/completions') {
+    capability = 'internet';
+  } else if (op === 'brave_web_search' && url.toString() === 'https://api.search.brave.com/res/v1/web/search') {
+    capability = 'internet';
+  } else if (op.startsWith('x_') && ['https://api.x.com', 'https://api.twitter.com'].includes(url.origin)) {
+    if (op === 'x_oauth2_client_credentials' && url.pathname === '/oauth2/token') capability = 'x';
+    else if (op === 'x_search_recent' && url.pathname === '/2/tweets/search/recent') capability = 'x';
+    else if (op === 'x_api_read' && url.pathname.startsWith('/2/users/')) capability = 'x';
+    else if (['x_post_tweet', 'x_reply_to_tweet', 'x_quote_tweet'].includes(op) && url.pathname === '/2/tweets') capability = 'x';
+  } else if (op.startsWith('telegram_') && url.origin === 'https://api.telegram.org') {
+    const pathname = decodeURIComponent(url.pathname);
+    if (op === 'telegram_send_message' && pathname === '/bot{credential}/sendMessage') capability = 'email';
+    else if (op === 'telegram_get_updates' && pathname === '/bot{credential}/getUpdates') capability = 'email';
+  } else if (url.protocol === 'aimos-local:') {
+    if (op === 'integration_status' && url.host === 'integrations' && url.pathname === '/status') capability = 'admin_override';
+    else if (op === 'imessage_list_chats' && url.host === 'messages' && url.pathname === '/chats') capability = 'email';
+    else if (op === 'imessage_search_contact' && url.host === 'messages' && url.pathname === '/search-contact') capability = 'email';
+    else if (op === 'imessage_request_access' && url.host === 'messages' && url.pathname === '/request-access') capability = 'email';
+    else if (op === 'imessage_send' && url.host === 'messages' && url.pathname === '/send') capability = 'email';
+    else if (op === 'contacts_search' && url.host === 'contacts' && url.pathname === '/search') capability = 'email';
+  } else if (op.startsWith('github.') && url.origin === 'https://api.github.com') {
+    const githubPaths = {
+      'github.repos.list': '/user/repos',
+      'github.issues.search': '/search/issues',
+      'github.issues.mine': '/search/issues',
+      'github.pull_requests.mine': '/search/issues',
+    };
+    if (githubPaths[op] === url.pathname) capability = 'github';
+  } else if (op.startsWith('salesforce.') && url.protocol === 'https:'
+      && (url.hostname === 'salesforce.com' || url.hostname.endsWith('.salesforce.com')
+        || url.hostname === 'force.com' || url.hostname.endsWith('.force.com')) && !url.port
+      && op === 'salesforce.objects.list' && url.pathname === '/services/data/v60.0/sobjects') {
+    capability = 'salesforce';
+  } else if (op.startsWith('google.api.') && url.origin === 'https://www.googleapis.com') {
+    const pathname = url.pathname;
+    if (pathname.startsWith('/gmail/v1/')) capability = 'email';
+    else if (pathname.startsWith('/calendar/v3/')) capability = 'email';
+    else if (pathname.startsWith('/drive/v3/') || pathname.startsWith('/docs/v1/') || pathname.startsWith('/sheets/v4/')) capability = 'drive';
+    else if (pathname.startsWith('/youtube/v3/')) capability = 'youtube';
+    else if (pathname === '/oauth2/v2/userinfo') capability = 'google_account';
+  } else if (op.startsWith('google.oauth.refresh.') && url.toString() === 'https://oauth2.googleapis.com/token') {
+    if (['email', 'drive', 'youtube', 'google_account'].includes(claimedCapability)) capability = claimedCapability;
+  }
+  if (!capability && (op.startsWith('google.') || op.startsWith('stripe_')
+      || op.startsWith('x_') || op.startsWith('telegram_')
+      || op.startsWith('github.') || op.startsWith('salesforce.')
+      || op.endsWith('_web_search') || op.startsWith('imessage_')
+      || op.startsWith('contacts_') || op === 'integration_status')) {
+    throw new Error('credential_use_capability_unknown');
+  }
+  if (capability && claimedCapability && claimedCapability !== capability) {
+    throw new Error('credential_use_capability_mismatch');
+  }
+  return capability;
+}
+
+function toolCapability(tool) {
+  const name = String(tool || '');
+  if (name.startsWith('gmail_') || name.startsWith('calendar_')) return 'email';
+  if (name.startsWith('drive_') || name === 'docs_read' || name === 'sheets_read') return 'drive';
+  if (name.startsWith('youtube_')) return 'youtube';
+  if (name === 'google_profile') return 'google_account';
+  if (name.startsWith('stripe_')) return 'stripe';
+  if (name.startsWith('x_')) return 'x';
+  if (name.startsWith('telegram_')) return 'email';
+  if (name.startsWith('github_')) return 'github';
+  if (name.startsWith('salesforce_')) return 'salesforce';
+  if (name === 'web_search') return 'internet';
+  if (name.startsWith('imessage_') || name === 'contacts_search') return 'email';
+  if (name === 'integrations_status') return 'admin_override';
+  return null;
+}
+
+function toolAuthorizesCredentialOperation(tool, operation, endpoint) {
+  const pathname = new URL(endpoint).pathname;
+  const name = String(tool || '');
+  const op = String(operation || '');
+  if (op.startsWith('google.oauth.refresh.')) return toolCapability(name) != null;
+  if (name === 'web_search') return (op === 'perplexity_web_search' && pathname === '/chat/completions')
+    || (op === 'brave_web_search' && pathname === '/res/v1/web/search');
+  if (name === 'imessage_chats') return op === 'imessage_list_chats' && endpoint === 'aimos-local://messages/chats';
+  if (name === 'imessage_search_contact') return op === 'imessage_search_contact' && endpoint === 'aimos-local://messages/search-contact';
+  if (name === 'imessage_request_access') return op === 'imessage_request_access' && endpoint === 'aimos-local://messages/request-access';
+  if (name === 'imessage_send') return op === 'imessage_send' && endpoint === 'aimos-local://messages/send';
+  if (name === 'contacts_search') return op === 'contacts_search' && endpoint === 'aimos-local://contacts/search';
+  if (name === 'integrations_status') return op === 'integration_status' && endpoint === 'aimos-local://integrations/status';
+  if (name === 'x_search') return (op === 'x_search_recent' && pathname === '/2/tweets/search/recent')
+    || (op === 'x_oauth2_client_credentials' && pathname === '/oauth2/token');
+  const xWrites = { x_post: 'x_post_tweet', x_reply: 'x_reply_to_tweet', x_quote: 'x_quote_tweet' };
+  if (Object.hasOwn(xWrites, name)) return (op === xWrites[name] && pathname === '/2/tweets')
+    || (op === 'x_oauth2_client_credentials' && pathname === '/oauth2/token');
+  if (name === 'telegram_send') return op === 'telegram_send_message'
+    && decodeURIComponent(pathname) === '/bot{credential}/sendMessage';
+  if (name === 'github_list_repos') return op === 'github.repos.list' && pathname === '/user/repos';
+  if (name === 'github_search_issues') return op === 'github.issues.search' && pathname === '/search/issues';
+  if (name === 'salesforce_list_objects') return op === 'salesforce.objects.list' && pathname === '/services/data/v60.0/sobjects';
+  if (name === 'gmail_inbox' || name === 'gmail_search') return op === 'google.api.get' && pathname.startsWith('/gmail/v1/users/me/messages');
+  if (name === 'gmail_send') return op === 'google.api.post' && pathname === '/gmail/v1/users/me/messages/send';
+  if (name === 'gmail_reply') return op.startsWith('google.api.') && pathname.startsWith('/gmail/v1/users/me/messages');
+  if (name === 'calendar_today' || name === 'calendar_events') return op === 'google.api.get' && pathname === '/calendar/v3/calendars/primary/events';
+  if (name === 'calendar_create') return op === 'google.api.post' && pathname === '/calendar/v3/calendars/primary/events';
+  if (name === 'drive_list') return op === 'google.api.get' && pathname === '/drive/v3/files';
+  if (name === 'drive_read') return op === 'google.api.get' && pathname.startsWith('/drive/v3/files/');
+  if (name === 'docs_read') return op === 'google.api.get' && pathname.startsWith('/docs/v1/documents/');
+  if (name === 'sheets_read') return op === 'google.api.get' && pathname.startsWith('/sheets/v4/spreadsheets/');
+  if (name === 'google_profile') return op === 'google.api.get' && pathname === '/oauth2/v2/userinfo';
+  if (name === 'youtube_search') return op === 'google.api.get' && pathname === '/youtube/v3/search';
+  if (name === 'youtube_channel') return op === 'google.api.get'
+    && (pathname === '/youtube/v3/channels' || pathname === '/youtube/v3/search');
+  const stripePaths = {
+    stripe_account_summary: '/v1/account',
+    stripe_list_customers: '/v1/customers',
+    stripe_list_subscriptions: '/v1/subscriptions',
+    stripe_list_payment_intents: '/v1/payment_intents',
+  };
+  if (Object.hasOwn(stripePaths, name)) return op === 'stripe_api_read' && pathname === stripePaths[name];
+  return false;
+}
+
+function actionArgumentsMatchEndpoint(tool, args, endpoint) {
+  const name = String(tool || '');
+  const pathname = new URL(endpoint).pathname;
+  const valueAfter = (prefix) => pathname.startsWith(prefix)
+    ? decodeURIComponent(pathname.slice(prefix.length)) : null;
+  if (name === 'drive_read') return valueAfter('/drive/v3/files/') === String(args.file_id || '');
+  if (name === 'docs_read') return valueAfter('/docs/v1/documents/') === String(args.document_id || '');
+  if (name === 'sheets_read') {
+    const prefix = '/sheets/v4/spreadsheets/';
+    if (!pathname.startsWith(prefix)) return false;
+    const rest = pathname.slice(prefix.length);
+    const separator = rest.indexOf('/values/');
+    return separator > 0
+      && decodeURIComponent(rest.slice(0, separator)) === String(args.spreadsheet_id || '')
+      && decodeURIComponent(rest.slice(separator + '/values/'.length)) === String(args.range || '');
+  }
+  if (name === 'gmail_reply' && pathname !== '/gmail/v1/users/me/messages/send') {
+    return valueAfter('/gmail/v1/users/me/messages/') === String(args.messageId || '');
+  }
+  return true;
+}
+
+function actionArgumentsMatchTarget(tool, args, operation, endpoint, requestTarget) {
+  if (String(operation).startsWith('google.oauth.refresh.')) return true;
+  const name = String(tool || '');
+  if (!['gmail_inbox', 'gmail_search', 'youtube_search', 'youtube_channel', 'drive_list', 'calendar_events', 'calendar_today'].includes(name)) return true;
+  if (!requestTarget) return false;
+  const target = new URL(requestTarget);
+  if (`${target.origin}${target.pathname}` !== endpoint) return false;
+  const query = target.searchParams;
+  if (name === 'gmail_inbox' && target.pathname === '/gmail/v1/users/me/messages') {
+    return query.get('q') === String(args.filter || 'in:inbox')
+      && query.get('maxResults') === String(args.max ?? 10);
+  }
+  if (name === 'gmail_search' && target.pathname === '/gmail/v1/users/me/messages') {
+    return query.get('q') === String(args.query || '')
+      && query.get('maxResults') === String(args.max ?? 10);
+  }
+  if (name === 'youtube_search') {
+    return query.get('q') === String(args.query || '')
+      && query.get('maxResults') === String(args.max ?? 10)
+      && query.get('type') === 'video';
+  }
+  if (name === 'youtube_channel') {
+    if (target.pathname === '/youtube/v3/channels') {
+      return query.get('part') === 'snippet,statistics'
+        && Boolean(query.get('id'))
+        && [...query.keys()].sort().join(',') === 'id,part';
+    }
+    return target.pathname === '/youtube/v3/search'
+      && Boolean(query.get('channelId'))
+      && query.get('maxResults') === '10'
+      && query.get('order') === 'date'
+      && query.get('type') === 'video'
+      && query.get('part') === 'snippet'
+      && [...query.keys()].sort().join(',') === 'channelId,maxResults,order,part,type';
+  }
+  if (name === 'drive_list') {
+    return query.get('q') === String(args.query || 'trashed=false')
+      && query.get('pageSize') === String(args.max ?? 20);
+  }
+  if (name === 'calendar_events') {
+    const timeMin = new Date(query.get('timeMin')).getTime();
+    return query.get('maxResults') === String(args.max ?? 20)
+      && query.get('singleEvents') === 'true'
+      && query.get('orderBy') === 'startTime'
+      && Number.isFinite(timeMin)
+      && Math.abs(Date.now() - timeMin) <= 120_000
+      && [...query.keys()].sort().join(',') === 'maxResults,orderBy,singleEvents,timeMin';
+  }
+  if (name === 'calendar_today') {
+    const timeMin = new Date(query.get('timeMin'));
+    const timeMax = new Date(query.get('timeMax'));
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    const nextMidnight = new Date(timeMin);
+    nextMidnight.setDate(nextMidnight.getDate() + 1);
+    return query.get('singleEvents') === 'true'
+      && query.get('orderBy') === 'startTime'
+      && Number.isFinite(timeMin.getTime()) && Number.isFinite(timeMax.getTime())
+      && timeMin.getHours() === 0 && timeMin.getMinutes() === 0
+      && timeMin.getSeconds() === 0 && timeMin.getMilliseconds() === 0
+      && timeMax.getTime() === nextMidnight.getTime()
+      && (timeMin.getTime() === midnight.getTime()
+        || (Date.now() - midnight.getTime() < 120_000
+          && midnight.getTime() - timeMin.getTime() <= 25 * 60 * 60 * 1000))
+      && [...query.keys()].sort().join(',') === 'orderBy,singleEvents,timeMax,timeMin';
+  }
+  return true;
+}
 
 function tsBuf(ts) { return Buffer.from(String(ts), 'utf8'); }
 function nonceBuf(nonce) { return Buffer.from(String(nonce), 'utf8'); }
@@ -352,6 +582,72 @@ export function createCredentialLedger(deps = {}) {
   const verifyRequestAuthority = deps.verifyRequestAuthorityFn || readVerifiedRequestReceiptById;
   const verifyAutonomousEvent = deps.verifyAutonomousEventFn || readVerifiedEventById;
   const appendAutonomousAuthority = deps.appendAutonomousAuthorityFn || logEvent;
+  const getPermissionsFn = deps.getPermissionsFn || getPermissions;
+
+  async function authorizeCredentialUse({ operation, endpoint, requestTarget = null, requiredCapability = null, useContext = {} }) {
+    const capability = credentialUseCapability(operation, endpoint, requiredCapability);
+    if (!capability) return { capability: null };
+    const subject = String(useContext.actorAgentId || useContext.subjectAgentId || '').trim();
+    if (!subject) throw new Error('credential_use_actor_missing');
+    if (useContext.requestReceiptId) {
+      if (!useContext.requestReceiptMutationHash || !useContext.requestAdmissionEventId || !useContext.requestAdmissionMutationHash) {
+        throw new Error('credential_use_request_admission_incomplete');
+      }
+      const requestAuthority = await verifyRequestAuthority({
+        companyId: AIMOS_COMPANY_ID,
+        requestReceiptId: useContext.requestReceiptId,
+        requestReceiptMutationHash: useContext.requestReceiptMutationHash,
+        actorAgentId: subject,
+      });
+      if (!useContext.actorValidFromIso
+          || new Date(useContext.actorValidFromIso).toISOString() !== requestAuthority.actorValidFromIso) {
+        throw new Error('credential_use_actor_epoch_mismatch');
+      }
+      const admission = await verifyAutonomousEvent(useContext.requestAdmissionEventId, AIMOS_COMPANY_ID);
+      const metadata = typeof admission.metadata === 'string' ? JSON.parse(admission.metadata) : admission.metadata;
+      if (admission.signer_agent_id !== 'housekeeper'
+          || admission.operation !== 'request_admission_verified'
+          || String(admission.key) !== String(useContext.requestReceiptId)
+          || admission.agent_id !== subject
+          || admission.authority_kind !== 'housekeeper_observation_of_verified_request'
+          || Buffer.from(admission.mutation_hash || []).toString('hex') !== String(useContext.requestAdmissionMutationHash)
+          || metadata?.request_receipt_id !== String(useContext.requestReceiptId)
+          || metadata?.request_receipt_mutation_hash !== String(useContext.requestReceiptMutationHash)
+          || metadata?.request_hash !== requestAuthority.requestHash
+          || metadata?.actor_agent_id !== subject
+          || new Date(metadata?.actor_valid_from).toISOString() !== requestAuthority.actorValidFromIso) {
+        throw new Error('credential_use_request_admission_invalid');
+      }
+      const permissions = await getPermissionsFn(subject, AIMOS_COMPANY_ID, {
+        subjectValidFromIso: requestAuthority.actorValidFromIso,
+      });
+      if (permissions?.[capability] !== true) throw new Error(`credential_use_capability_denied:${capability}`);
+      return { capability, requestAuthority, admission };
+    }
+    if (subject !== 'housekeeper' || !useContext.autonomousActionEventId) {
+      throw new Error('credential_use_verified_authority_required');
+    }
+    const event = await verifyAutonomousEvent(useContext.autonomousActionEventId, AIMOS_COMPANY_ID);
+    const metadata = typeof event.metadata === 'string' ? JSON.parse(event.metadata) : event.metadata;
+    const actionArgs = useContext.toolActionArguments;
+    const actionArgsHash = actionArgs && typeof actionArgs === 'object' && !Array.isArray(actionArgs)
+      ? createHash('sha256').update(canonicalJson(actionArgs), 'utf8').digest('hex')
+      : null;
+    if (event.signer_agent_id !== 'housekeeper'
+        || event.operation !== 'tool_execution_started'
+        || metadata?.schema !== 'aimos.tool-action/v1'
+        || metadata?.dispatch_allowed !== true
+        || metadata?.actor_agent_id !== 'housekeeper'
+        || !actionArgsHash
+        || metadata?.args_sha256 !== actionArgsHash
+        || toolCapability(metadata?.tool) !== capability
+        || !toolAuthorizesCredentialOperation(metadata?.tool, operation, endpoint)
+        || !actionArgumentsMatchEndpoint(metadata?.tool, actionArgs, endpoint)
+        || !actionArgumentsMatchTarget(metadata?.tool, actionArgs, operation, endpoint, requestTarget)) {
+      throw new Error('credential_use_autonomous_action_invalid');
+    }
+    return { capability, autonomousEvent: event };
+  }
 
   async function beginCredentialCustodyMutation({
     serviceName,
@@ -759,9 +1055,8 @@ export function createCredentialLedger(deps = {}) {
       if (body.genesis_root === true && (
         !isGenesis
         || eventType !== 'STORE'
-        || serviceName !== AIMOS_RUNTIME_CREDENTIAL_SERVICE
-        || slotId !== `com.aimos.credentials.${AIMOS_RUNTIME_CREDENTIAL_SERVICE}`
-        || body.reason !== 'genesis_runtime_database_role'
+        || DATABASE_GENESIS_CREDENTIAL_REASONS.get(serviceName) !== body.reason
+        || slotId !== `com.aimos.credentials.${serviceName}`
         || body.operator !== 'housekeeper'
         || body.signer_agent_id !== 'housekeeper'
       )) {
@@ -887,13 +1182,17 @@ export function createCredentialLedger(deps = {}) {
     effectiveMutationHash,
     operation,
     endpoint,
+    requestTarget = null,
     requestHash,
     subjectAgentId = 'housekeeper',
+    actorValidFromIso = null,
+    requiredCapability = null,
     requestReceiptId = null,
     requestReceiptMutationHash = null,
     requestAdmissionEventId = null,
     requestAdmissionMutationHash = null,
     autonomousActionEventId = null,
+    toolActionArguments = null,
     useGroupId = null,
   }) {
     const normalizedEndpoint = String(endpoint || '').trim();
@@ -930,7 +1229,8 @@ export function createCredentialLedger(deps = {}) {
         ? JSON.parse(admission.metadata)
         : admission.metadata;
       if (
-        admission.operation !== 'request_admission_verified'
+        admission.signer_agent_id !== 'housekeeper'
+        || admission.operation !== 'request_admission_verified'
         || String(admission.key) !== String(requestReceiptId)
         || admission.agent_id !== subject
         || admission.authority_kind !== 'housekeeper_observation_of_verified_request'
@@ -956,6 +1256,22 @@ export function createCredentialLedger(deps = {}) {
       if (event.signer_agent_id !== 'housekeeper') throw new Error('credential_use_parent_event_invalid');
       verifiedParentEventId = String(event.id || autonomousActionEventId);
     }
+    await authorizeCredentialUse({
+      operation,
+      endpoint: normalizedEndpoint,
+      requestTarget,
+      requiredCapability,
+      useContext: {
+        actorAgentId: subject,
+        actorValidFromIso,
+        requestReceiptId,
+        requestReceiptMutationHash,
+        requestAdmissionEventId,
+        requestAdmissionMutationHash,
+        autonomousActionEventId,
+        toolActionArguments,
+      },
+    });
     const verified = await readVerifiedSlotChain(slotId);
     const effective = verified.effectiveStore;
     if (
@@ -1205,6 +1521,7 @@ export function createCredentialLedger(deps = {}) {
     getLatestStoreForSlot,
     getLatestMutationHash,
     reserveCredentialUse,
+    authorizeCredentialUse,
     finalizeCredentialUse,
     findOpenCredentialUses,
     reconcileOpenCredentialUses,

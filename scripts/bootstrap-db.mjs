@@ -23,6 +23,7 @@ import { randomBytes } from 'node:crypto';
 // Usage (standalone): node scripts/bootstrap-db.mjs [--aimos-db aimos]
 
 import pg from 'pg';
+import { makePostgresScramVerifier } from './db/scram-verifier.mjs';
 import {
   AIMOS_RUNTIME_CREDENTIAL_SERVICE,
   AIMOS_RUNTIME_ROLE,
@@ -56,6 +57,9 @@ function withMaintenanceDb(origUrl, newDb) {
 }
 
 function poolConfig(url) {
+  if (url && typeof url === 'object') {
+    return { ...url, connectionTimeoutMillis: 5000 };
+  }
   const u = parseUrl(url);
   const sslmode = u?.searchParams?.get('sslmode') || '';
   const useSsl = ['require', 'verify-ca', 'verify-full', 'prefer'].includes(sslmode);
@@ -91,9 +95,11 @@ function sqlLiteral(value) {
 
 async function ensureRole(pool, password) {
   const found = await pool.query('SELECT 1 FROM pg_roles WHERE rolname = $1', [ROLE_NAME]);
+  const verifier = makePostgresScramVerifier(password);
+  const restricted = 'LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOREPLICATION';
   const sql = found.rowCount > 0
-    ? `ALTER ROLE ${ROLE_NAME} WITH LOGIN PASSWORD ${sqlLiteral(password)}`
-    : `CREATE ROLE ${ROLE_NAME} WITH LOGIN PASSWORD ${sqlLiteral(password)}`;
+    ? `ALTER ROLE ${ROLE_NAME} WITH ${restricted} PASSWORD ${sqlLiteral(verifier)}`
+    : `CREATE ROLE ${ROLE_NAME} WITH ${restricted} PASSWORD ${sqlLiteral(verifier)}`;
   try {
     await pool.query(sql);
     return found.rowCount > 0 ? { existed: true, rotated: true } : { created: true };
@@ -137,7 +143,7 @@ async function assertBootstrapAuthority(pool, dbName) {
  * Core DB + role bootstrap logic. Can be called from CLI or from genesis-install.mjs
  * Returns summary object.
  */
-export async function bootstrapDatabase({ databaseUrl, databaseName } = {}) {
+export async function bootstrapDatabase({ databaseUrl, databaseName, maintenanceConfig = null } = {}) {
   const dbName = validateBootstrapDatabaseName(databaseName || resolveAimosDatabaseName());
   const url = databaseUrl || resolveAimosDatabaseUrl();
   const targetName = parseUrl(url)?.pathname?.slice(1);
@@ -145,8 +151,12 @@ export async function bootstrapDatabase({ databaseUrl, databaseName } = {}) {
     throw new Error(`Bootstrap target mismatch: URL names ${targetName}, expected ${dbName}`);
   }
 
-  const postgresUrl = withMaintenanceDb(url, 'postgres');
-  const templateUrl = withMaintenanceDb(url, 'template1');
+  const postgresUrl = maintenanceConfig
+    ? { ...maintenanceConfig, database: 'postgres' }
+    : withMaintenanceDb(url, 'postgres');
+  const templateUrl = maintenanceConfig
+    ? { ...maintenanceConfig, database: 'template1' }
+    : withMaintenanceDb(url, 'template1');
 
   if (!postgresUrl && !templateUrl) {
     throw new Error('Invalid AIMOS database target');
@@ -158,7 +168,9 @@ export async function bootstrapDatabase({ databaseUrl, databaseName } = {}) {
   console.log('==================');
   console.log(`Target DB:     ${dbName}`);
   console.log(`Runtime role:  ${ROLE_NAME} (credential: versioned Keychain)`);
-  console.log(`Maintenance:   ${scrubPassword(postgresUrl || templateUrl)}`);
+  console.log(`Maintenance:   ${maintenanceConfig
+    ? `${maintenanceConfig.user}@${maintenanceConfig.host}:${maintenanceConfig.port}/postgres`
+    : scrubPassword(postgresUrl || templateUrl)}`);
   console.log('');
 
   let result;
@@ -166,11 +178,13 @@ export async function bootstrapDatabase({ databaseUrl, databaseName } = {}) {
     await assertBootstrapAuthority(maintenancePool, dbName);
     let runtimeCredential = readCredentialSync(AIMOS_RUNTIME_CREDENTIAL_SERVICE);
     if (!runtimeCredential) {
-      runtimeCredential = storeCredentialSync(
+      storeCredentialSync(
         AIMOS_RUNTIME_CREDENTIAL_SERVICE,
         randomBytes(32).toString('base64url'),
       );
+      runtimeCredential = readCredentialSync(AIMOS_RUNTIME_CREDENTIAL_SERVICE);
     }
+    if (!runtimeCredential?.value) throw new Error('runtime role credential readback failed');
     // Establish the restricted role before creating the database. Authority
     // and connectivity were proven before the Keychain pointer moved.
     const role = await ensureRole(maintenancePool, runtimeCredential.value);
@@ -233,14 +247,20 @@ export async function bootstrapDatabase({ databaseUrl, databaseName } = {}) {
  * effect, so Genesis synchronizes the cryptographic Keychain value before
  * loading db/connection.js in both cases.
  */
-export async function synchronizeRuntimeRoleCredential({ databaseUrl, databaseName } = {}) {
+export async function synchronizeRuntimeRoleCredential({
+  databaseUrl, databaseName, maintenanceConfig = null,
+} = {}) {
   const dbName = validateBootstrapDatabaseName(databaseName || resolveAimosDatabaseName());
   const url = databaseUrl || resolveAimosDatabaseUrl();
   const runtimeCredential = readCredentialSync(AIMOS_RUNTIME_CREDENTIAL_SERVICE);
   if (!runtimeCredential) throw new Error('runtime role credential missing from Keychain');
 
-  const postgresUrl = withMaintenanceDb(url, 'postgres');
-  const templateUrl = withMaintenanceDb(url, 'template1');
+  const postgresUrl = maintenanceConfig
+    ? { ...maintenanceConfig, database: 'postgres' }
+    : withMaintenanceDb(url, 'postgres');
+  const templateUrl = maintenanceConfig
+    ? { ...maintenanceConfig, database: 'template1' }
+    : withMaintenanceDb(url, 'template1');
   let role;
   try {
     role = await withPool(postgresUrl, (maintenancePool) => ensureRole(maintenancePool, runtimeCredential.value));

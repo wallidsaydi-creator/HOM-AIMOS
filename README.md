@@ -108,7 +108,7 @@ Useful entry points:
 
 HOM-AIMOS is a complete persistent-memory backend, not a provenance layer
 attached to a vector store. Its source-derived architecture binds a
-current 295-service census and declares six critical pipelines containing 115
+current 296-service census and declares six critical pipelines containing 115
 service connections. SAVE exposes one fixed 15-stage owner; RECALL exposes its
 eight principal native execution boundaries.
 
@@ -317,7 +317,7 @@ runtime, security, installer, dependency, and clean-Genesis behavior. Historical
 paper artifacts and benchmark aggregates remain available as dated research
 records but do not constrain current source bytes.
 
-The architecture manifest mechanically binds the current 295-service census.
+The architecture manifest mechanically binds the current 296-service census.
 That number is an inventory fact, not a performance claim.
 
 ## Security and retention invariants
@@ -400,14 +400,21 @@ For an explicit manual dependency path:
 xcode-select --install              # only when Command Line Tools are absent
 # Install Homebrew from https://brew.sh when no compatible toolchain exists.
 brew bundle --file Brewfile
-brew services start postgresql@18
 npm ci
-npm run genesis:install -- --aimos-db aimos --aimos-port 9100
-node scripts/identity/onboard-agent.mjs --aimos-db aimos --aimos-port 9100
+PG_BIN="$(pg_config --bindir)"
+node scripts/db/secure-cluster.mjs --aimos-postgres-port 55432 --pg-bindir "$PG_BIN"
+node scripts/genesis-install.mjs --aimos-db aimos --aimos-port 9100 --aimos-postgres-port 55432
+node scripts/identity/onboard-agent.mjs --aimos-db aimos --aimos-port 9100 --aimos-postgres-port 55432
+node scripts/service/manage-user-service.mjs install --database aimos --port 9100 --postgres-port 55432 --postgres-bin "$PG_BIN"
 ```
 
 The installer completes Genesis, generic agent onboarding, and persistent user
-service installation.
+service installation. It creates an AIMOS-only PostgreSQL cluster under the
+installation's local state directory. The cluster listens on loopback port
+55432, requires SCRAM passwords, and has no Unix socket. AIMOS serves through
+restricted reader, identity writer, and canonical writer roles; offline
+migrations use a separate administrator connection. No external volume is
+required for installation.
 Check it with:
 
 ```sh

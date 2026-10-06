@@ -172,20 +172,14 @@ function handleServiceError(res, error, fallbackMessage, next) {
 
 // ─── WEB ──────────────────────────────────────────────────────────────────────
 
-router.post('/web/search', async (req, res, next) => {
+router.post('/web/search', requireCapability('internet'), async (req, res, next) => {
   const { query, maxResults } = req.body || {};
   if (!query) return res.status(400).json({ success: false, error: 'query is required' });
   try {
     const result = await searchWeb({
       query,
       maxResults: maxResults || 5,
-      useContext: {
-        actorAgentId: req.executionContext?.actorAgentId,
-        requestReceiptId: req.executionContext?.requestReceiptId,
-        requestReceiptMutationHash: req.executionContext?.requestReceiptMutationHash,
-        requestAdmissionEventId: req.executionContext?.requestAdmissionEventId,
-        requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash,
-      },
+      useContext: req.executionContext,
     });
     res.json({ success: true, ...result });
   } catch (error) {
@@ -194,7 +188,7 @@ router.post('/web/search', async (req, res, next) => {
   }
 });
 
-router.get('/x/search', async (req, res, next) => {
+router.get('/x/search', requireCapability('x'), async (req, res, next) => {
   const query = req.query.q || req.query.query;
   if (!query) return res.status(400).json({ success: false, error: 'q is required' });
   try {
@@ -214,7 +208,7 @@ router.get('/x/search', async (req, res, next) => {
   }
 });
 
-router.get('/x/profile', async (req, res, next) => {
+router.get('/x/profile', requireCapability('x'), async (req, res, next) => {
   try {
     const result = await xGetMyProfile(req.executionContext);
     res.json(result);
@@ -228,7 +222,7 @@ router.get('/x/profile', async (req, res, next) => {
   }
 });
 
-router.get('/x/timeline', async (req, res, next) => {
+router.get('/x/timeline', requireCapability('x'), async (req, res, next) => {
   const max = Number(req.query.max || req.query.maxResults || 20);
   try {
     const result = await xGetMyTimeline({ max, useContext: req.executionContext });
@@ -310,33 +304,21 @@ router.post('/x/quote', requireCapability('x'), async (req, res, next) => {
   }
 });
 
-router.get('/stripe/account', async (req, res, next) => {
+router.get('/stripe/account', requireCapability('stripe'), async (req, res, next) => {
   try {
-    const result = await stripeAccountSummary({
-      actorAgentId: req.executionContext?.actorAgentId,
-      requestReceiptId: req.executionContext?.requestReceiptId,
-      requestReceiptMutationHash: req.executionContext?.requestReceiptMutationHash,
-      requestAdmissionEventId: req.executionContext?.requestAdmissionEventId,
-      requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash,
-    });
+    const result = await stripeAccountSummary(req.executionContext);
     res.json({ success: true, ...result });
   } catch (error) {
     handleServiceError(res, error, 'Stripe credential is not enrolled in the signed Keychain lane.', next);
   }
 });
 
-router.get('/stripe/customers', async (req, res, next) => {
+router.get('/stripe/customers', requireCapability('stripe'), async (req, res, next) => {
   try {
     const result = await stripeListCustomers({
       limit: Number(req.query.limit) || 20,
       email: String(req.query.email || ''),
-      useContext: {
-        actorAgentId: req.executionContext?.actorAgentId,
-        requestReceiptId: req.executionContext?.requestReceiptId,
-        requestReceiptMutationHash: req.executionContext?.requestReceiptMutationHash,
-        requestAdmissionEventId: req.executionContext?.requestAdmissionEventId,
-        requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash,
-      },
+      useContext: req.executionContext,
     });
     res.json({ success: true, ...result });
   } catch (error) {
@@ -344,18 +326,12 @@ router.get('/stripe/customers', async (req, res, next) => {
   }
 });
 
-router.get('/stripe/subscriptions', async (req, res, next) => {
+router.get('/stripe/subscriptions', requireCapability('stripe'), async (req, res, next) => {
   try {
     const result = await stripeListSubscriptions({
       limit: Number(req.query.limit) || 20,
       status: String(req.query.status || 'all'),
-      useContext: {
-        actorAgentId: req.executionContext?.actorAgentId,
-        requestReceiptId: req.executionContext?.requestReceiptId,
-        requestReceiptMutationHash: req.executionContext?.requestReceiptMutationHash,
-        requestAdmissionEventId: req.executionContext?.requestAdmissionEventId,
-        requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash,
-      },
+      useContext: req.executionContext,
     });
     res.json({ success: true, ...result });
   } catch (error) {
@@ -363,17 +339,11 @@ router.get('/stripe/subscriptions', async (req, res, next) => {
   }
 });
 
-router.get('/stripe/payment-intents', async (req, res, next) => {
+router.get('/stripe/payment-intents', requireCapability('stripe'), async (req, res, next) => {
   try {
     const result = await stripeListPaymentIntents({
       limit: Number(req.query.limit) || 20,
-      useContext: {
-        actorAgentId: req.executionContext?.actorAgentId,
-        requestReceiptId: req.executionContext?.requestReceiptId,
-        requestReceiptMutationHash: req.executionContext?.requestReceiptMutationHash,
-        requestAdmissionEventId: req.executionContext?.requestAdmissionEventId,
-        requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash,
-      },
+      useContext: req.executionContext,
     });
     res.json({ success: true, ...result });
   } catch (error) {
@@ -381,9 +351,9 @@ router.get('/stripe/payment-intents', async (req, res, next) => {
   }
 });
 
-router.get('/integrations/status', async (req, res, next) => {
+router.get('/integrations/status', requireCapability('admin_override'), async (req, res, next) => {
   try {
-    const result = await listIntegrationStatus();
+    const result = await listIntegrationStatus(req.executionContext);
     res.json({ success: true, providers: result });
   } catch (error) {
     error.statusCode = 500;
@@ -415,18 +385,12 @@ router.post('/telegram/send', requireCapability('email'), async (req, res, next)
   }
 });
 
-router.get('/telegram/recent', async (req, res, next) => {
+router.get('/telegram/recent', requireCapability('email'), async (req, res, next) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
   try {
     const payload = await telegramGetUpdates({
       limit,
-      useContext: {
-        actorAgentId: req.executionContext?.actorAgentId,
-        requestReceiptId: req.executionContext?.requestReceiptId,
-        requestReceiptMutationHash: req.executionContext?.requestReceiptMutationHash,
-        requestAdmissionEventId: req.executionContext?.requestAdmissionEventId,
-        requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash,
-      },
+      useContext: req.executionContext,
     });
     const items = (payload?.result || []).map((item) => ({
       update_id: item.update_id,
@@ -506,9 +470,9 @@ router.post('/salesforce/objects', requireCapability('salesforce'), async (req, 
   }
 });
 
-router.get('/imessage/chats', async (req, res, next) => {
+router.get('/imessage/chats', requireCapability('email'), async (req, res, next) => {
   try {
-    const chats = await imessageListChats({ limit: Number(req.query.limit) || 10 });
+    const chats = await imessageListChats({ limit: Number(req.query.limit) || 10 }, req.executionContext);
     res.json({ success: true, chats });
   } catch (error) {
     error.statusCode = 500;
@@ -533,11 +497,11 @@ router.post('/imessage/send', requireCapability('email'), async (req, res, next)
   }
 });
 
-router.get('/imessage/search-contact', async (req, res, next) => {
+router.get('/imessage/search-contact', requireCapability('email'), async (req, res, next) => {
   const q = String(req.query.q || req.query.query || '').trim();
   if (!q) return res.status(400).json({ success: false, error: 'q is required' });
   try {
-    const matches = await imessageSearchContact({ query: q });
+    const matches = await imessageSearchContact({ query: q }, req.executionContext);
     res.json({ success: true, matches });
   } catch (error) {
     error.statusCode = 500;
@@ -545,11 +509,11 @@ router.get('/imessage/search-contact', async (req, res, next) => {
   }
 });
 
-router.get('/contacts/search', async (req, res, next) => {
+router.get('/contacts/search', requireCapability('email'), async (req, res, next) => {
   const q = String(req.query.q || req.query.query || '').trim();
   if (!q) return res.status(400).json({ success: false, error: 'q is required' });
   try {
-    const matches = await contactsSearch({ query: q });
+    const matches = await contactsSearch({ query: q }, req.executionContext);
     res.json({ success: true, matches });
   } catch (error) {
     error.statusCode = 500;
@@ -761,7 +725,7 @@ router.post('/approvals/:id/reject', requireCapability('admin_override'), async 
   }
 });
 
-router.get('/skills/scan', async (req, res) => {
+router.get('/skills/scan', requireCapability('files'), async (req, res) => {
   // Security: never scan from homedir root — restrict to known skill directories only
   const roots = SKILL_DEFAULT_ROOTS;
 
@@ -785,7 +749,7 @@ router.get('/skills/scan', async (req, res) => {
 
 // ─── GOOGLE PROFILE ──────────────────────────────────────────────────────────
 
-router.get('/google/profile', async (req, res, next) => {
+router.get('/google/profile', requireCapability('google_account'), async (req, res, next) => {
   try { res.json(await googleGetProfile(req.executionContext)); }
   catch (e) {
     handleServiceError(res, e, 'Google not configured. Connect Google OAuth first.', next);
@@ -794,7 +758,7 @@ router.get('/google/profile', async (req, res, next) => {
 
 // ─── GMAIL ────────────────────────────────────────────────────────────────────
 
-router.get('/gmail/inbox', async (req, res, next) => {
+router.get('/gmail/inbox', requireCapability('email'), async (req, res, next) => {
   try {
     const messages = await gmailListInbox({ maxResults: Number(req.query.max) || 10, query: req.query.q }, req.executionContext);
     res.json({ success: true, messages });
@@ -808,7 +772,7 @@ router.get('/gmail/inbox', async (req, res, next) => {
   }
 });
 
-router.get('/gmail/search', async (req, res, next) => {
+router.get('/gmail/search', requireCapability('email'), async (req, res, next) => {
   if (!req.query.q) return res.status(400).json({ error: 'q is required' });
   try {
     const messages = await gmailSearchMessages({ query: req.query.q, maxResults: Number(req.query.max) || 10 }, req.executionContext);
@@ -823,12 +787,12 @@ router.get('/gmail/search', async (req, res, next) => {
   }
 });
 
-router.get('/gmail/message/:id', async (req, res, next) => {
+router.get('/gmail/message/:id', requireCapability('email'), async (req, res, next) => {
   try { res.json(await gmailGetMessage(req.params.id, req.executionContext)); }
   catch (e) { e.statusCode = 500; next(e); }
 });
 
-router.get('/gmail/thread/:id', async (req, res, next) => {
+router.get('/gmail/thread/:id', requireCapability('email'), async (req, res, next) => {
   try { res.json(await gmailGetThread(req.params.id, req.executionContext)); }
   catch (e) { e.statusCode = 500; next(e); }
 });
@@ -924,7 +888,7 @@ router.post('/email/reply', requireCapability('email'), async (req, res, next) =
 
 // ─── YOUTUBE ──────────────────────────────────────────────────────────────────
 
-router.get('/youtube/search', async (req, res, next) => {
+router.get('/youtube/search', requireCapability('youtube'), async (req, res, next) => {
   if (!req.query.q) return res.status(400).json({ error: 'q is required' });
   try { res.json(await youtubeSearch({ query: req.query.q, maxResults: Number(req.query.max) || 10 }, req.executionContext)); }
   catch (e) {
@@ -932,14 +896,14 @@ router.get('/youtube/search', async (req, res, next) => {
   }
 });
 
-router.get('/youtube/channel', async (req, res, next) => {
+router.get('/youtube/channel', requireCapability('youtube'), async (req, res, next) => {
   try { res.json(await youtubeChannelStats(req.query.id, req.executionContext)); }
   catch (e) {
     handleServiceError(res, e, 'YouTube not configured. Connect Google OAuth first.', next);
   }
 });
 
-router.get('/youtube/channel/videos', async (req, res, next) => {
+router.get('/youtube/channel/videos', requireCapability('youtube'), async (req, res, next) => {
   try { res.json(await youtubeListChannelVideos({ channelId: req.query.id, maxResults: Number(req.query.max) || 20 }, req.executionContext)); }
   catch (e) {
     handleServiceError(res, e, 'YouTube not configured. Connect Google OAuth first.', next);
@@ -947,14 +911,14 @@ router.get('/youtube/channel/videos', async (req, res, next) => {
 });
 
 // Compatibility alias used by the macOS Integrations panel.
-router.get('/youtube/videos', async (req, res, next) => {
+router.get('/youtube/videos', requireCapability('youtube'), async (req, res, next) => {
   try { res.json(await youtubeListChannelVideos({ channelId: req.query.id, maxResults: Number(req.query.max) || 20 }, req.executionContext)); }
   catch (e) {
     handleServiceError(res, e, 'YouTube not configured. Connect Google OAuth first.', next);
   }
 });
 
-router.get('/youtube/recent', async (req, res, next) => {
+router.get('/youtube/recent', requireCapability('youtube'), async (req, res, next) => {
   try {
     const result = await youtubeListChannelVideos({
       channelId: req.query.id,
@@ -966,38 +930,38 @@ router.get('/youtube/recent', async (req, res, next) => {
   }
 });
 
-router.get('/youtube/video/:id', async (req, res, next) => {
+router.get('/youtube/video/:id', requireCapability('youtube'), async (req, res, next) => {
   try { res.json(await youtubeVideoDetails(req.params.id, req.executionContext)); }
   catch (e) { e.statusCode = 500; next(e); }
 });
 
 // ─── DRIVE ────────────────────────────────────────────────────────────────────
 
-router.get('/drive/files', async (req, res, next) => {
+router.get('/drive/files', requireCapability('drive'), async (req, res, next) => {
   try { res.json(await driveListFiles({ query: req.query.q, maxResults: Number(req.query.max) || 20, mimeType: req.query.mime }, req.executionContext)); }
   catch (e) { e.statusCode = 500; next(e); }
 });
 
-router.get('/drive/file/:id', async (req, res, next) => {
+router.get('/drive/file/:id', requireCapability('drive'), async (req, res, next) => {
   try { res.json(await driveGetFile(req.params.id, req.executionContext)); }
   catch (e) { e.statusCode = 500; next(e); }
 });
 
-router.get('/drive/file/:id/content', async (req, res, next) => {
+router.get('/drive/file/:id/content', requireCapability('drive'), async (req, res, next) => {
   try { res.send(await driveReadTextFile(req.params.id, req.executionContext)); }
   catch (e) { e.statusCode = 500; next(e); }
 });
 
 // ─── CALENDAR ─────────────────────────────────────────────────────────────────
 
-router.get('/calendar/today', async (req, res, next) => {
+router.get('/calendar/today', requireCapability('email'), async (req, res, next) => {
   try { res.json(await calendarTodayEvents(req.executionContext)); }
   catch (e) {
     handleServiceError(res, e, 'Calendar not configured. Connect Google OAuth first.', next);
   }
 });
 
-router.get('/calendar/events', async (req, res, next) => {
+router.get('/calendar/events', requireCapability('email'), async (req, res, next) => {
   try {
     const events = await calendarListEvents({ maxResults: Number(req.query.max) || 20, timeMin: req.query.from }, req.executionContext);
     res.json(events);
@@ -1052,12 +1016,12 @@ router.post('/calendar/create', requireCapability('email'), async (req, res, nex
 
 // ─── DOCS / SHEETS ────────────────────────────────────────────────────────────
 
-router.get('/docs/:id', async (req, res, next) => {
+router.get('/docs/:id', requireCapability('drive'), async (req, res, next) => {
   try { res.json(await docsGetDocument(req.params.id, req.executionContext)); }
   catch (e) { e.statusCode = 500; next(e); }
 });
 
-router.get('/sheets/:id/values', async (req, res, next) => {
+router.get('/sheets/:id/values', requireCapability('drive'), async (req, res, next) => {
   try { res.json(await sheetsGetValues(req.params.id, req.query.range, req.executionContext)); }
   catch (e) { e.statusCode = 500; next(e); }
 });

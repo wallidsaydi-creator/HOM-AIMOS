@@ -119,6 +119,10 @@ tests/benchmark/*
 artifacts/
 /release/
 db/backups/
+docs/security/phase0-*.md
+docs/security/phase1a-*.md
+docs/security/three-gap-remediation-*.md
+docs/security/master-remediation-plan-*.md
 docs/security/*.pdf
 paper/*.pdf
 paper/*.aux

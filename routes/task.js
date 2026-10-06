@@ -114,7 +114,6 @@ router.post('/', async (req, res) => {
   const taskId = `task_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const status = providerStatus(agent.model);
   const perms = actorPermissions;
-  const adminOverride = perms.admin_override === true;
 
   const record = bindTaskOwnership({
     id: taskId,
@@ -146,18 +145,12 @@ router.post('/', async (req, res) => {
 
   try {
     let webContext = '';
-    const webAllowed = adminOverride || perms.internet === true;
+    const webAllowed = perms.internet === true;
     if (allowWeb && webAllowed) {
       const search = await searchWeb({
         query: task,
         maxResults: 5,
-        useContext: {
-          actorAgentId,
-          requestReceiptId: req.executionContext?.requestReceiptId,
-          requestReceiptMutationHash: req.executionContext?.requestReceiptMutationHash,
-          requestAdmissionEventId: req.executionContext?.requestAdmissionEventId,
-          requestAdmissionMutationHash: req.executionContext?.requestAdmissionMutationHash,
-        },
+        useContext: req.executionContext,
       });
       if (search?.results?.length) {
         const lines = search.results
