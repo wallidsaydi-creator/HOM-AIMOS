@@ -6,8 +6,8 @@
   "hash_algorithm": "sha256",
   "root_algorithm": "sha256(canonical-json(files))",
   "manifest_self_excluded": true,
-  "file_count": 1129,
-  "files_root_sha256": "a38d85fec7b434710ff1ab3c23e8ab1e6100e89242e87c317edd5609c813fe7d",
+  "file_count": 1131,
+  "files_root_sha256": "5e66f36245ef3bb8bac06102506fa891acbde3fd58e7b7b7a2ea28ca8f9f7c29",
   "files": [
     {
       "path": ".github/dependabot.yml",
@@ -36,8 +36,8 @@
     },
     {
       "path": ".npmignore",
-      "bytes": 5076,
-      "sha256": "6870baa83e6695c94aa5f97f0846e2b0147a164adc070d85de99965a308ae670"
+      "bytes": 5103,
+      "sha256": "647178a8fee2c9f401cb1723a4c71cb4eea7350914447d43d7985e484ef0698f"
     },
     {
       "path": "AGENTS.md",
@@ -1076,8 +1076,8 @@
     },
     {
       "path": "migrations/117-retire-legacy-aimos-app-login.sql",
-      "bytes": 330,
-      "sha256": "ab5eab50bbe236c73d4ba94366885f02ac0d2a2183176eeb092df5ee75254ff2"
+      "bytes": 1127,
+      "sha256": "b22dc51c1304de837a7bd605366de067064be443d0fe0ca8c1f2782a50fc9f42"
     },
     {
       "path": "migrations/118-serving-reader-and-identity-writer-acl.sql",
@@ -1580,6 +1580,11 @@
       "sha256": "ac574b8be4a097aa399e6e926aea3c6209e868af1e18642b8e48ad4708a3c26b"
     },
     {
+      "path": "scripts/db/preflight-restore-archive.mjs",
+      "bytes": 4624,
+      "sha256": "63f8d48f56b48d0740c82301b0ca22d2e59187e58a88ce7252f3d50355565a0d"
+    },
+    {
       "path": "scripts/db/qualify-secure-cluster.mjs",
       "bytes": 4540,
       "sha256": "9b862ef5df4c1adac580f16ae7697a6cbd49a2894e5ce45ddf8df7aba2fe4e28"
@@ -1596,8 +1601,8 @@
     },
     {
       "path": "scripts/db/secure-cluster.mjs",
-      "bytes": 10375,
-      "sha256": "0070e802378822c7f1daba17bb05246b30beff0416c63c1f9902daad27ee8f2b"
+      "bytes": 10474,
+      "sha256": "0419ffb623263c7792d1abe8cbb1c3f42a6d6fd5de874ee6b590662562edd066"
     },
     {
       "path": "scripts/genesis-install.mjs",
@@ -1711,8 +1716,8 @@
     },
     {
       "path": "scripts/service/manage-user-service.mjs",
-      "bytes": 18878,
-      "sha256": "d3ea85ecb8fe20ce3b4d2b2586b1317bfac37cd2534826449c58c9ad202ababc"
+      "bytes": 21266,
+      "sha256": "5b8536b4b018474ec01a429de706d8f214d8a27bc0b94c70cd980cd21bc7192a"
     },
     {
       "path": "scripts/service/run-private-postgres.mjs",
@@ -1751,13 +1756,13 @@
     },
     {
       "path": "scripts/test/verify-public-source-tree.mjs",
-      "bytes": 13181,
-      "sha256": "1bcdcec61a7b27a97e38a7f0a297e6809f222e3e5a0a2c327e06be7f039e2bcb"
+      "bytes": 13190,
+      "sha256": "e2a676c7be007facb4bf5cb2a68ccb60b8bd7a1faaf19da7ffc4fdaab978d7d4"
     },
     {
       "path": "scripts/test/verify-release-artifacts.mjs",
-      "bytes": 4211,
-      "sha256": "abb2dc93bcd69f569efd61ff92b0cb9e54658c63d2e791a7fbf4cdbd46be974e"
+      "bytes": 4266,
+      "sha256": "273ffbcefa404765a5a0532c502d72291ef03af1d0bd37a64d69ab1f5f3bbd98"
     },
     {
       "path": "scripts/verification/audit-mutmem-p1-closure.mjs",
@@ -2041,8 +2046,8 @@
     },
     {
       "path": "server.js",
-      "bytes": 38730,
-      "sha256": "9895adc5cc7ecb681ce91b7c201a48a2012d27653909fb35aebd48a26ab7588d"
+      "bytes": 38772,
+      "sha256": "060627493c644bfa04262af75c19922b3d9b1170551958ff16759438661682db"
     },
     {
       "path": "services/answering/ensemble-engine.js",
@@ -3811,8 +3816,8 @@
     },
     {
       "path": "tests/install/user-service-owner.test.mjs",
-      "bytes": 5383,
-      "sha256": "911e52ec8bd167c2d4f10f96dc364141ad14357ba0ee335d217a60fdce350553"
+      "bytes": 9929,
+      "sha256": "8a752ec0220100b52251bfe09b991e1e5088d5d59c11720a9ae63bc326c09a7d"
     },
     {
       "path": "tests/learning/aladdin-promotion-contract.test.mjs",
@@ -4910,6 +4915,11 @@
       "sha256": "ae7fa83d2f68e694caca7c2ffcd3326f63102510ae8f2918fa96cbf76da22bbb"
     },
     {
+      "path": "tests/security/restore-archive-preflight.test.mjs",
+      "bytes": 2610,
+      "sha256": "5b771aafac73e744bad77d2cda66131018f433eaf76c93ef9d86d5d3b35d67cc"
+    },
+    {
       "path": "tests/security/retained-memory-portable-binding.test.mjs",
       "bytes": 10451,
       "sha256": "208a481adbf723a1d5796582458f3c71d2374324befac3ce860210b9e775f542"
@@ -5655,5 +5665,5 @@
       "sha256": "474b416f860aebe17a7e84c1d2f8d06335f66d7585097ff8d1547e79042a5175"
     }
   ],
-  "manifest_sha256": "5518e53d8de9393250d59637717656e46ad863b42223679fcf0addcaaf79f4c7"
+  "manifest_sha256": "fa2bd9b7318dcacabd43773e8915309626ac0597e6a60afb07ae8b3cf0d060c4"
 }

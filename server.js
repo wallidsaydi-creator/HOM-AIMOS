@@ -213,6 +213,7 @@ function buildHealthPayload() {
     runtime: {
       company_id: AIMOS_COMPANY_ID,
       database_name: DATABASE_NAME,
+      postgres_port: AIMOS_POSTGRES_PORT,
       server_port: PORT,
       benchmark_scratch: DATABASE_NAME.startsWith('aimos_benchmark_'),
       lifecycle: getServingWorkState(),

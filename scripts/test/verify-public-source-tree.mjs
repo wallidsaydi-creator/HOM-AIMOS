@@ -64,7 +64,7 @@ walk(root);
 observed.sort((left, right) => left.path.localeCompare(right.path));
 const privateSecurityNotes = observed
   .map((entry) => entry.path)
-  .filter((file) => /^docs\/security\/(?:phase0-|phase1a-|three-gap-remediation-|master-remediation-plan-).*\.md$/.test(file));
+  .filter((file) => /^docs\/security\/(?:phase0-|phase1a-|phase1b-|three-gap-remediation-|master-remediation-plan-).*\.md$/.test(file));
 assert.deepEqual(privateSecurityNotes, [], `private security notes shipped: ${privateSecurityNotes.join(', ')}`);
 assert.deepEqual(observed, manifest.files, 'public source tree differs from manifest');
 assert.equal(observed.length, manifest.file_count);

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -9,6 +10,8 @@ import {
   AIMOS_USER_SERVICE_SCHEMA,
   buildUserServiceDefinition,
   buildUserServiceManifest,
+  installUserService,
+  serviceReadinessMatches,
   validateUserServiceManifest,
 } from '../../scripts/service/manage-user-service.mjs';
 
@@ -38,14 +41,104 @@ test('macOS user service owns one native process without secret authority', () =
   assert.doesNotMatch(definition.unit_body, /passphrase|private.?key|keychain|process\.env|EnvironmentVariables/i);
 });
 
-test('service owner waits for complete unload and cleans failed readiness', async () => {
+test('service owner waits for complete unload before replacing a unit', async () => {
   const source = await import('node:fs').then(({ readFileSync }) => readFileSync(
     new URL('../../scripts/service/manage-user-service.mjs', import.meta.url),
     'utf8',
   ));
   assert.match(source, /waitForLaunchdUnloaded\(definition\)/);
   assert.match(source, /aimos_user_service_unload_timeout/);
-  assert.ok((source.match(/catch \(error\) \{\n\s+stopDefinition\(definition\);/g) || []).length >= 3);
+});
+
+test('readiness requires the configured PostgreSQL port', () => {
+  const definition = buildUserServiceDefinition({
+    sourceRoot: ROOT, nodePath: process.execPath, platform: 'darwin',
+    homeDirectory: FIXTURE_HOME, postgresPort: 55432, postgresBin: '/test-pg/bin',
+  });
+  const health = { ready: true, runtime: {
+    database_name: 'aimos', server_port: 9100, postgres_port: 5432,
+  } };
+  assert.equal(serviceReadinessMatches(definition, health), false);
+  health.runtime.postgres_port = 55432;
+  assert.equal(serviceReadinessMatches(definition, health), true);
+});
+
+test('failed private-port install restores and restarts the previous canonical unit', async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'aimos-service-rollback-'));
+  try {
+    const common = { sourceRoot: ROOT, nodePath: process.execPath,
+      platform: 'darwin', homeDirectory: home };
+    const oldDefinition = buildUserServiceDefinition(common);
+    const oldManifest = `${JSON.stringify(buildUserServiceManifest(oldDefinition), null, 2)}\n`;
+    mkdirSync(path.dirname(oldDefinition.unit_path), { recursive: true, mode: 0o700 });
+    mkdirSync(path.dirname(oldDefinition.manifest_path), { recursive: true, mode: 0o700 });
+    writeFileSync(oldDefinition.unit_path, oldDefinition.unit_body, { mode: 0o600 });
+    writeFileSync(oldDefinition.manifest_path, oldManifest, { mode: 0o600 });
+    const stops = [];
+    const starts = [];
+    await assert.rejects(installUserService({ ...common,
+      postgresPort: 55432, postgresBin: '/test-pg/bin',
+    }, {
+      isRunning: () => true,
+      stop: (definition) => stops.push(definition.postgres_port),
+      start: (definition) => starts.push(definition.postgres_port),
+      waitReady: async (definition) => {
+        if (definition.postgres_port === 55432) throw new Error('private_target_unready');
+        return { ready: true };
+      },
+    }), /private_target_unready/);
+    assert.deepEqual(stops, [55432, 55432]);
+    assert.deepEqual(starts, [55432, 5432]);
+    assert.equal(readFileSync(oldDefinition.unit_path, 'utf8'), oldDefinition.unit_body);
+    assert.equal(readFileSync(oldDefinition.manifest_path, 'utf8'), oldManifest);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('failed first install removes its unit and manifest', async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'aimos-service-first-failure-'));
+  try {
+    const options = { sourceRoot: ROOT, nodePath: process.execPath,
+      platform: 'darwin', homeDirectory: home,
+      postgresPort: 55432, postgresBin: '/test-pg/bin' };
+    const definition = buildUserServiceDefinition(options);
+    await assert.rejects(installUserService(options, {
+      stop: () => {}, start: () => {},
+      waitReady: async () => { throw new Error('first_install_unready'); },
+    }), /first_install_unready/);
+    assert.equal(existsSync(definition.unit_path), false);
+    assert.equal(existsSync(definition.manifest_path), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('failed stop during rollback still restores the prior unit files', async () => {
+  const home = mkdtempSync(path.join(os.tmpdir(), 'aimos-service-stop-failure-'));
+  try {
+    const common = { sourceRoot: ROOT, nodePath: process.execPath,
+      platform: 'darwin', homeDirectory: home };
+    const oldDefinition = buildUserServiceDefinition(common);
+    const oldManifest = `${JSON.stringify(buildUserServiceManifest(oldDefinition), null, 2)}\n`;
+    mkdirSync(path.dirname(oldDefinition.unit_path), { recursive: true, mode: 0o700 });
+    mkdirSync(path.dirname(oldDefinition.manifest_path), { recursive: true, mode: 0o700 });
+    writeFileSync(oldDefinition.unit_path, oldDefinition.unit_body, { mode: 0o600 });
+    writeFileSync(oldDefinition.manifest_path, oldManifest, { mode: 0o600 });
+    let stops = 0;
+    await assert.rejects(installUserService({ ...common,
+      postgresPort: 55432, postgresBin: '/test-pg/bin',
+    }, {
+      isRunning: () => true,
+      stop: () => { if (++stops === 2) throw new Error('replacement_stop_failed'); },
+      start: () => {},
+      waitReady: async () => { throw new Error('private_target_unready'); },
+    }), /aimos_service_install_and_rollback_failed/);
+    assert.equal(readFileSync(oldDefinition.unit_path, 'utf8'), oldDefinition.unit_body);
+    assert.equal(readFileSync(oldDefinition.manifest_path, 'utf8'), oldManifest);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('Linux user service implements the same on-failure lifecycle contract', () => {

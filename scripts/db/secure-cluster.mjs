@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 
 import { resolveAimosInstallationContext } from '../../services/installation-context.js';
+import { RESERVED_LEGACY_PORTS } from '../../services/core/runtime-config.js';
 
 export const CLUSTER_ADMIN_ROLE = 'aimos_cluster_admin';
 export function clusterAdminCredentialService(instance = 'canonical') {
@@ -138,7 +139,7 @@ export async function initializeSecureCluster({
   stateRoot, port, pgBin, adminPassword, adminRole = CLUSTER_ADMIN_ROLE,
 } = {}) {
   if (!Number.isInteger(port) || port < 1024 || port > 65535
-      || [9000, 9001, 9100].includes(port)) fail('port_invalid');
+      || RESERVED_LEGACY_PORTS.includes(port) || port === 9100) fail('port_invalid');
   if (port === 5432) fail('shared_default_port_forbidden');
   if (!/^[a-z][a-z0-9_]{0,62}$/.test(adminRole)) fail('admin_role_invalid');
   if (typeof adminPassword !== 'string' || adminPassword.length < 32) fail('admin_password_invalid');

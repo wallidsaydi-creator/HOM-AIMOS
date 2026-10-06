@@ -369,9 +369,7 @@ async function waitForReadiness(definition, timeoutMs = 300_000) {
         signal: AbortSignal.timeout(Math.min(5000, remaining)),
       });
       const body = await response.json();
-      if (response.ok && body?.ready === true
-          && body?.runtime?.database_name === definition.database
-          && Number(body?.runtime?.server_port) === definition.port) return body;
+      if (response.ok && serviceReadinessMatches(definition, body)) return body;
       const retryAfter = Number(response.headers.get('retry-after'));
       if (response.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0) {
         pauseMs = Math.max(pauseMs, retryAfter * 1000);
@@ -384,6 +382,33 @@ async function waitForReadiness(definition, timeoutMs = 300_000) {
   fail('aimos_user_service_readiness_timeout');
 }
 
+export function serviceReadinessMatches(definition, body) {
+  return body?.ready === true
+    && body?.runtime?.database_name === definition.database
+    && Number(body?.runtime?.server_port) === definition.port
+    && Number(body?.runtime?.postgres_port) === definition.postgres_port;
+}
+
+function serviceRunning(definition) {
+  if (definition.platform === 'darwin') return launchdLoaded(definition);
+  return run('/usr/bin/systemctl', ['--user', 'is-active', path.basename(definition.unit_path)], {
+    allowFailure: true,
+  }).status === 0;
+}
+
+function snapshotServiceFile(file) {
+  if (!existsSync(file)) return null;
+  const stat = lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid()
+      || (stat.mode & 0o077) !== 0) fail('aimos_service_existing_file_custody_invalid');
+  return { bytes: readFileSync(file), mode: stat.mode & 0o777 };
+}
+
+function restoreServiceFile(file, snapshot) {
+  if (snapshot) writeAtomic(file, snapshot.bytes, snapshot.mode);
+  else if (existsSync(file)) unlinkSync(file);
+}
+
 export function readInstalledUserServiceDefinition(instance = 'canonical') {
   const context = resolveAimosInstallationContext([
     '--aimos-instance', String(instance),
@@ -394,19 +419,54 @@ export function readInstalledUserServiceDefinition(instance = 'canonical') {
   return validateUserServiceManifest(manifest, { homeDirectory: os.homedir() });
 }
 
-export async function installUserService(options = {}) {
+export async function installUserService(options = {}, {
+  isRunning = serviceRunning,
+  stop = stopDefinition,
+  start = startDefinition,
+  waitReady = waitForReadiness,
+} = {}) {
   const definition = buildUserServiceDefinition(options);
   mkdirSync(definition.state_root, { recursive: true, mode: 0o700 });
   mkdirSync(definition.log_root, { recursive: true, mode: 0o700 });
-  stopDefinition(definition);
-  writeAtomic(definition.unit_path, definition.unit_body, 0o600);
-  writeAtomic(definition.manifest_path, `${JSON.stringify(definitionManifest(definition), null, 2)}\n`, 0o600);
-  startDefinition(definition);
+  const previousUnit = snapshotServiceFile(definition.unit_path);
+  const previousManifest = snapshotServiceFile(definition.manifest_path);
+  if (Boolean(previousUnit) !== Boolean(previousManifest)) {
+    fail('aimos_service_existing_definition_incomplete');
+  }
+  const previous = previousManifest
+    ? validateUserServiceManifest(JSON.parse(previousManifest.bytes.toString('utf8')), {
+        homeDirectory: options.homeDirectory || os.homedir(),
+      })
+    : null;
+  if (previous && previousUnit.bytes.toString('utf8') !== previous.unit_body) {
+    fail('aimos_service_existing_unit_mismatch');
+  }
+  const restartPrevious = previous ? isRunning(previous) : false;
   try {
-    const health = await waitForReadiness(definition);
+    stop(definition);
+    writeAtomic(definition.unit_path, definition.unit_body, 0o600);
+    writeAtomic(definition.manifest_path, `${JSON.stringify(definitionManifest(definition), null, 2)}\n`, 0o600);
+    start(definition);
+    const health = await waitReady(definition);
     return { success: true, action: 'install', definition: definitionManifest(definition), health };
   } catch (error) {
-    stopDefinition(definition);
+    const rollbackErrors = [];
+    for (const restore of [
+      () => stop(definition),
+      () => restoreServiceFile(definition.unit_path, previousUnit),
+      () => restoreServiceFile(definition.manifest_path, previousManifest),
+    ]) {
+      try { restore(); } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+    }
+    if (restartPrevious && rollbackErrors.length === 0) {
+      try {
+        start(previous);
+        await waitReady(previous);
+      } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+    }
+    if (rollbackErrors.length) {
+      throw new AggregateError([error, ...rollbackErrors], 'aimos_service_install_and_rollback_failed');
+    }
     throw error;
   }
 }
@@ -450,7 +510,7 @@ export async function manageInstalledUserService(action, { instance = 'canonical
       const response = await fetch(`http://127.0.0.1:${definition.port}/health`);
       health = await response.json();
     } catch { /* status reports unavailable */ }
-    return { success: supervisor.loaded && health?.ready === true, action, definition: definitionManifest(definition), supervisor, health };
+    return { success: supervisor.loaded && serviceReadinessMatches(definition, health), action, definition: definitionManifest(definition), supervisor, health };
   }
   if (action === 'uninstall') {
     stopDefinition(definition);
