@@ -129,7 +129,7 @@ async function main() {
     let consultedAgent = null;
     const getPermissions = async (id) => { consultedAgent = id; return { 'tools:execute': id === 'HIGH' }; };
     const mw = requireCapability('tools:execute', { getPermissions, logEvent: async () => null });
-    const req = { agentId: 'LOW', headers: { 'x-agent-id': 'HIGH' }, body: { agent_id: 'HIGH' }, originalUrl: '/tools/x/post' };
+    const req = { agentId: 'LOW', executionContext: { actorAgentId: 'LOW', actorValidFromIso: '2026-10-06T00:00:00.000Z', companyId: 'hom' }, headers: { 'x-agent-id': 'HIGH' }, body: { agent_id: 'HIGH' }, originalUrl: '/tools/x/post' };
     let status = null; let payload = null; let nextCalled = false;
     const res = { status(c) { status = c; return this; }, json(p) { payload = p; return this; } };
     await mw(req, res, () => { nextCalled = true; });
@@ -145,7 +145,7 @@ async function main() {
   await run('dead permission store → 503 authz_unavailable, next() not called', async () => {
     const getPermissions = async () => { throw new Error('dead DB'); };
     const mw = requireCapability('tools:execute', { getPermissions, logEvent: async () => null });
-    const req = { agentId: 'LOW', headers: {}, body: {}, originalUrl: '/tools/x/post' };
+    const req = { agentId: 'LOW', executionContext: { actorAgentId: 'LOW', actorValidFromIso: '2026-10-06T00:00:00.000Z', companyId: 'hom' }, headers: {}, body: {}, originalUrl: '/tools/x/post' };
     let status = null; let payload = null; let nextCalled = false;
     const res = { status(c) { status = c; return this; }, json(p) { payload = p; return this; } };
     await mw(req, res, () => { nextCalled = true; });
@@ -354,9 +354,9 @@ async function main() {
   console.log('\n[GATE 6] Every requireCapability() argument is a real capability');
   await run('no requireCapability() call names a capability outside agent_permissions', async () => {
     const REAL_CAPS = new Set([
-      'admin_override', 'delegate', 'email', 'files', 'github', 'internet',
+      'admin_override', 'delegate', 'drive', 'email', 'files', 'github', 'google_account', 'internet',
       'memory_read', 'memory_write', 'n8n', 'railway', 'salesforce', 'shell',
-      'x', 'youtube'
+      'stripe', 'x', 'youtube'
     ]);
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
     const scanDirs = ['routes', 'services'].map((d) => path.join(repoRoot, d));

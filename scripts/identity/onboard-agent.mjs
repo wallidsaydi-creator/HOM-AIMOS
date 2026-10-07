@@ -11,12 +11,21 @@ import { existsSync } from 'node:fs';
 import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-import { pool } from '../../db/connection.js';
-import { AIMOS_AGENT_KEY_ROOT, AIMOS_INSTALLATION_CONTEXT } from '../../services/core/runtime-config.js';
+import { pool, agentPool, identityWriterPool } from '../../db/connection.js';
+import {
+  AIMOS_AGENT_KEY_ROOT, AIMOS_INSTALLATION_CONTEXT, AIMOS_POSTGRES_PORT,
+  resolveAimosDatabaseName,
+} from '../../services/core/runtime-config.js';
 import { logEvent, readVerifiedEventById } from '../../services/observe/event-ledger.js';
-import { recallAuthorizationService } from '../../services/security/recall-authorization.js';
+import {
+  createRecallAuthorizationService,
+  recallAuthorizationService as defaultRecallAuthorizationService,
+} from '../../services/security/recall-authorization.js';
 import { canonicalJson } from '../../services/security/protocol/canonical-json.js';
-import { systemConfigLedger } from '../../services/security/system-config-ledger.js';
+import {
+  createSystemConfigLedger,
+  systemConfigLedger as defaultSystemConfigLedger,
+} from '../../services/security/system-config-ledger.js';
 import {
   decryptMasterPrivkey,
   enrollAgentWithDeps,
@@ -37,6 +46,9 @@ import { readLine, readPassphrase } from './passphrase.js';
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const args = process.argv.slice(2);
+let maintenancePool = null;
+let recallAuthorizationService = defaultRecallAuthorizationService;
+let systemConfigLedger = defaultSystemConfigLedger;
 
 function cli(name) {
   const inline = args.find((arg) => arg.startsWith(`${name}=`));
@@ -135,7 +147,9 @@ async function enrollMaster(passphrase, account) {
     if (!observed || sha256(Buffer.from(observed, 'utf8')) !== encryptedBlobSha256) {
       throw new Error('onboarding_master_keychain_readback_failed');
     }
-    await identityDb.commitMasterEnrollment(prepared.masterRow, start, encryptedBlobSha256);
+    await identityDb.commitMasterEnrollment(prepared.masterRow, start, encryptedBlobSha256, {
+      maintenancePool: maintenancePool || pool,
+    });
   } catch (error) {
     await identityDb.markMasterEnrollmentIndeterminate(start, error).catch(() => null);
     throw error;
@@ -213,6 +227,15 @@ async function appendConfiguration(inputs, master) {
 }
 
 async function main() {
+  if (AIMOS_POSTGRES_PORT !== 5432) {
+    const { default: pg } = await import('pg');
+    const { resolveClusterAdminConfig } = await import('../db/cluster-admin.mjs');
+    maintenancePool = new pg.Pool(await resolveClusterAdminConfig({
+      argv: args, database: resolveAimosDatabaseName(args),
+    }));
+    recallAuthorizationService = createRecallAuthorizationService({ pool: maintenancePool });
+    systemConfigLedger = createSystemConfigLedger({ pool: maintenancePool });
+  }
   const inputs = await selectInputs();
   const before = await genesisState();
   if (before.housekeepers !== 1 || before.guide_memories !== 8 || before.memories !== 8
@@ -360,8 +383,10 @@ async function main() {
 
 main().catch(async (error) => {
   console.error(`[onboard-agent] ${error?.message || error}`);
-  try { await pool.end(); } catch { /* ignore */ }
   process.exitCode = 1;
 }).then(async () => {
-  try { await pool.end(); } catch { /* ignore */ }
+  await Promise.allSettled([
+    pool.end(), agentPool.end(), identityWriterPool.end(),
+    ...(maintenancePool ? [maintenancePool.end()] : []),
+  ]);
 });

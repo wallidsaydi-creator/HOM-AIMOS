@@ -674,7 +674,7 @@ test('tool execution and result scans occupy the native signed action boundary',
     'utf8',
   );
   const begin = source.indexOf('signedToolAction = await beginToolAction({',
-    source.indexOf("if (name === 'read_file' && !isOperatorAgentId(agentId))"));
+    source.indexOf("if (name === 'read_file')"));
   const outboundScan = source.indexOf('await scanToolExecution(', begin);
   const invoke = source.indexOf('const result = await invokeTool()', begin);
   const resultScan = source.indexOf('await scanToolResult(', invoke);
@@ -703,19 +703,21 @@ test('read-only tool intent is evaluated as read authority before Canary dispatc
   assert.doesNotMatch(source, /enforceVerbPolicy\(intentClass\.scope, 'POST'\)/);
 });
 
-test('non-operator local reads require an exact master-signed purpose proof before tool action', async () => {
+test('all local reads, including operator reads, require an exact master-signed purpose proof before tool action', async () => {
   const [registry, actionLedger] = await Promise.all([
     readFile(new URL('../../services/orchestration/tool-registry.js', import.meta.url), 'utf8'),
     readFile(new URL('../../services/orchestration/tool-action-ledger.js', import.meta.url), 'utf8'),
   ]);
-  const purposeGate = registry.indexOf("if (name === 'read_file' && !isOperatorAgentId(agentId))");
+  const purposeGate = registry.indexOf("if (name === 'read_file')");
   const actionStart = registry.indexOf('signedToolAction = await beginToolAction({', purposeGate);
   const invocation = registry.indexOf('const invokeTool = () =>', actionStart);
   assert.ok(purposeGate >= 0 && purposeGate < actionStart);
   assert.ok(actionStart < invocation);
   assert.match(registry, /master_signed_local_file_read_authorization_required/);
-  assert.match(registry, /purpose_authorization_protocol_commitment_required/);
+  assert.match(registry, /masterPubkeyCache\.get\(\)/);
   assert.match(registry, /authorizePurposeLocalFileRead/);
+  assert.match(registry, /readPurposeAuthorizedLocalFile/);
+  assert.doesNotMatch(registry, /if \(name === 'read_file' && !isOperatorAgentId\(agentId\)\)/);
   assert.match(actionLedger, /purpose_authorization_sha256/);
   assert.match(actionLedger, /purposeAuthorizationSha256/);
   assert.match(registry, /dispatchAllowed: false/);

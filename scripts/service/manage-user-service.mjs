@@ -102,6 +102,7 @@ export function buildUserServiceDefinition({
   homeDirectory = os.homedir(),
   instance = 'canonical',
   postgresPort = 5432,
+  postgresBin = null,
 } = {}) {
   const source = requireSourceRoot(sourceRoot);
   const node = requireRegularFile(nodePath, 'aimos_service_node_invalid');
@@ -113,6 +114,11 @@ export function buildUserServiceDefinition({
     '--aimos-instance', String(instance),
     '--aimos-postgres-port', String(postgresPort),
   ], { homeDirectory: home });
+  const privatePostgres = context.postgres_port !== 5432;
+  const pgBin = privatePostgres ? path.resolve(String(postgresBin || '')) : null;
+  if (privatePostgres && (!postgresBin || !path.isAbsolute(postgresBin))) {
+    fail('aimos_service_postgres_bindir_required');
+  }
   const stateRoot = context.service_state_root;
   const logRoot = context.service_log_root;
   const runtimeArguments = [
@@ -121,6 +127,7 @@ export function buildUserServiceDefinition({
     ...(context.canonical ? [] : ['--aimos-instance', context.instance]),
     ...(context.postgres_port === 5432
       ? [] : ['--aimos-postgres-port', String(context.postgres_port)]),
+    ...(privatePostgres ? ['--pg-bindir', pgBin] : []),
   ];
   const common = {
     schema: AIMOS_USER_SERVICE_SCHEMA,
@@ -132,6 +139,10 @@ export function buildUserServiceDefinition({
     source_root: source,
     node_path: node,
     server_path: path.join(source, 'server.js'),
+    launcher_path: privatePostgres
+      ? path.join(source, 'scripts', 'service', 'run-private-postgres.mjs')
+      : path.join(source, 'server.js'),
+    postgres_bin: pgBin,
     database: db,
     port: serverPort,
     state_root: stateRoot,
@@ -157,7 +168,7 @@ export function buildUserServiceDefinition({
   <key>ProgramArguments</key>
   <array>
     <string>${xml(node)}</string>
-    <string>${xml(common.server_path)}</string>
+    <string>${xml(common.launcher_path)}</string>
     ${argumentXml}
   </array>
   <key>WorkingDirectory</key><string>${xml(source)}</string>
@@ -176,7 +187,7 @@ export function buildUserServiceDefinition({
   if (platform === 'linux') {
     const unitName = context.canonical ? 'hom-aimos.service' : `hom-aimos-${context.instance}.service`;
     const unitPath = path.join(home, '.config', 'systemd', 'user', unitName);
-    const command = [node, common.server_path, ...runtimeArguments]
+    const command = [node, common.launcher_path, ...runtimeArguments]
       .map(systemdQuote).join(' ');
     const unit = `[Unit]
 Description=HOM-AIMOS native memory service
@@ -206,10 +217,14 @@ function definitionManifest(definition) {
   const body = {
     schema: definition.schema,
     label: definition.label,
-    ...(definition.instance === 'canonical' ? {} : {
+    ...(definition.instance === 'canonical' && definition.postgres_port === 5432 ? {} : {
       instance: definition.instance,
       installation_context_sha256: definition.installation_context_sha256,
       postgres_port: definition.postgres_port,
+      ...(definition.postgres_port === 5432 ? {} : {
+        postgres_bin: definition.postgres_bin,
+        launcher_path: definition.launcher_path,
+      }),
     }),
     platform: definition.platform,
     source_root: definition.source_root,
@@ -239,6 +254,7 @@ export function validateUserServiceManifest(manifest, {
     port: manifest.port,
     instance: manifest.instance,
     postgresPort: manifest.postgres_port,
+    postgresBin: manifest.postgres_bin,
     platform: manifest.platform,
     homeDirectory,
   });
@@ -342,7 +358,7 @@ function startDefinition(definition) {
 // Cold boot verifies retained signed history before advertising readiness.
 // Keep an absolute bound, but do not terminate a healthy verification pass at
 // the former three-minute edge. No verification or readiness predicate changes.
-async function waitForReadiness(definition, timeoutMs = 300_000) {
+async function waitForReadiness(definition, timeoutMs = 900_000) {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
     let pauseMs = 1000;
@@ -353,9 +369,7 @@ async function waitForReadiness(definition, timeoutMs = 300_000) {
         signal: AbortSignal.timeout(Math.min(5000, remaining)),
       });
       const body = await response.json();
-      if (response.ok && body?.ready === true
-          && body?.runtime?.database_name === definition.database
-          && Number(body?.runtime?.server_port) === definition.port) return body;
+      if (response.ok && serviceReadinessMatches(definition, body)) return body;
       const retryAfter = Number(response.headers.get('retry-after'));
       if (response.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0) {
         pauseMs = Math.max(pauseMs, retryAfter * 1000);
@@ -368,6 +382,33 @@ async function waitForReadiness(definition, timeoutMs = 300_000) {
   fail('aimos_user_service_readiness_timeout');
 }
 
+export function serviceReadinessMatches(definition, body) {
+  return body?.ready === true
+    && body?.runtime?.database_name === definition.database
+    && Number(body?.runtime?.server_port) === definition.port
+    && Number(body?.runtime?.postgres_port) === definition.postgres_port;
+}
+
+function serviceRunning(definition) {
+  if (definition.platform === 'darwin') return launchdLoaded(definition);
+  return run('/usr/bin/systemctl', ['--user', 'is-active', path.basename(definition.unit_path)], {
+    allowFailure: true,
+  }).status === 0;
+}
+
+function snapshotServiceFile(file) {
+  if (!existsSync(file)) return null;
+  const stat = lstatSync(file);
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.uid !== process.getuid()
+      || (stat.mode & 0o077) !== 0) fail('aimos_service_existing_file_custody_invalid');
+  return { bytes: readFileSync(file), mode: stat.mode & 0o777 };
+}
+
+function restoreServiceFile(file, snapshot) {
+  if (snapshot) writeAtomic(file, snapshot.bytes, snapshot.mode);
+  else if (existsSync(file)) unlinkSync(file);
+}
+
 export function readInstalledUserServiceDefinition(instance = 'canonical') {
   const context = resolveAimosInstallationContext([
     '--aimos-instance', String(instance),
@@ -378,19 +419,54 @@ export function readInstalledUserServiceDefinition(instance = 'canonical') {
   return validateUserServiceManifest(manifest, { homeDirectory: os.homedir() });
 }
 
-export async function installUserService(options = {}) {
+export async function installUserService(options = {}, {
+  isRunning = serviceRunning,
+  stop = stopDefinition,
+  start = startDefinition,
+  waitReady = waitForReadiness,
+} = {}) {
   const definition = buildUserServiceDefinition(options);
   mkdirSync(definition.state_root, { recursive: true, mode: 0o700 });
   mkdirSync(definition.log_root, { recursive: true, mode: 0o700 });
-  stopDefinition(definition);
-  writeAtomic(definition.unit_path, definition.unit_body, 0o600);
-  writeAtomic(definition.manifest_path, `${JSON.stringify(definitionManifest(definition), null, 2)}\n`, 0o600);
-  startDefinition(definition);
+  const previousUnit = snapshotServiceFile(definition.unit_path);
+  const previousManifest = snapshotServiceFile(definition.manifest_path);
+  if (Boolean(previousUnit) !== Boolean(previousManifest)) {
+    fail('aimos_service_existing_definition_incomplete');
+  }
+  const previous = previousManifest
+    ? validateUserServiceManifest(JSON.parse(previousManifest.bytes.toString('utf8')), {
+        homeDirectory: options.homeDirectory || os.homedir(),
+      })
+    : null;
+  if (previous && previousUnit.bytes.toString('utf8') !== previous.unit_body) {
+    fail('aimos_service_existing_unit_mismatch');
+  }
+  const restartPrevious = previous ? isRunning(previous) : false;
   try {
-    const health = await waitForReadiness(definition);
+    stop(definition);
+    writeAtomic(definition.unit_path, definition.unit_body, 0o600);
+    writeAtomic(definition.manifest_path, `${JSON.stringify(definitionManifest(definition), null, 2)}\n`, 0o600);
+    start(definition);
+    const health = await waitReady(definition);
     return { success: true, action: 'install', definition: definitionManifest(definition), health };
   } catch (error) {
-    stopDefinition(definition);
+    const rollbackErrors = [];
+    for (const restore of [
+      () => stop(definition),
+      () => restoreServiceFile(definition.unit_path, previousUnit),
+      () => restoreServiceFile(definition.manifest_path, previousManifest),
+    ]) {
+      try { restore(); } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+    }
+    if (restartPrevious && rollbackErrors.length === 0) {
+      try {
+        start(previous);
+        await waitReady(previous);
+      } catch (rollbackError) { rollbackErrors.push(rollbackError); }
+    }
+    if (rollbackErrors.length) {
+      throw new AggregateError([error, ...rollbackErrors], 'aimos_service_install_and_rollback_failed');
+    }
     throw error;
   }
 }
@@ -434,7 +510,7 @@ export async function manageInstalledUserService(action, { instance = 'canonical
       const response = await fetch(`http://127.0.0.1:${definition.port}/health`);
       health = await response.json();
     } catch { /* status reports unavailable */ }
-    return { success: supervisor.loaded && health?.ready === true, action, definition: definitionManifest(definition), supervisor, health };
+    return { success: supervisor.loaded && serviceReadinessMatches(definition, health), action, definition: definitionManifest(definition), supervisor, health };
   }
   if (action === 'uninstall') {
     stopDefinition(definition);
@@ -447,7 +523,7 @@ export async function manageInstalledUserService(action, { instance = 'canonical
 }
 
 function usage() {
-  process.stderr.write('Usage: node scripts/service/manage-user-service.mjs install|start|stop|restart|status|uninstall [--source-root PATH --node PATH --database NAME --port PORT --instance NAME --postgres-port PORT]\n');
+  process.stderr.write('Usage: node scripts/service/manage-user-service.mjs install|start|stop|restart|status|uninstall [--source-root PATH --node PATH --database NAME --port PORT --instance NAME --postgres-port PORT --postgres-bin PATH]\n');
 }
 
 async function main() {
@@ -466,6 +542,7 @@ async function main() {
         port: cliValue(argv, '--port') || 9100,
         instance: cliValue(argv, '--instance') || 'canonical',
         postgresPort: cliValue(argv, '--postgres-port') || 5432,
+        postgresBin: cliValue(argv, '--postgres-bin'),
       })
     : await manageInstalledUserService(action, {
         instance: cliValue(argv, '--instance') || 'canonical',

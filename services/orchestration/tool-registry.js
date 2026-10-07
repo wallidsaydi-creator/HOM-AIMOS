@@ -22,9 +22,7 @@ import { searchWeb } from '../integrations/web-search.js';
 import { xSearchRecent } from '../integrations/x-search.js';
 import { xPostTweet, xReplyToTweet, xQuoteTweet } from '../integrations/x-tools.js';
 import { getOperatorAgentId, isOperatorAgentId } from '../security/system-config-store.js';
-import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { fileURLToPath } from 'url';
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
@@ -76,7 +74,12 @@ import { readVerifiedRequestReceiptByMutationHash } from '../security/request-re
 import { readVerifiedEventById } from '../observe/event-ledger.js';
 import { executeCanonicalRecall } from '../retrieval/native-recall-pipeline.js';
 import { masterPubkeyCache } from '../security/master-pubkey-cache.js';
-import { authorizePurposeLocalFileRead } from '../security/purpose-authorization.js';
+import {
+  allowedLocalWriteRoots,
+  authorizePurposeLocalFileRead,
+  readPurposeAuthorizedLocalFile,
+  writeAllowedLocalFile,
+} from '../security/purpose-authorization.js';
 
 const COMPANY = AIMOS_COMPANY_ID;
 const AIMOS_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -930,7 +933,9 @@ export const ALL_TOOL_DEFS = {
         parameters: { type: 'object', properties: {} }
       }
     },
-    fn: async () => listIntegrationStatus()
+    fn: async (_args, invocationOptions = {}) => listIntegrationStatus(
+      invocationOptions.credentialUseContext || {},
+    )
   },
 
   github_list_repos: {
@@ -1264,7 +1269,7 @@ export const ALL_TOOL_DEFS = {
       type: 'function',
       function: {
         name: 'write_file',
-        description: 'Save content directly to a local file on the Mac (e.g. your Desktop). Use absolute paths.',
+        description: 'Save content to a local file in an existing, owner-controlled Desktop, Documents, or AIMOS export directory. Use an absolute path; this tool does not create directories.',
         parameters: {
           type: 'object',
           properties: {
@@ -1320,12 +1325,7 @@ export const ALL_TOOL_DEFS = {
           };
         }
 
-        const home = os.homedir();
-        const ALLOWED_WRITE_DIRS = [
-          path.join(home, '.aimos', 'exports'),
-          path.join(home, 'Desktop'),
-          path.join(home, 'Documents'),
-        ];
+        const ALLOWED_WRITE_DIRS = allowedLocalWriteRoots();
         const BLOCKED_PATTERNS = [/\.\./, /^\/(etc|usr|var|System|Library|bin|sbin|tmp)\b/];
         if (BLOCKED_PATTERNS.some((p) => p.test(resolved))) {
           return { error: `Path rejected by security policy: ${filepath}` };
@@ -1334,22 +1334,23 @@ export const ALL_TOOL_DEFS = {
           return { error: `file_write restricted to allowed directories. Rejected: ${filepath}` };
         }
 
-        const dir = path.dirname(resolved);
-        if (!fs.existsSync(dir)) {
-          fs.mkdirSync(dir, { recursive: true });
-        }
-        fs.writeFileSync(resolved, content, 'utf8');
-        const readback = fs.readFileSync(resolved);
-        const stat = fs.statSync(resolved);
+        const executionContext = options.executionContext || options.credentialUseContext || null;
+        const written = await writeAllowedLocalFile({
+          filepath, content, toolActionAuthority: options.toolActionAuthority,
+          executionContext, agentId,
+        });
         return {
           success: true,
-          message: `Successfully wrote ${readback.length} bytes to ${resolved}`,
-          content_sha256: createHash('sha256').update(readback).digest('hex'),
-          byte_length: readback.length,
-          mode: stat.mode & 0o777,
+          message: `Successfully wrote ${written.byteLength} bytes to ${written.path}`,
+          content_sha256: written.contentSha256,
+          byte_length: written.byteLength,
+          mode: written.mode,
         };
       } catch (err) {
-        throw new Error(`Failed to write file: ${err.message}`);
+        const failure = new Error(`Failed to write file: ${err.message}`);
+        if (err.httpOutcome) failure.httpOutcome = err.httpOutcome;
+        if (err.materialEffectTerminalError) failure.materialEffectTerminalError = err.materialEffectTerminalError;
+        throw failure;
       }
     }
   },
@@ -1679,17 +1680,30 @@ export const ALL_TOOL_DEFS = {
         }
       }
     },
-    fn: async ({ filepath }) => {
+    fn: async ({ filepath }, options = {}) => {
       try {
-        if (!fs.existsSync(filepath)) {
-          return { error: `File not found: ${filepath}` };
+        const authorizedArgs = options.toolActionArguments || { filepath };
+        if (authorizedArgs.filepath !== filepath) {
+          throw new Error('consequential_action_argument_substitution');
         }
-        const content = fs.readFileSync(filepath, 'utf8');
-        // Truncate if too large to prevent breaking the context window
-        if (content.length > 50000) {
-          return { content: content.substring(0, 50000) + '\\n\\n...[TRUNCATED: File too large]...' };
-        }
-        return { content };
+        await verifyToolActionAuthority(options.toolActionAuthority, {
+          expectedCompanyId: COMPANY,
+          expectedTool: 'read_file',
+          expectedActorAgentId: options.executionContext?.actorAgentId
+            || options.credentialUseContext?.actorAgentId,
+          expectedArguments: authorizedArgs,
+        });
+        const masterPubkey = await masterPubkeyCache.get();
+        if (!masterPubkey) throw new Error('purpose_authorization_master_pubkey_unavailable');
+        return { content: readPurposeAuthorizedLocalFile({
+          serialized: options.purposeAuthorization,
+          masterPubkeyB64u: masterPubkey,
+          executionContext: options.executionContext || options.credentialUseContext || null,
+          agentId: options.executionContext?.actorAgentId || options.credentialUseContext?.actorAgentId,
+          tool: 'read_file',
+          filepath,
+          clearanceLevel: options.clearanceLevel,
+        }) };
       } catch (err) {
         return { error: `Failed to read file: ${err.message}` };
       }
@@ -2015,10 +2029,13 @@ export function getToolsForAgent(toolSuitesOrNames, options = {}) {
     toolSet.delete(toolName);
   }
 
-  // Local filesystem access is restricted to the executive lane only.
+  // Local filesystem access is restricted to the executive lane. Until an
+  // operator-scoped proof is supplied through a native run, do not advertise
+  // a read tool that the native owner must reject.
   if (allowLocalDisk) {
     toolSet.add('write_file');
-    toolSet.add('read_file');
+    if (options.purposeAuthorization) toolSet.add('read_file');
+    else toolSet.delete('read_file');
   } else {
     toolSet.delete('write_file');
     toolSet.delete('read_file');
@@ -2158,16 +2175,12 @@ export async function executeTool(name, args, agentId, options = {}) {
 
   // Direct native callers do not pass through agent-runner's tool-list
   // filter. Local disk reads therefore need their own native-owner check.
-  // The designated operator keeps its signed system-config boundary. Any
-  // other identity must present a master-signed, exact-epoch purpose proof
-  // restricted to the requested file's owner-only root.
+  // Every identity, including the designated operator, must present a
+  // master-signed exact-epoch purpose proof for a bounded owner-only root.
   let purposeAuthorizationReceipt = null;
-  if (name === 'read_file' && !isOperatorAgentId(agentId)) {
+  if (name === 'read_file') {
     const serialized = options.purposeAuthorization || null;
     if (!serialized) throw new Error('master_signed_local_file_read_authorization_required');
-    if (!/^[0-9a-f]{64}$/.test(String(options.protocolConfirmationSha256 || ''))) {
-      throw new Error('purpose_authorization_protocol_commitment_required');
-    }
     const masterPubkey = await masterPubkeyCache.get();
     if (!masterPubkey) throw new Error('purpose_authorization_master_pubkey_unavailable');
     purposeAuthorizationReceipt = authorizePurposeLocalFileRead({
@@ -2178,7 +2191,6 @@ export async function executeTool(name, args, agentId, options = {}) {
       tool: name,
       filepath: args?.filepath,
       clearanceLevel: agentClearance,
-      expectedProtocolConfirmationSha256: options.protocolConfirmationSha256 || null,
     });
   }
 

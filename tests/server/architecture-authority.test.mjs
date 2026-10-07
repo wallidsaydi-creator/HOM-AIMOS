@@ -13,15 +13,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '.
 const template = JSON.parse(fs.readFileSync(path.join(root, 'architecture-authority.template.json'), 'utf8'));
 const manifest = JSON.parse(fs.readFileSync(path.join(root, 'hom-architecture-manifest.json'), 'utf8'));
 
-test('service manifest is exact set-equality with the live 295-service census', () => {
+test('service manifest is exact set-equality with the live 297-service census', () => {
   const census = collectServiceCensus(root);
   const manifestFiles = Object.entries(manifest.service_inventory.groups)
     .flatMap(([group, entry]) => entry.files.map((file) => `services/${group}/${file}`))
     .sort();
 
   assert.equal(census.groupCount, 17);
-  assert.equal(census.serviceCount, 295);
-  assert.equal(census.digest, 'a001876ec9e5f503247b55479ec9ad7d4a8bab65f01582fd3060321bdb3ded4c');
+  assert.equal(census.serviceCount, 297);
+  assert.equal(census.digest, 'c267bd0c88ec5ce21cf14f481a037230ee68801f574995e643490ed3a67ae539');
   assert.deepEqual(manifestFiles, census.files);
   assert.equal(manifest.total_services, census.serviceCount);
   assert.equal(manifest.service_inventory.counted_service_files, census.serviceCount);
@@ -72,5 +72,5 @@ test('authority dry run binds current static authority, Genesis root, and servic
   assert.equal(runtime.runtime_mode, 'runtime');
   assert.equal(runtime.genesis_corpus.verified_during_generation, true);
   assert.equal(runtime.service_inventory.verified_during_generation, true);
-  assert.equal(runtime.service_inventory.counted_service_files, 295);
+  assert.equal(runtime.service_inventory.counted_service_files, 297);
 });

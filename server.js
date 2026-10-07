@@ -3,7 +3,7 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import { randomUUID } from 'crypto';
 import { readFileSync } from 'node:fs';
-import { pool, agentPool, schedulerLockPool } from './db/connection.js';
+import { pool, agentPool, identityWriterPool, schedulerLockPool } from './db/connection.js';
 import { beginServingWork, beginServingDrain, finishServingDrain, getServingWorkState, cancelServingWork } from './services/runtime/serving-control.js';
 import statusRoutes from './routes/status.js';
 import { authGate } from './services/security/auth-gate.js';
@@ -44,6 +44,7 @@ app.use((req, res, next) => {
 // reintroduce an unverified authority path before the ledger is even loaded.
 import {
   AIMOS_COMPANY_ID,
+  AIMOS_POSTGRES_PORT,
   AIMOS_SERVER_PORT,
   resolveAimosDatabaseName,
 } from './services/core/runtime-config.js';
@@ -212,6 +213,7 @@ function buildHealthPayload() {
     runtime: {
       company_id: AIMOS_COMPANY_ID,
       database_name: DATABASE_NAME,
+      postgres_port: AIMOS_POSTGRES_PORT,
       server_port: PORT,
       benchmark_scratch: DATABASE_NAME.startsWith('aimos_benchmark_'),
       lifecycle: getServingWorkState(),
@@ -478,6 +480,7 @@ function createCr7OpenReducer(createReducer, owners) {
 async function reconcileCr7OpenActionsAtBoot() {
   const { readVerifiedRecoveryHistory, createVerifiedOpenEventReducer } = await import('./services/observe/event-ledger.js');
   const { materialEffectOwner, reconstructMaterialEffectTraces } = await import('./services/security/material-effect-owner.js');
+  const { reconcileLocalFileWriteOrphans } = await import('./services/security/purpose-authorization.js');
   const { reconcileOpenToolActions, reconstructToolActionTraces,
     reconcileOpenModelContexts, reconstructModelContextTraces } = await import('./services/orchestration/tool-action-ledger.js');
   const { credentialLedger } = await import('./services/security/credential-ledger.js');
@@ -499,7 +502,12 @@ async function reconcileCr7OpenActionsAtBoot() {
     reconstructModelContextTraces, reconstructCanonicalSaveActionTraces,
     reconstructRunTraces, reconstructSessionLaneTraces };
   const handlers = {
-    material_effect: readHistoryFn => materialEffectOwner.reconcileOpen({ historyFn:readHistoryFn }),
+    material_effect: async readHistoryFn => {
+      const verifiedRows = await readHistoryFn(AIMOS_COMPANY_ID, { signerAgentId: 'housekeeper' });
+      const open = reconstructMaterialEffectTraces(verifiedRows).open;
+      await reconcileLocalFileWriteOrphans(open);
+      return materialEffectOwner.reconcileOpen({ historyFn:readHistoryFn });
+    },
     tool_action: readHistoryFn => reconcileOpenToolActions({ readHistoryFn }),
     model_context: readHistoryFn => reconcileOpenModelContexts({ readHistoryFn }),
     canonical_save_action: readHistoryFn => reconcileOpenCanonicalSaveActions({ readHistoryFn }),
@@ -568,6 +576,11 @@ async function checkpointCr7RecoveryAtBoot() {
 }
 
 async function startServer() {
+  if (AIMOS_POSTGRES_PORT !== 5432) {
+    const { assertPrivatePostgresServingBoundary } = await import('./services/security/postgres-serving-boundary.js');
+    const roles = await assertPrivatePostgresServingBoundary();
+    console.log(`[BOOT] Private PostgreSQL admission verified for ${roles.length} restricted roles.`);
+  }
   // Load operator delegation config (OPERATOR_AGENT_ID, etc.) into the
   // in-memory verified store BEFORE accepting traffic. The store is the
   // runtime truth — readConfigString() never hits the DB on the request
@@ -702,7 +715,7 @@ function shutdown(signal) {
       return;
     }
     finishServingDrain();
-    await Promise.all([schedulerLockPool.end(), agentPool.end(), pool.end()]);
+    await Promise.all([schedulerLockPool.end(), agentPool.end(), identityWriterPool.end(), pool.end()]);
     process.exitCode = 0;
   })().catch(error => {
     console.error('[shutdown-indeterminate]', error?.stack || error);

@@ -95,9 +95,12 @@ function buildOAuth1Header(method, url, credentials) {
 }
 
 async function mintBearerFromKeySecret(useContext = {}, deadlineAt = useContext.deadlineAt) {
-  if (!peekCachedCredential('x_api_key') || !peekCachedCredential('x_api_secret')) return null;
-
   for (const base of X_API_BASES) {
+    const authorization = await credentialLedger.authorizeCredentialUse({
+      operation: 'x_oauth2_client_credentials', endpoint: `${base}/oauth2/token`, useContext,
+    });
+    if (authorization.capability !== 'x') throw new Error('x_credential_capability_unknown');
+    if (!peekCachedCredential('x_api_key') || !peekCachedCredential('x_api_secret')) return null;
     const key = checkoutCachedCredential('x_api_key');
     const secret = checkoutCachedCredential('x_api_secret');
     if (!key || !secret) return null;
@@ -117,6 +120,8 @@ async function mintBearerFromKeySecret(useContext = {}, deadlineAt = useContext.
         requestAdmissionEventId: useContext?.requestAdmissionEventId || null,
         requestAdmissionMutationHash: useContext?.requestAdmissionMutationHash || null,
         autonomousActionEventId: useContext?.autonomousActionEventId || null,
+        actorValidFromIso: useContext?.actorValidFromIso || null,
+        toolActionArguments: useContext?.toolActionArguments || null,
         useGroupId,
       })
     )));
@@ -250,6 +255,10 @@ async function xGet(path, useContext = {}, inheritedDeadline = useContext.deadli
   let lastError = null;
 
   for (const base of X_API_BASES) {
+    const operationAuthorization = await credentialLedger.authorizeCredentialUse({
+      operation: 'x_api_read', endpoint: `${base}${parsedPath.pathname}`, useContext,
+    });
+    if (operationAuthorization.capability !== 'x') throw new Error('x_credential_capability_unknown');
     const authorization = await resolveReadAuthorization(useContext, deadlineAt);
     const useGroupId = authorization.credentials.length > 1 ? crypto.randomUUID() : null;
     const reservationResults = await Promise.allSettled(authorization.credentials.map((credential) => (
@@ -264,6 +273,8 @@ async function xGet(path, useContext = {}, inheritedDeadline = useContext.deadli
         requestAdmissionEventId: useContext?.requestAdmissionEventId || null,
         requestAdmissionMutationHash: useContext?.requestAdmissionMutationHash || null,
         autonomousActionEventId: useContext?.autonomousActionEventId || null,
+        actorValidFromIso: useContext?.actorValidFromIso || null,
+        toolActionArguments: useContext?.toolActionArguments || null,
         useGroupId,
       })
     )));
@@ -409,6 +420,10 @@ export async function xPostTweet({ text, useContext = {} }) {
   });
   const bodyText = String(text || '').trim();
   if (!bodyText) throw new Error('text is required');
+  const initialAuthorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'x_post_tweet', endpoint: `${X_API_BASES[0]}/2/tweets`, useContext,
+  });
+  if (initialAuthorization.capability !== 'x') throw new Error('x_credential_capability_unknown');
   if (!hasOAuth1Credentials() && !peekCachedCredential('x_access_token')) {
     throw new Error('X posting not configured. Set X_API_KEY + X_ACCESS_TOKEN (OAuth 1.0a) or X_USER_ACCESS_TOKEN (bearer).');
   }
@@ -418,6 +433,10 @@ export async function xPostTweet({ text, useContext = {} }) {
   let lastError = null;
   for (const base of X_API_BASES) {
     const url = `${base}/2/tweets`;
+    const operationAuthorization = await credentialLedger.authorizeCredentialUse({
+      operation: 'x_post_tweet', endpoint: url, useContext,
+    });
+    if (operationAuthorization.capability !== 'x') throw new Error('x_credential_capability_unknown');
     const authorization = resolvePostAuthorization(url);
     if (!authorization) throw new Error('X posting credential checkout failed.');
     const useGroupId = authorization.credentials.length > 1 ? crypto.randomUUID() : null;
@@ -433,6 +452,8 @@ export async function xPostTweet({ text, useContext = {} }) {
         requestAdmissionEventId: useContext?.requestAdmissionEventId || null,
         requestAdmissionMutationHash: useContext?.requestAdmissionMutationHash || null,
         autonomousActionEventId: useContext?.autonomousActionEventId || null,
+        actorValidFromIso: useContext?.actorValidFromIso || null,
+        toolActionArguments: useContext?.toolActionArguments || null,
         useGroupId,
       })
     )));
@@ -535,6 +556,10 @@ export async function xReplyToTweet({ text, replyToTweetId, useContext = {} }) {
   const targetId = String(replyToTweetId || '').trim();
   if (!bodyText) throw new Error('text is required');
   if (!targetId) throw new Error('replyToTweetId is required');
+  const initialAuthorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'x_reply_to_tweet', endpoint: `${X_API_BASES[0]}/2/tweets`, useContext,
+  });
+  if (initialAuthorization.capability !== 'x') throw new Error('x_credential_capability_unknown');
   if (!hasOAuth1Credentials() && !peekCachedCredential('x_access_token')) {
     throw new Error('X posting not configured. Set X_API_KEY + X_ACCESS_TOKEN (OAuth 1.0a) or X_USER_ACCESS_TOKEN (bearer).');
   }
@@ -544,6 +569,10 @@ export async function xReplyToTweet({ text, replyToTweetId, useContext = {} }) {
   let lastError = null;
   for (const base of X_API_BASES) {
     const url = `${base}/2/tweets`;
+    const operationAuthorization = await credentialLedger.authorizeCredentialUse({
+      operation: 'x_reply_to_tweet', endpoint: url, useContext,
+    });
+    if (operationAuthorization.capability !== 'x') throw new Error('x_credential_capability_unknown');
     const authorization = resolvePostAuthorization(url);
     if (!authorization) throw new Error('X posting credential checkout failed.');
     const useGroupId = authorization.credentials.length > 1 ? crypto.randomUUID() : null;
@@ -559,6 +588,8 @@ export async function xReplyToTweet({ text, replyToTweetId, useContext = {} }) {
         requestAdmissionEventId: useContext?.requestAdmissionEventId || null,
         requestAdmissionMutationHash: useContext?.requestAdmissionMutationHash || null,
         autonomousActionEventId: useContext?.autonomousActionEventId || null,
+        actorValidFromIso: useContext?.actorValidFromIso || null,
+        toolActionArguments: useContext?.toolActionArguments || null,
         useGroupId,
       })
     )));
@@ -661,6 +692,10 @@ export async function xQuoteTweet({ text, quoteTweetId, useContext = {} }) {
   const targetId = String(quoteTweetId || '').trim();
   if (!bodyText) throw new Error('text is required');
   if (!targetId) throw new Error('quoteTweetId is required');
+  const initialAuthorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'x_quote_tweet', endpoint: `${X_API_BASES[0]}/2/tweets`, useContext,
+  });
+  if (initialAuthorization.capability !== 'x') throw new Error('x_credential_capability_unknown');
   if (!hasOAuth1Credentials() && !peekCachedCredential('x_access_token')) {
     throw new Error('X posting not configured. Set X_API_KEY + X_ACCESS_TOKEN (OAuth 1.0a) or X_USER_ACCESS_TOKEN (bearer).');
   }
@@ -670,6 +705,10 @@ export async function xQuoteTweet({ text, quoteTweetId, useContext = {} }) {
   let lastError = null;
   for (const base of X_API_BASES) {
     const url = `${base}/2/tweets`;
+    const operationAuthorization = await credentialLedger.authorizeCredentialUse({
+      operation: 'x_quote_tweet', endpoint: url, useContext,
+    });
+    if (operationAuthorization.capability !== 'x') throw new Error('x_credential_capability_unknown');
     const authorization = resolvePostAuthorization(url);
     if (!authorization) throw new Error('X posting credential checkout failed.');
     const useGroupId = authorization.credentials.length > 1 ? crypto.randomUUID() : null;
@@ -685,6 +724,8 @@ export async function xQuoteTweet({ text, quoteTweetId, useContext = {} }) {
         requestAdmissionEventId: useContext?.requestAdmissionEventId || null,
         requestAdmissionMutationHash: useContext?.requestAdmissionMutationHash || null,
         autonomousActionEventId: useContext?.autonomousActionEventId || null,
+        actorValidFromIso: useContext?.actorValidFromIso || null,
+        toolActionArguments: useContext?.toolActionArguments || null,
         useGroupId,
       })
     )));

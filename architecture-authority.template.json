@@ -2,7 +2,7 @@
   "schema": "hom.architecture-authority/v1",
   "runtime_mode": "template",
   "version": "0.13",
-  "updated": "2026-08-28",
+  "updated": "2026-10-06",
   "owner": "hom-aimos",
   "canonical": true,
   "purpose": "Portable public HOM-AIMOS authority. Paths are relative to the repository root and are resolved by the Genesis installer. Runtime state, credentials, identities, permissions, and memories are ledgered; no environment or private predecessor-system file hierarchy is authoritative.",
@@ -109,8 +109,8 @@
     "manifest": "./hom-architecture-manifest.json",
     "counting_policy": "top-level services/<group>/*.js excluding index.js barrels and hidden directories",
     "counted_service_groups": 17,
-    "counted_service_files": 295,
-    "census_sha256": "a001876ec9e5f503247b55479ec9ad7d4a8bab65f01582fd3060321bdb3ded4c"
+    "counted_service_files": 297,
+    "census_sha256": "c267bd0c88ec5ce21cf14f481a037230ee68801f574995e643490ed3a67ae539"
   },
   "mechanical_rules": {
     "native_only": true,

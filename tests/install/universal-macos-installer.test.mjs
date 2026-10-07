@@ -51,7 +51,9 @@ test('public documentation exposes automated and manual prerequisite paths witho
   const docs = `${read('README.md')}\n${read('DEPLOYMENT.md')}`;
   assert.match(docs, /\.\/install-macos\.sh --check/);
   assert.match(docs, /brew bundle --file Brewfile/);
-  assert.match(docs, /brew services start postgresql@18/);
+  assert.match(docs, /scripts\/db\/secure-cluster\.mjs/);
+  assert.match(docs, /--aimos-postgres-port 55432/);
+  assert.doesNotMatch(docs, /brew services start postgresql@18/);
   assert.match(docs, /Node\.js 20, 24, or 26/);
   assert.match(docs, /PostgreSQL 18/);
   assert.match(docs, /pgvector/);

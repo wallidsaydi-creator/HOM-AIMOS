@@ -55,11 +55,14 @@ function maintenanceUrls(databaseUrl) {
   });
 }
 
-async function connectMaintenance(databaseUrl, PoolClass = Pool) {
+async function connectMaintenance(databaseUrl, PoolClass = Pool, maintenanceConfig = null) {
   let lastError = null;
-  for (const connectionString of maintenanceUrls(databaseUrl)) {
+  const targets = maintenanceConfig
+    ? ['postgres', 'template1'].map((database) => ({ ...maintenanceConfig, database }))
+    : maintenanceUrls(databaseUrl).map((connectionString) => ({ connectionString }));
+  for (const target of targets) {
     const pool = new PoolClass({
-      connectionString,
+      ...target,
       ssl: false,
       connectionTimeoutMillis: 5_000,
     });
@@ -202,12 +205,13 @@ function writeAttestation(facts, receipt) {
 
 export async function ensurePgsodium({
   databaseUrl = resolveAimosDatabaseUrl(),
+  maintenanceConfig = null,
   lockPath = PGSODIUM_LOCK_PATH,
   PoolClass = Pool,
   execFn = execFileSync,
 } = {}) {
   const lock = readPgsodiumLock(lockPath);
-  const pool = await connectMaintenance(databaseUrl, PoolClass);
+  const pool = await connectMaintenance(databaseUrl, PoolClass, maintenanceConfig);
   try {
     let facts = await serverFacts(pool);
     if (!String(facts.pgVersion || '').startsWith('PostgreSQL 18.')) {

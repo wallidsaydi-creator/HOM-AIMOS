@@ -1,15 +1,15 @@
 {
   "project": "HOM Distributed Cognitive Engine",
   "version": "1.2.5-Batch9.75-Coexistence",
-  "updated": "2026-09-22",
+  "updated": "2026-10-06",
   "doctrine": "Distributed Aladdin Law",
-  "total_services": 295,
+  "total_services": 297,
   "research_papers_ingested": 197,
   "books_ingested": 11,
   "service_inventory": {
     "service_groups": 17,
-    "counted_service_files": 295,
-    "census_sha256": "a001876ec9e5f503247b55479ec9ad7d4a8bab65f01582fd3060321bdb3ded4c",
+    "counted_service_files": 297,
+    "census_sha256": "c267bd0c88ec5ce21cf14f481a037230ee68801f574995e643490ed3a67ae539",
     "counting_policy": {
       "counted": "top-level services/<group>/*.js excluding index.js barrels and hidden directories",
       "excluded_root_infrastructure_files": [
@@ -315,7 +315,7 @@
       "security": {
         "layer": "L3",
         "path": "services/security/",
-        "services": 51,
+        "services": 53,
         "files": [
           "agent-identity.js",
           "agent-revocation-cache.js",
@@ -353,7 +353,9 @@
           "memory-lineage.js",
           "memory-provenance.js",
           "nonce-window.js",
+          "operator-file-read-gate.js",
           "origin-ledger.js",
+          "postgres-serving-boundary.js",
           "purpose-authorization.js",
           "recall-authorization.js",
           "red-team-toolkit.js",

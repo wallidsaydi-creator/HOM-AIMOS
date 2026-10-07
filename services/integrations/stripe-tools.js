@@ -13,6 +13,11 @@ function toInt(value, fallback) {
 }
 
 async function stripeRequest(path, params = {}, useContext = {}) {
+  await credentialLedger.authorizeCredentialUse({
+    operation: 'stripe_api_read',
+    endpoint: `${STRIPE_BASE_URL}${path}`,
+    useContext,
+  });
   const credential = checkoutCachedCredential('stripe_secret_key');
   if (!credential) {
     throw new Error('STRIPE_SECRET_KEY is missing');
@@ -31,11 +36,13 @@ async function stripeRequest(path, params = {}, useContext = {}) {
     endpoint: `${STRIPE_BASE_URL}${path}`,
     requestHash: credentialUseEvidenceHash(requestEvidence),
     subjectAgentId: useContext.actorAgentId || 'housekeeper',
+    actorValidFromIso: useContext.actorValidFromIso || null,
     requestReceiptId: useContext.requestReceiptId || null,
     requestReceiptMutationHash: useContext.requestReceiptMutationHash || null,
     requestAdmissionEventId: useContext.requestAdmissionEventId || null,
     requestAdmissionMutationHash: useContext.requestAdmissionMutationHash || null,
     autonomousActionEventId: useContext.autonomousActionEventId || null,
+    toolActionArguments: useContext.toolActionArguments || null,
   });
 
   const url = `${STRIPE_BASE_URL}${path}${query.toString() ? `?${query.toString()}` : ''}`;

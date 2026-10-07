@@ -585,11 +585,18 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     }
   }
 
-  const { resolveAimosDatabaseUrl } = await import('../services/core/runtime-config.js');
+  const { AIMOS_POSTGRES_PORT, resolveAimosDatabaseName, resolveAimosDatabaseUrl } =
+    await import('../services/core/runtime-config.js');
   const url = resolveAimosDatabaseUrl();
 
   const { default: pg } = await import('pg');
-  const pool = new pg.Pool({ connectionString: url, connectionTimeoutMillis: 5000 });
+  const config = AIMOS_POSTGRES_PORT === 5432
+    ? { connectionString: url, connectionTimeoutMillis: 5000 }
+    : await (async () => {
+      const { resolveClusterAdminConfig } = await import('../scripts/db/cluster-admin.mjs');
+      return resolveClusterAdminConfig({ database: resolveAimosDatabaseName() });
+    })();
+  const pool = new pg.Pool(config);
 
   const check = process.argv.includes('--check');
 

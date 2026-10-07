@@ -46,11 +46,14 @@ test('advertised tool catalog contains no unavailable MCP placeholder', () => {
 
 test('public file outputs use AIMOS-owned roots without private harness paths', () => {
   const registry = read('services/orchestration/tool-registry.js');
+  const nativeFileOwner = read('services/security/purpose-authorization.js');
   const shared = read('routes/agent-shared.js');
 
   assert.doesNotMatch(registry, /path\.join\(os\.homedir\(\), '\.claude', 'vault'/);
   assert.doesNotMatch(registry, /'hom', 'backend', 'brain'/);
-  assert.match(registry, /path\.join\(home, '\.aimos', 'exports'\)/);
+  assert.match(nativeFileOwner, /path\.join\(home, '\.aimos', 'exports'\)/);
+  assert.match(registry, /const ALLOWED_WRITE_DIRS = allowedLocalWriteRoots\(\)/);
+  assert.match(nativeFileOwner, /allowedRoots: allowedLocalWriteRoots\(\)/);
   assert.match(registry, /candidate === root \|\| candidate\.startsWith\(`\$\{root\}\$\{path\.sep\}`\)/);
   assert.match(shared, /path\.join\(os\.homedir\(\), '\.aimos', 'briefings'\)/);
 });
@@ -112,9 +115,9 @@ test('dead direct dependencies are absent and the maintained transformer runtime
     lock.packages?.['node_modules/@huggingface/transformers']?.dependencies?.sharp,
     '^0.35.4'
   );
-  assert.equal(packageJson.overrides?.sharp, '0.35.4');
+  assert.equal(packageJson.overrides?.sharp, '0.35.5');
   assert.equal(packageJson.overrides?.['adm-zip'], '0.6.1');
-  assert.equal(lock.packages?.['node_modules/sharp']?.version, '0.35.4');
+  assert.equal(lock.packages?.['node_modules/sharp']?.version, '0.35.5');
   assert.equal(lock.packages?.['node_modules/adm-zip']?.version, '0.6.1');
 
   const embeddings = read('services/core/embeddings.js');

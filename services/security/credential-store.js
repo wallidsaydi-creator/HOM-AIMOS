@@ -19,8 +19,9 @@
 // This service does NOT sign or ledger anything. Production callers must use
 // credentialLedger.beginCredentialCustodyMutation(), which signs the start,
 // invokes these primitives, verifies exact readback, and binds the later
-// lifecycle/terminal commit. The only direct synchronous writer is the named
-// pre-Housekeeper runtime-database Genesis root.
+// lifecycle/terminal commit. Direct synchronous DB-role writes are limited to
+// the named pre-Housekeeper Genesis roots, which receive exact first-STORE
+// Housekeeper signatures after the database and identity ledger exist.
 //
 // Phase B (USE linkage) will call readCredential + computeCredentialHash
 // at sign time to include credential_slot + credential_hash in the signed

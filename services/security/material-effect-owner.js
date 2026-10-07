@@ -4,10 +4,12 @@
 // Pipeline: CR7 durable-action trace | Position: non-database effect owner
 // Sources: RFC 6962 tamper-evident logging; RFC 8032 Ed25519; RFC 8785 JCS.
 // This service changes no retrieval, ranking, security-classification or
-// paper-derived mathematical formula. It commits only non-reconstructive hashes.
+// paper-derived mathematical formula. It commits non-reconstructive hashes;
+// local_file_write also commits its exact recovery pathname for safe restart.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createHash, randomUUID } from 'node:crypto';
+import path from 'node:path';
 
 import { canonicalJson } from './agent-identity.js';
 import { logEvent, readVerifiedEventHistory } from '../observe/event-ledger.js';
@@ -48,6 +50,13 @@ function mutationHashOf(receiptOrRow) {
   return Buffer.from(value || []).toString('hex');
 }
 
+function validLocalFileRecoveryPath(value, kind, operation, targetSha256) {
+  return kind === 'filesystem' && operation === 'local_file_write'
+    && typeof value === 'string' && path.isAbsolute(value)
+    && path.resolve(value) === value
+    && materialEffectTargetHash('filesystem', value) === targetSha256;
+}
+
 export function reconstructMaterialEffectTraces(rows = []) {
   if (!Array.isArray(rows)) throw new Error('material_effect_recovery_input_invalid');
   const actions = new Map();
@@ -64,7 +73,10 @@ export function reconstructMaterialEffectTraces(rows = []) {
       if (current.start) throw new Error('material_effect_start_fork');
       if (!EFFECT_KINDS.has(String(metadata.effect_kind || ''))
           || !/^[0-9a-f]{64}$/.test(String(metadata.target_sha256 || ''))
-          || !/^[0-9a-f]{64}$/.test(String(metadata.input_sha256 || ''))) {
+          || !/^[0-9a-f]{64}$/.test(String(metadata.input_sha256 || ''))
+          || (metadata.recovery_target_path != null
+            && !validLocalFileRecoveryPath(metadata.recovery_target_path,
+              metadata.effect_kind, metadata.effect_operation, metadata.target_sha256))) {
         throw new Error('material_effect_start_malformed');
       }
       current.start = row;
@@ -124,6 +136,7 @@ export function createMaterialEffectOwner({
     operation,
     targetIdentifier,
     inputProjection,
+    recoveryTargetPath = null,
     subjectAgentId = null,
     authority = null,
     parentEventId = null,
@@ -140,6 +153,11 @@ export function createMaterialEffectOwner({
     const verifiedAuthority = authorityActor && authorityValidFrom ? authority : null;
     const targetSha256 = materialEffectTargetHash(effectKind, targetIdentifier);
     const inputSha256 = materialEffectProjectionHash(inputProjection);
+    if (recoveryTargetPath != null
+        && (!validLocalFileRecoveryPath(recoveryTargetPath, effectKind, effectOperation, targetSha256)
+          || recoveryTargetPath !== targetIdentifier)) {
+      throw new Error('material_effect_recovery_target_invalid');
+    }
     const subject = String(verifiedAuthority ? authorityActor : (subjectAgentId || 'housekeeper')).trim();
     if (subject !== 'housekeeper' && !verifiedAuthority) {
       throw new Error('material_effect_verified_request_authority_required');
@@ -151,6 +169,7 @@ export function createMaterialEffectOwner({
       effect_operation: effectOperation,
       target_sha256: targetSha256,
       input_sha256: inputSha256,
+      ...(recoveryTargetPath == null ? {} : { recovery_target_path: recoveryTargetPath }),
       parent_request_receipt_id: verifiedAuthority?.requestReceiptId || null,
       parent_request_receipt_mutation_hash: verifiedAuthority?.requestReceiptMutationHash || null,
       reasoning: 'The Housekeeper signed the exact non-reconstructive target and input projection before allowing one material effect attempt.',

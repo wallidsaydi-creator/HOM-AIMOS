@@ -11,14 +11,22 @@ import { performance } from 'node:perf_hooks';
 const WEB_REQUEST_TIMEOUT_MS = 12_000;
 
 export async function searchWeb({ query, maxResults = 5, useContext = {} }) {
+  const authorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'perplexity_web_search',
+    endpoint: 'https://api.perplexity.ai/chat/completions',
+    useContext,
+  });
+  if (authorization.capability !== 'internet') throw new Error('web_credential_capability_unknown');
   const deadlineAt = Math.min(useContext.deadlineAt ?? Infinity, performance.now() + WEB_REQUEST_TIMEOUT_MS);
   const primary = await searchPerplexity(query, useContext, deadlineAt).catch(error => {
+    if (/^(?:credential_use_|web_credential_)/.test(String(error?.message || ''))) throw error;
     if (useContext.signal?.aborted || /Timeout|Abort/.test(error?.name || '') || error?.httpOutcome === 'INDETERMINATE') throw error;
     return null;
   });
   if (primary) return { provider: 'perplexity', ...primary };
 
   const fallback = await searchBrave(query, maxResults, useContext, deadlineAt).catch(error => {
+    if (/^(?:credential_use_|web_credential_)/.test(String(error?.message || ''))) throw error;
     if (useContext.signal?.aborted || /Timeout|Abort/.test(error?.name || '')) throw error;
     return null;
   });
@@ -28,6 +36,12 @@ export async function searchWeb({ query, maxResults = 5, useContext = {} }) {
 }
 
 async function searchPerplexity(query, useContext, deadlineAt) {
+  const authorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'perplexity_web_search',
+    endpoint: 'https://api.perplexity.ai/chat/completions',
+    useContext,
+  });
+  if (authorization.capability !== 'internet') throw new Error('web_credential_capability_unknown');
   const credential = checkoutCachedCredential('perplexity_api_key');
   if (!credential) return null;
   const model = systemConfigStore.readConfigString('PERPLEXITY_MODEL') || 'sonar-pro';
@@ -53,6 +67,8 @@ async function searchPerplexity(query, useContext, deadlineAt) {
     requestAdmissionEventId: useContext.requestAdmissionEventId || null,
     requestAdmissionMutationHash: useContext.requestAdmissionMutationHash || null,
     autonomousActionEventId: useContext.autonomousActionEventId || null,
+    actorValidFromIso: useContext.actorValidFromIso || null,
+    toolActionArguments: useContext.toolActionArguments || null,
   });
 
   let res;
@@ -112,6 +128,12 @@ async function searchPerplexity(query, useContext, deadlineAt) {
 }
 
 async function searchBrave(query, maxResults, useContext, deadlineAt) {
+  const authorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'brave_web_search',
+    endpoint: 'https://api.search.brave.com/res/v1/web/search',
+    useContext,
+  });
+  if (authorization.capability !== 'internet') throw new Error('web_credential_capability_unknown');
   const credential = checkoutCachedCredential('brave_api_key');
   if (!credential) return null;
 
@@ -133,6 +155,8 @@ async function searchBrave(query, maxResults, useContext, deadlineAt) {
     requestAdmissionEventId: useContext.requestAdmissionEventId || null,
     requestAdmissionMutationHash: useContext.requestAdmissionMutationHash || null,
     autonomousActionEventId: useContext.autonomousActionEventId || null,
+    actorValidFromIso: useContext.actorValidFromIso || null,
+    toolActionArguments: useContext.toolActionArguments || null,
   });
   let res;
   let data;

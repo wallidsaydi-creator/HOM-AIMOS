@@ -38,16 +38,22 @@ function credentialAuthority(useContext = {}) {
 }
 
 async function githubRequest(target, operation, requestEvidence, useContext = {}) {
+  const endpoint = `${target.origin}${target.pathname}`;
+  const authorization = await credentialLedger.authorizeCredentialUse({
+    operation, endpoint, useContext,
+  });
+  if (authorization.capability !== 'github') throw new Error('github_credential_capability_unknown');
   const row = await getTokenRow('github');
   const checkout = row?.access_token_checkout || null;
   if (!checkout?.value) throw new Error('GitHub not connected');
-  const endpoint = `${target.origin}${target.pathname}`;
   const reservation = await credentialLedger.reserveCredentialUse({
     ...checkout,
     operation,
     endpoint,
     requestHash: credentialUseEvidenceHash(requestEvidence),
     ...credentialAuthority(useContext),
+    actorValidFromIso: useContext.actorValidFromIso || null,
+    toolActionArguments: useContext.toolActionArguments || null,
   });
   let response = null;
   let terminalRecorded = false;
@@ -154,7 +160,11 @@ function hasDirectCredential(provider) {
   }
 }
 
-export async function listIntegrationStatus() {
+export async function listIntegrationStatus(useContext = {}) {
+  const authorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'integration_status', endpoint: 'aimos-local://integrations/status', useContext,
+  });
+  if (authorization.capability !== 'admin_override') throw new Error('integration_status_capability_unknown');
   const providers = [
     'google', 'gmail', 'youtube', 'calendar', 'drive',
     'github', 'openai', 'codex', 'x', 'salesforce', 'stripe', 'telegram', 'imessage',
@@ -206,10 +216,8 @@ export async function githubSearchIssues({ query: q, limit = 10 } = {}, useConte
 }
 
 export async function salesforceListObjects({ limit = 50 } = {}, useContext = {}) {
-  const row = await getTokenRow('salesforce');
-  const checkout = row?.access_token_checkout || null;
   const configuredInstanceUrl = systemConfigStore.readConfigString('SALESFORCE_ORIGIN');
-  if (!checkout?.value || !configuredInstanceUrl) throw new Error('Salesforce not connected');
+  if (!configuredInstanceUrl) throw new Error('Salesforce not connected');
   const instance = new URL(configuredInstanceUrl);
   const salesforceHost = instance.hostname.toLowerCase();
   const approvedHost = salesforceHost === 'salesforce.com'
@@ -229,12 +237,23 @@ export async function salesforceListObjects({ limit = 50 } = {}, useContext = {}
     throw new Error('Signed Salesforce instance URL is invalid');
   }
   const target = new URL('/services/data/v60.0/sobjects', instance);
+  const authorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'salesforce.objects.list',
+    endpoint: `${target.origin}${target.pathname}`,
+    useContext,
+  });
+  if (authorization.capability !== 'salesforce') throw new Error('salesforce_credential_capability_unknown');
+  const row = await getTokenRow('salesforce');
+  const checkout = row?.access_token_checkout || null;
+  if (!checkout?.value) throw new Error('Salesforce not connected');
   const reservation = await credentialLedger.reserveCredentialUse({
     ...checkout,
     operation: 'salesforce.objects.list',
     endpoint: `${target.origin}${target.pathname}`,
     requestHash: credentialUseEvidenceHash({ method: 'GET', origin: target.origin, path: target.pathname }),
     ...credentialAuthority(useContext),
+    actorValidFromIso: useContext.actorValidFromIso || null,
+    toolActionArguments: useContext.toolActionArguments || null,
   });
   let res = null;
   let terminalRecorded = false;
@@ -342,6 +361,10 @@ export async function imessageRequestAccess(useContext = {}) {
     expectedActorAgentId: useContext.actorAgentId,
     expectedArguments: authorizedArgs,
   });
+  const authorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'imessage_request_access', endpoint: 'aimos-local://messages/request-access', useContext,
+  });
+  if (authorization.capability !== 'email') throw new Error('imessage_read_capability_unknown');
   const result = await runAppleScript(
     'tell application "Messages" to count of chats',
     'imessage_request_access',
@@ -351,6 +374,10 @@ export async function imessageRequestAccess(useContext = {}) {
 }
 
 export async function imessageListChats({ limit = 10 } = {}, useContext = {}) {
+  const authorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'imessage_list_chats', endpoint: 'aimos-local://messages/chats', useContext,
+  });
+  if (authorization.capability !== 'email') throw new Error('imessage_read_capability_unknown');
   const capped = Math.min(Math.max(toInt(limit, 10), 1), 100);
   const script = `
     tell application "Messages"
@@ -370,6 +397,10 @@ export async function imessageListChats({ limit = 10 } = {}, useContext = {}) {
 
 export async function imessageSearchContact({ query }, useContext = {}) {
   if (!query) throw new Error('query is required');
+  const authorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'imessage_search_contact', endpoint: 'aimos-local://messages/search-contact', useContext,
+  });
+  if (authorization.capability !== 'email') throw new Error('imessage_read_capability_unknown');
   const safeQuery = escapeAppleScriptString(query);
   // Use Contacts.app — Messages.app "buddies" is deprecated on macOS 12+
   const script = `
@@ -394,6 +425,10 @@ export async function imessageSearchContact({ query }, useContext = {}) {
 
 export async function contactsSearch({ query }, useContext = {}) {
   if (!query) throw new Error('query is required');
+  const authorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'contacts_search', endpoint: 'aimos-local://contacts/search', useContext,
+  });
+  if (authorization.capability !== 'email') throw new Error('contacts_read_capability_unknown');
   const safeQuery = escapeAppleScriptString(query);
   const script = `
     tell application "Contacts"
@@ -437,6 +472,10 @@ export async function imessageSend({ to, message }, useContext = {}) {
     expectedActorAgentId: useContext.actorAgentId,
     expectedArguments: authorizedArgs,
   });
+  const authorization = await credentialLedger.authorizeCredentialUse({
+    operation: 'imessage_send', endpoint: 'aimos-local://messages/send', useContext,
+  });
+  if (authorization.capability !== 'email') throw new Error('imessage_send_capability_unknown');
   const safe = escapeAppleScriptString(message);
 
   // If "to" is a name (not a phone/email), resolve it via Contacts first

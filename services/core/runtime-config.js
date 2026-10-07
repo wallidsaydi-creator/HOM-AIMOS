@@ -16,6 +16,24 @@ export const AIMOS_AGENT_KEY_ROOT = AIMOS_INSTALLATION_CONTEXT.agent_key_root;
 export const AIMOS_RUNTIME_ROLE = AIMOS_INSTALLATION_CONTEXT.runtime_role;
 export const AIMOS_RUNTIME_CREDENTIAL_SERVICE =
   AIMOS_INSTALLATION_CONTEXT.runtime_credential_service;
+export const AIMOS_SERVICE_READER_ROLE = 'aimos_service_reader';
+export const AIMOS_IDENTITY_WRITER_ROLE = 'aimos_identity_writer';
+const SERVICE_READER_CREDENTIAL_BASE = 'aimos_service_reader_db_password';
+const IDENTITY_WRITER_CREDENTIAL_BASE = 'aimos_identity_writer_db_password';
+export function resolveAimosServiceReaderCredentialService(argv = process.argv.slice(2)) {
+  const instance = resolveAimosInstallationContext(argv).instance;
+  return instance === 'canonical'
+    ? SERVICE_READER_CREDENTIAL_BASE
+    : `${SERVICE_READER_CREDENTIAL_BASE}-${instance}`;
+}
+export const AIMOS_SERVICE_READER_CREDENTIAL_SERVICE = resolveAimosServiceReaderCredentialService();
+export function resolveAimosIdentityWriterCredentialService(argv = process.argv.slice(2)) {
+  const instance = resolveAimosInstallationContext(argv).instance;
+  return instance === 'canonical'
+    ? IDENTITY_WRITER_CREDENTIAL_BASE
+    : `${IDENTITY_WRITER_CREDENTIAL_BASE}-${instance}`;
+}
+export const AIMOS_IDENTITY_WRITER_CREDENTIAL_SERVICE = resolveAimosIdentityWriterCredentialService();
 export const AIMOS_USER_SERVICE_LABEL = AIMOS_INSTALLATION_CONTEXT.user_service_label;
 export const AIMOS_POSTGRES_PORT = AIMOS_INSTALLATION_CONTEXT.postgres_port;
 export const RESERVED_LEGACY_PORTS = Object.freeze([9000, 9001]);
@@ -114,4 +132,22 @@ export function resolveAimosDatabaseUrl(argv = process.argv.slice(2)) {
   const username = encodeURIComponent(os.userInfo().username);
   const context = resolveAimosInstallationContext(argv);
   return `postgresql://${username}@localhost:${context.postgres_port}/${resolveAimosDatabaseName(argv)}`;
+}
+
+function resolveAimosRoleDatabaseConfig(role, argv) {
+  const context = resolveAimosInstallationContext(argv);
+  return Object.freeze({
+    host: 'localhost',
+    port: context.postgres_port,
+    database: resolveAimosDatabaseName(argv),
+    user: role,
+  });
+}
+
+export function resolveAimosServiceReaderDatabaseConfig(argv = process.argv.slice(2)) {
+  return resolveAimosRoleDatabaseConfig(AIMOS_SERVICE_READER_ROLE, argv);
+}
+
+export function resolveAimosIdentityWriterDatabaseConfig(argv = process.argv.slice(2)) {
+  return resolveAimosRoleDatabaseConfig(AIMOS_IDENTITY_WRITER_ROLE, argv);
 }

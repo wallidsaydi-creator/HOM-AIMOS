@@ -40,7 +40,11 @@ export function requireCapability(capability, deps = {}) {
       return res.status(403).json({ error: { code: 'company_scope_mismatch' } });
     }
     try {
-      const perms = await getPermissions(agentId, companyId);
+      const actorValidFromIso = req.executionContext?.actorValidFromIso;
+      if (req.executionContext?.actorAgentId !== agentId || !actorValidFromIso) {
+        return res.status(401).json({ error: { code: 'unauthenticated' } });
+      }
+      const perms = await getPermissions(agentId, companyId, { subjectValidFromIso: actorValidFromIso });
       if (!perms || perms[capability] !== true) {
         logEventFn(companyId, agentId, 'authz_denied', String(capability), {
           reasoning: `agent ${agentId} lacks capability ${capability}`,
