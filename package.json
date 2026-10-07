@@ -60,8 +60,8 @@
     "express-rate-limit": "^8.7.0",
     "ipaddr.js": "2.5.0",
     "node-cron": "^4.6.0",
-    "pg": "^8.23.0",
-    "undici": "7.29.1",
+    "pg": "^8.23.1",
+    "undici": "7.30.0",
     "yauzl": "^3.4.0"
   },
   "overrides": {
