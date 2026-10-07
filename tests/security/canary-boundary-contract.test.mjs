@@ -714,7 +714,7 @@ test('all local reads, including operator reads, require an exact master-signed 
   assert.ok(purposeGate >= 0 && purposeGate < actionStart);
   assert.ok(actionStart < invocation);
   assert.match(registry, /master_signed_local_file_read_authorization_required/);
-  assert.match(registry, /purpose_authorization_protocol_commitment_required/);
+  assert.match(registry, /masterPubkeyCache\.get\(\)/);
   assert.match(registry, /authorizePurposeLocalFileRead/);
   assert.match(registry, /readPurposeAuthorizedLocalFile/);
   assert.doesNotMatch(registry, /if \(name === 'read_file' && !isOperatorAgentId\(agentId\)\)/);

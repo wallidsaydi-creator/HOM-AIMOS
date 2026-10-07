@@ -129,6 +129,68 @@ test('native credential authority denies missing grant before credential chain a
   assert.deepEqual(observations, ['verified_receipt', 'verified_admission', 'checked_grant']);
 });
 
+test('inert provider matrix admits an exact grant and denies an absent grant without credential access', async () => {
+  const fixtures = [
+    ['Gmail', 'google.api.get', 'https://www.googleapis.com/gmail/v1/users/me/messages', 'email'],
+    ['Calendar', 'google.api.get', 'https://www.googleapis.com/calendar/v3/calendars/primary/events', 'email'],
+    ['Drive', 'google.api.get', 'https://www.googleapis.com/drive/v3/files', 'drive'],
+    ['Stripe', 'stripe_api_read', 'https://api.stripe.com/v1/customers', 'stripe'],
+    ['X', 'x_api_read', 'https://api.x.com/2/users/me', 'x'],
+    ['Telegram', 'telegram_get_updates', 'https://api.telegram.org/bot{credential}/getUpdates', 'email'],
+    ['GitHub', 'github.repos.list', 'https://api.github.com/user/repos', 'github'],
+    ['Salesforce', 'salesforce.objects.list', 'https://acme.my.salesforce.com/services/data/v60.0/sobjects', 'salesforce'],
+    ['Brave', 'brave_web_search', 'https://api.search.brave.com/res/v1/web/search', 'internet'],
+    ['iMessage', 'imessage_list_chats', 'aimos-local://messages/chats', 'email'],
+    ['Integration status', 'integration_status', 'aimos-local://integrations/status', 'admin_override'],
+  ];
+  for (const [provider, operation, endpoint, capability] of fixtures) {
+    const allowedCalls = [];
+    const allowed = ledgerWithPermissions({ [capability]: true }, allowedCalls);
+    assert.equal((await allowed.authorizeCredentialUse({ operation, endpoint, useContext: context })).capability,
+      capability, `${provider} granted`);
+    assert.deepEqual(allowedCalls, ['verified_receipt', 'verified_admission', 'checked_grant'], provider);
+
+    const deniedCalls = [];
+    const denied = ledgerWithPermissions({}, deniedCalls);
+    await assert.rejects(denied.authorizeCredentialUse({ operation, endpoint, useContext: context }),
+      new RegExp(`credential_use_capability_denied:${capability}`), `${provider} denied`);
+    assert.deepEqual(deniedCalls, ['verified_receipt', 'verified_admission', 'checked_grant'], provider);
+  }
+});
+
+test('revoked receipt and unavailable permission ledger fail closed before credential access', async () => {
+  for (const failureStage of ['revoked', 'permission-store']) {
+    const observations = [];
+    const ledger = createCredentialLedger({
+      verifyRequestAuthorityFn: async () => {
+        observations.push('verified_receipt');
+        if (failureStage === 'revoked') throw new Error('request_receipt_actor_epoch_revoked');
+        return { actorValidFromIso: EPOCH, requestHash: HASH };
+      },
+      verifyAutonomousEventFn: async () => {
+        observations.push('verified_admission');
+        return admission();
+      },
+      getPermissionsFn: async () => {
+        observations.push('checked_grant');
+        throw new Error('permission_store_unavailable');
+      },
+      queryFn: async () => {
+        observations.push('read_credential_chain');
+        throw new Error('credential access must not occur');
+      },
+    });
+    await assert.rejects(ledger.authorizeCredentialUse({
+      operation: 'google.api.get',
+      endpoint: 'https://www.googleapis.com/gmail/v1/users/me/messages',
+      useContext: context,
+    }), failureStage === 'revoked' ? /request_receipt_actor_epoch_revoked/ : /permission_store_unavailable/);
+    assert.deepEqual(observations, failureStage === 'revoked'
+      ? ['verified_receipt']
+      : ['verified_receipt', 'verified_admission', 'checked_grant']);
+  }
+});
+
 test('shared executive briefing requires exact-epoch admin authority before read or mutation', async () => {
   const source = await readFile(new URL('../../routes/briefing.js', import.meta.url), 'utf8');
   assert.match(source, /router\.get\('\/config', requireCapability\('admin_override'\)/);

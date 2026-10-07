@@ -108,7 +108,7 @@ Useful entry points:
 
 HOM-AIMOS is a complete persistent-memory backend, not a provenance layer
 attached to a vector store. Its source-derived architecture binds a
-current 296-service census and declares six critical pipelines containing 115
+current 297-service census and declares six critical pipelines containing 115
 service connections. SAVE exposes one fixed 15-stage owner; RECALL exposes its
 eight principal native execution boundaries.
 
@@ -317,7 +317,7 @@ runtime, security, installer, dependency, and clean-Genesis behavior. Historical
 paper artifacts and benchmark aggregates remain available as dated research
 records but do not constrain current source bytes.
 
-The architecture manifest mechanically binds the current 296-service census.
+The architecture manifest mechanically binds the current 297-service census.
 That number is an inventory fact, not a performance claim.
 
 ## Security and retention invariants

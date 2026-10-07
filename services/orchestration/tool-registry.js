@@ -1703,7 +1703,6 @@ export const ALL_TOOL_DEFS = {
           tool: 'read_file',
           filepath,
           clearanceLevel: options.clearanceLevel,
-          expectedProtocolConfirmationSha256: options.protocolConfirmationSha256,
         }) };
       } catch (err) {
         return { error: `Failed to read file: ${err.message}` };
@@ -2182,9 +2181,6 @@ export async function executeTool(name, args, agentId, options = {}) {
   if (name === 'read_file') {
     const serialized = options.purposeAuthorization || null;
     if (!serialized) throw new Error('master_signed_local_file_read_authorization_required');
-    if (!/^[0-9a-f]{64}$/.test(String(options.protocolConfirmationSha256 || ''))) {
-      throw new Error('purpose_authorization_protocol_commitment_required');
-    }
     const masterPubkey = await masterPubkeyCache.get();
     if (!masterPubkey) throw new Error('purpose_authorization_master_pubkey_unavailable');
     purposeAuthorizationReceipt = authorizePurposeLocalFileRead({
@@ -2195,7 +2191,6 @@ export async function executeTool(name, args, agentId, options = {}) {
       tool: name,
       filepath: args?.filepath,
       clearanceLevel: agentClearance,
-      expectedProtocolConfirmationSha256: options.protocolConfirmationSha256 || null,
     });
   }
 

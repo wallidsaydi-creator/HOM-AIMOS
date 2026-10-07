@@ -55,6 +55,11 @@ function sanitizeMetadata(value, key = '', depth = 0) {
   // A null optional field carries no secret bytes and must remain null so
   // exact signed schemas can distinguish "not supplied" from redaction.
   if (value === null) return null;
+  // This is a SHA-256 commitment to a nonce-bearing master-signed proof,
+  // never the proof or an authorization bearer. The native file owner must
+  // compare the retained commitment with its in-memory tool-action authority.
+  if (key === 'purpose_authorization_sha256'
+      && typeof value === 'string' && /^[0-9a-f]{64}$/.test(value)) return value;
   if (SECRET_KEY.test(key)) return '[REDACTED]';
   if (typeof value === 'boolean' || typeof value === 'number') return value;
   if (typeof value === 'string') {
@@ -676,6 +681,57 @@ export async function readVerifiedRecoveryAction(companyId, originalRows) {
     try { await client.query('ROLLBACK'); } catch {}
     throw error;
   } finally { client.release(); }
+}
+
+// A prior boot may have removed a local-file temp and signed its cleanup
+// terminal before dying while reconciling the original write. The indexed
+// event IDs are only locators; both rows are independently verified before a
+// recovery owner may use them as evidence that cleanup already completed.
+export async function readVerifiedLocalFileCleanupByInputHash(companyId, inputSha256) {
+  const company = String(companyId || '').trim();
+  const inputHash = String(inputSha256 || '').trim();
+  if (!company || !/^[0-9a-f]{64}$/.test(inputHash)) {
+    throw new Error('local_file_cleanup_lookup_scope_invalid');
+  }
+  const client = await agentPool.connect();
+  try {
+    await client.query('BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY');
+    await client.query('SELECT set_config($1,$2,true)', ['app.current_client_id', company]);
+    await client.query('SELECT set_config($1,$2,true)', ['app.current_agent_id', HOUSEKEEPER_SIGNER_CONSTANTS.HOUSEKEEPER_AGENT_ID]);
+    const located = await client.query(
+      `SELECT start.id AS start_id, terminal.id AS terminal_id
+         FROM aimos_events start
+         JOIN aimos_events terminal
+           ON terminal.company_id=start.company_id
+          AND terminal.signer_agent_id=start.signer_agent_id
+          AND terminal.parent_event_id=start.id
+          AND terminal.operation='material_effect_terminal'
+        WHERE start.company_id=$1
+          AND start.signer_agent_id=$2
+          AND start.ledger_version=1
+          AND terminal.ledger_version=1
+          AND start.operation='material_effect_started'
+          AND start.metadata->>'effect_operation'='local_file_orphan_cleanup'
+          AND start.metadata->>'input_sha256'=$3
+        LIMIT 2`,
+      [company, HOUSEKEEPER_SIGNER_CONSTANTS.HOUSEKEEPER_AGENT_ID, inputHash],
+    );
+    if (located.rows.length > 1) throw new Error('local_file_cleanup_lookup_fork');
+    if (!located.rows.length) {
+      await client.query('COMMIT');
+      return null;
+    }
+    const pair = located.rows[0];
+    const start = await readVerifiedEventById(pair.start_id, company, { client });
+    const terminal = await readVerifiedEventById(pair.terminal_id, company, { client });
+    await client.query('COMMIT');
+    return Object.freeze({ start, terminal });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch {}
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 function checkpointMetadata(row, company, signer) {

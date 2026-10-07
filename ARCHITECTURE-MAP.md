@@ -1,7 +1,7 @@
 # AIMOS public architecture map
 
 Status: source-derived public runtime map
-Service census: 296 JavaScript services across 17 groups
+Service census: 297 JavaScript services across 17 groups
 
 This document describes the released AIMOS backend. It contains no deployment
 state, retained memory, private product roadmap, machine path, operator record,
@@ -240,9 +240,9 @@ barrels, hidden directories, and the root infrastructure file
 
 | Group | Files | Public responsibility |
 |---|---:|---|
-| retrieval | 63 | Query modes, vector/sparse retrieval, temporal and graph paths, epistemic selection and calibration |
+| retrieval | 61 | Query modes, vector/sparse retrieval, temporal and graph paths, epistemic selection and calibration |
 | orchestration | 43 | Agent execution, tools, governance, scheduling, model selection and run state |
-| security | 50 | Identity, signed envelopes, authorization, provenance, credentials, canaries, database-bound origin/family authority, purpose-bound non-memory authority, typed epistemic evidence assertions, graph-edge evidence, dormant edit certification and signed certificate custody |
+| security | 53 | Identity, signed envelopes, authorization, provenance, credentials, canaries, database-bound origin/family authority, purpose-bound non-memory authority, typed epistemic evidence assertions, graph-edge evidence, dormant edit certification and signed certificate custody |
 | temporal | 22 | Freshness, event order, supersession, time-aware retrieval and retained frequency |
 | learning | 23 | Calibration, reflection, skill consolidation, STDP and bounded plasticity |
 | observe | 22 | Event ledger, explanation, drift, routing, quantitative gates and diagnostics |

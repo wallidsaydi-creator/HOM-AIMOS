@@ -115,9 +115,9 @@ test('dead direct dependencies are absent and the maintained transformer runtime
     lock.packages?.['node_modules/@huggingface/transformers']?.dependencies?.sharp,
     '^0.35.4'
   );
-  assert.equal(packageJson.overrides?.sharp, '0.35.4');
+  assert.equal(packageJson.overrides?.sharp, '0.35.5');
   assert.equal(packageJson.overrides?.['adm-zip'], '0.6.1');
-  assert.equal(lock.packages?.['node_modules/sharp']?.version, '0.35.4');
+  assert.equal(lock.packages?.['node_modules/sharp']?.version, '0.35.5');
   assert.equal(lock.packages?.['node_modules/adm-zip']?.version, '0.6.1');
 
   const embeddings = read('services/core/embeddings.js');

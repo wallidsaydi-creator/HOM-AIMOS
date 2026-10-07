@@ -48,7 +48,9 @@ import {
 } from '../services/integrations/google-tools.js';
 import { listScheduledTasks } from '../services/orchestration/scheduler.js';
 import { telegramGetUpdates } from '../services/integrations/telegram-tools.js';
-import { systemConfigStore } from '../services/security/system-config-store.js';
+import { getOperatorAgentId, systemConfigStore } from '../services/security/system-config-store.js';
+import { recallAuthorizationService } from '../services/security/recall-authorization.js';
+import { inspectOperatorFileReadRequest } from '../services/security/operator-file-read-gate.js';
 import { requireCapability } from '../services/security/require-capability.js';
 import { masterPubkeyCache } from '../services/security/master-pubkey-cache.js';
 import { buildConsequentialActionProjectionV1 } from '../services/security/protocol/consequential-action-v1.js';
@@ -59,6 +61,43 @@ import {
 } from '../services/orchestration/tool-action-ledger.js';
 
 const router = express.Router();
+
+// The offline master ceremony signs one exact file and content hash for a
+// five-minute window. The HTTP envelope identifies the designated operator;
+// the native tool owner independently verifies the proof before reading.
+router.post('/files/read', async (req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  const admission = await inspectOperatorFileReadRequest({
+    authority: req.executionContext,
+    requestAgentId: req.agentId,
+    operatorAgentId: getOperatorAgentId(),
+    originalUrl: req.originalUrl,
+    body: req.body,
+    getGrant: (query) => recallAuthorizationService.getEffective(query),
+  });
+  if (!admission.ok) return res.status(admission.status).json({ error: admission.error });
+  try {
+    const result = await executeTool('read_file', { filepath: admission.filepath }, admission.actor, {
+      purposeAuthorization: admission.purposeAuthorization,
+      executionContext: req.executionContext,
+      credentialUseContext: req.executionContext,
+      clearanceLevel: admission.clearanceLevel,
+      intent: 'local_file_read',
+      userPrompt: 'Read the exact master-authorized local file.',
+      allowedTools: ['read_file'],
+    });
+    if (result?.blocked || result?.error || typeof result?.content !== 'string') {
+      return res.status(403).json({ error: 'local_file_read_denied' });
+    }
+    return res.json({ content: result.content });
+  } catch (error) {
+    if (String(error?.message || '').includes('purpose_authorization_')
+        || String(error?.message || '').includes('local_file_')) {
+      return res.status(403).json({ error: 'local_file_read_denied' });
+    }
+    return next(error);
+  }
+});
 
 // R1 Step 1: per-endpoint authorization now lives in the shared
 // requireCapability(capability) middleware. Identity comes ONLY from

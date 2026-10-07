@@ -26,7 +26,7 @@ function requiredCompanyPolicies() {
   return names;
 }
 
-export function preflightRestoreToc(toc, { database = 'aimos' } = {}) {
+export function preflightRestoreToc(toc, { database = 'aimos', requireAcl = true } = {}) {
   if (typeof toc !== 'string' || !/^[a-z][a-z0-9_]{0,62}$/.test(database)) {
     fail('input_invalid');
   }
@@ -53,7 +53,7 @@ export function preflightRestoreToc(toc, { database = 'aimos' } = {}) {
   const companyPolicies = requiredCompanyPolicies();
   const missingPolicies = companyPolicies.filter((name) => !policyTables.has(name));
   if (missingPolicies.length) fail(`company_policies_missing:${missingPolicies.join(',')}`);
-  if (aclEntries === 0) fail('acl_omitted');
+  if (requireAcl && aclEntries === 0) fail('acl_omitted');
   return Object.freeze({
     database, postgresMajor: 18, tocEntries: entries.length,
     identityDataEntries: REQUIRED_DATA.length,
@@ -63,7 +63,8 @@ export function preflightRestoreToc(toc, { database = 'aimos' } = {}) {
   });
 }
 
-export function preflightRestoreArchive({ archive, pgBin, database = 'aimos' } = {}) {
+export function preflightRestoreArchive({ archive, pgBin, database = 'aimos',
+  requireAcl = true } = {}) {
   if (!path.isAbsolute(String(archive || '')) || !path.isAbsolute(String(pgBin || ''))) {
     fail('absolute_paths_required');
   }
@@ -89,7 +90,7 @@ export function preflightRestoreArchive({ archive, pgBin, database = 'aimos' } =
   } catch {
     fail('toc_unreadable');
   }
-  return preflightRestoreToc(toc, { database });
+  return preflightRestoreToc(toc, { database, requireAcl });
 }
 
 function cliValue(name) {

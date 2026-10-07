@@ -40,7 +40,7 @@ export function proveCr7R8FileWriteSuccessor() {
     'public_historical_fixture_changed');
   const census = scanCr7EffectCensus();
   const byId = new Map(census.effects.map((effect) => [effect.effect_id, effect]));
-  assert(census.source_file_count === 366 && census.unclassified_effect_site_count === 0, 'census_totality');
+  assert(census.source_file_count === 367 && census.unclassified_effect_site_count === 0, 'census_totality');
   assert(census.effect_site_count === 103 - RETIRED_IDS.length + ADDED_IDS.length, 'forward_effect_count');
   for (const id of RETIRED_IDS) assert(!byId.has(id), `retired_effect_present:${id}`);
   for (const id of ADDED_IDS) {
@@ -64,6 +64,7 @@ export function proveCr7R8FileWriteSuccessor() {
 
   const native = read('services/security/purpose-authorization.js');
   const tool = read('services/orchestration/tool-registry.js');
+  const material = read('services/security/material-effect-owner.js');
   const boot = read('server.js');
   inOrder(tool, [
     'await verifyToolActionAuthority(options.toolActionAuthority',
@@ -81,6 +82,7 @@ export function proveCr7R8FileWriteSuccessor() {
     'inspectAllowedLocalFileWrite({',
     'const effect = await materialEffectOwner.begin({',
     "operation: 'local_file_write'",
+    'recoveryTargetPath: requested',
     'written = writeAllowedLocalFileNative({',
     "disposition: 'SUCCEEDED'",
   ], 'native_owner_order');
@@ -91,12 +93,23 @@ export function proveCr7R8FileWriteSuccessor() {
   inOrder(native, [
     'export function createLocalFileWriteOrphanReconciler(',
     "metadata.effect_operation !== 'local_file_write'",
-    "materialEffectTargetHash('filesystem', target) !== start.metadata.target_sha256",
+    'const verifyOpenStart = async (actionId, start) => {',
     'const verifiedStart = await verifyStartFn(start.startEventId, AIMOS_COMPANY_ID)',
+    'const cleanupCandidate = async (actionId, start, candidate, directory) => {',
+    'await verifyOpenStart(actionId, start)',
     'const cleanup = await effectOwner.begin({',
     'fs.unlinkSync(candidate)',
     "disposition: 'SUCCEEDED'",
+    'const legacyStarts = new Map()',
+    "materialEffectTargetHash('filesystem', target) !== start.metadata.target_sha256",
+    'await cleanupCandidate(match[2], start, candidate, directory)',
   ], 'orphan_cleanup_order');
+  inOrder(material, [
+    'function validLocalFileRecoveryPath(',
+    'recoveryTargetPath = null',
+    'material_effect_recovery_target_invalid',
+    'recovery_target_path: recoveryTargetPath',
+  ], 'signed_recovery_locator');
   inOrder(boot, [
     'const verifiedRows = await readHistoryFn(AIMOS_COMPANY_ID',
     'await reconcileLocalFileWriteOrphans(open)',

@@ -358,7 +358,7 @@ function startDefinition(definition) {
 // Cold boot verifies retained signed history before advertising readiness.
 // Keep an absolute bound, but do not terminate a healthy verification pass at
 // the former three-minute edge. No verification or readiness predicate changes.
-async function waitForReadiness(definition, timeoutMs = 300_000) {
+async function waitForReadiness(definition, timeoutMs = 900_000) {
   const deadline = performance.now() + timeoutMs;
   while (performance.now() < deadline) {
     let pauseMs = 1000;

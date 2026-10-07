@@ -122,6 +122,10 @@ db/backups/
 docs/security/phase0-*.md
 docs/security/phase1a-*.md
 docs/security/phase1b-*.md
+docs/security/phase1c-*.md
+docs/security/file-read-purpose-ceremony-*.md
+scripts/verification/probe-operator-file-read.mjs
+scripts/verification/request-r8-scratch-write.mjs
 docs/security/three-gap-remediation-*.md
 docs/security/master-remediation-plan-*.md
 docs/security/*.pdf

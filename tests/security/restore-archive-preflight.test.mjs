@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { preflightRestoreToc } from '../../scripts/db/preflight-restore-archive.mjs';
+import { fingerprintSchemaSql } from '../../scripts/db/rehearse-acl-restore.mjs';
 
 test('metadata gate requires ACL-bearing identity data and company policies', () => {
   const data = [
@@ -27,10 +28,23 @@ test('metadata gate requires ACL-bearing identity data and company policies', ()
   assert.equal(preflightRestoreToc(valid).aclEntries, 1);
   assert.throws(() => preflightRestoreToc([header, ...dataLines, ...policyLines].join('\n')),
     /restore_archive_acl_omitted/);
+  assert.equal(preflightRestoreToc([header, ...dataLines, ...policyLines].join('\n'),
+    { requireAcl: false }).aclEntries, 0);
   assert.throws(() => preflightRestoreToc([header, ...dataLines.slice(1), ...policyLines, aclLine].join('\n')),
     /restore_archive_identity_data_missing:agent_identity/);
   assert.throws(() => preflightRestoreToc([header, ...dataLines, ...policyLines.slice(1), aclLine].join('\n')),
     /restore_archive_company_policies_missing:aimos_action_origin_verdicts/);
+});
+
+test('ACL companion schema fingerprint ignores only pg_restore restriction nonces', () => {
+  const header = '--\n-- PostgreSQL database dump\n--\n\n';
+  const schemaA = `${header}\\restrict ABC123\nCREATE TABLE public.x (id integer);\n\\unrestrict ABC123\n`;
+  const schemaB = `${header}\\restrict DEF456\nCREATE TABLE public.x (id integer);\n\\unrestrict DEF456\n`;
+  const changed = `${header}\\restrict DEF456\nCREATE TABLE public.x (id text);\n\\unrestrict DEF456\n`;
+  assert.equal(fingerprintSchemaSql(schemaA), fingerprintSchemaSql(schemaB));
+  assert.notEqual(fingerprintSchemaSql(schemaA), fingerprintSchemaSql(changed));
+  assert.throws(() => fingerprintSchemaSql('CREATE TABLE public.x (id integer);'),
+    /acl_restore_rehearsal_schema_sql_invalid/);
 });
 
 test('legacy login retirement tolerates absent global role and checks final state', () => {

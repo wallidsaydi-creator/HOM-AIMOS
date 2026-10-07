@@ -109,8 +109,8 @@
     "manifest": "./hom-architecture-manifest.json",
     "counting_policy": "top-level services/<group>/*.js excluding index.js barrels and hidden directories",
     "counted_service_groups": 17,
-    "counted_service_files": 296,
-    "census_sha256": "b29799e13afb9aaf40a059078433bbe09a9c3c8a028500690e5edcbd424886b3"
+    "counted_service_files": 297,
+    "census_sha256": "c267bd0c88ec5ce21cf14f481a037230ee68801f574995e643490ed3a67ae539"
   },
   "mechanical_rules": {
     "native_only": true,

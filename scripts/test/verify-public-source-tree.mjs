@@ -64,7 +64,7 @@ walk(root);
 observed.sort((left, right) => left.path.localeCompare(right.path));
 const privateSecurityNotes = observed
   .map((entry) => entry.path)
-  .filter((file) => /^docs\/security\/(?:phase0-|phase1a-|phase1b-|three-gap-remediation-|master-remediation-plan-).*\.md$/.test(file));
+  .filter((file) => /^docs\/security\/(?:phase0-|phase1a-|phase1b-|phase1c-|file-read-purpose-ceremony-|three-gap-remediation-|master-remediation-plan-).*\.md$/.test(file));
 assert.deepEqual(privateSecurityNotes, [], `private security notes shipped: ${privateSecurityNotes.join(', ')}`);
 assert.deepEqual(observed, manifest.files, 'public source tree differs from manifest');
 assert.equal(observed.length, manifest.file_count);
@@ -84,6 +84,8 @@ for (const forbidden of [
   'tests/security/audit-018-event-domain-retained.test.mjs',
   'tests/security/audit-024-remediation.test.mjs',
   'tests/security/phase1-origin-closure.test.mjs',
+  'scripts/verification/probe-operator-file-read.mjs',
+  'scripts/verification/request-r8-scratch-write.mjs',
   'plans',
   'engineering',
   'remediation',
